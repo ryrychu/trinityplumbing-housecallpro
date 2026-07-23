@@ -27,7 +27,6 @@ export function distanceFromAverillPark(lat: number, lng: number) {
 }
 
 export function compassDirectionFromAverillPark(lat: number, lng: number): string {
-  const dLat = toRadians(lat - AVERILL_PARK_LAT);
   const dLng = toRadians(lng - AVERILL_PARK_LNG);
 
   const y = Math.sin(dLng) * Math.cos(toRadians(lat));
