@@ -1,36 +1,69 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Trinity Plumbing — Housecall Pro Integration (Phase 1)
 
-## Getting Started
+A Next.js 14 app that syncs Housecall Pro data (customers, jobs, estimates,
+invoices, technicians, tags, notes, attachments) into a dedicated Supabase
+Postgres database via webhooks (real-time) and a Vercel Cron polling backfill,
+and surfaces it through an Operations Dashboard and a Geographic Scheduling
+Assistant. The dashboard reads only from Supabase — it never calls Housecall
+Pro directly.
 
-First, run the development server:
+## Local development
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+npm install
+cp .env.example .env.local   # then fill in real values
+npm run dev                  # http://localhost:3000
+npm test                     # Vitest
+npm run build                # production build / typecheck / lint
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## Environment variables (set in Vercel → Project → Settings → Environment Variables)
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+- `HOUSECALL_API_KEY` — Bearer token for the Housecall Pro public API.
+- `HOUSECALL_WEBHOOK_SECRET` — shared secret used to verify webhook signatures.
+- `NEXT_PUBLIC_SUPABASE_URL` — the new dedicated Supabase project URL.
+- `NEXT_PUBLIC_SUPABASE_ANON_KEY` — Supabase anon key.
+- `SUPABASE_SERVICE_ROLE_KEY` — service role key (server-only, never exposed to the client).
+- `CRON_SECRET` — shared secret for authorizing the `/api/cron/sync` polling route.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Database
 
-## Learn More
+The schema lives in `supabase/migrations/0001_init_schema.sql`. Apply it to a
+new, dedicated Supabase project (not the existing `inquiries.trinity.plumbing`
+instance):
 
-To learn more about Next.js, take a look at the following resources:
+```bash
+npx supabase link --project-ref <your-new-project-ref>
+npx supabase db push
+```
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Housecall Pro webhook setup
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+In the Housecall Pro dashboard's webhook settings, point event subscriptions
+(customer, job, estimate, invoice, employee create/update events) at:
 
-## Deploy on Vercel
+`https://<your-vercel-domain>/api/webhooks/housecall`
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+Use the same secret you set for `HOUSECALL_WEBHOOK_SECRET`. The signature is an
+HMAC-SHA256 of the raw request body sent in the `X-HousecallPro-Signature`
+header — confirm this header name against your account's webhook settings and
+update `src/app/api/webhooks/housecall/route.ts` if it differs.
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Deploy
+
+```bash
+vercel link
+vercel env add HOUSECALL_API_KEY
+vercel env add HOUSECALL_WEBHOOK_SECRET
+vercel env add NEXT_PUBLIC_SUPABASE_URL
+vercel env add NEXT_PUBLIC_SUPABASE_ANON_KEY
+vercel env add SUPABASE_SERVICE_ROLE_KEY
+vercel env add CRON_SECRET
+vercel --prod
+```
+
+The Vercel Cron job defined in `vercel.json` runs the backfill sync every 15
+minutes automatically once deployed — no manual scheduling needed. Confirm
+whether your Vercel plan authorizes cron requests via a `Bearer $CRON_SECRET`
+`Authorization` header or the built-in `x-vercel-cron` header, and adjust the
+auth check in `src/app/api/cron/sync/route.ts` accordingly before deploying.
