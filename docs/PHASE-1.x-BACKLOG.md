@@ -4,6 +4,54 @@ Items surfaced during Phase 1 implementation and review that were **deliberately
 descoped** from Phase 1. Recorded here so they are tracked, not lost. None block
 the Phase 1 foundation; each is a follow-up.
 
+## Confirmed by Task 0 (live Housecall Pro account, 2026-07-24)
+
+The live verification ran against the real account (all endpoints HTTP 200).
+Findings, most important first:
+
+1. **Geocoding is required — the Geographic Scheduling Assistant is inert without
+   it (highest priority).** HCP address objects are
+   `{id, type, street, street_line_2, city, state, zip, country}` with **no
+   `latitude`/`longitude`** on customers *or* jobs. `distanceFromAverillPark`,
+   `classifyZone`, and compass direction all need coordinates, so the geo module
+   produces nothing on real data until a geocoding step is added (e.g. Census
+   Geocoder or Google Geocoding on `street, city, state, zip`, cached; populate
+   `customers.lat/lng` and `jobs.service_address_lat/lng` during sync). `mapJob`
+   already reads `job.address` (a real field) — only the coordinates are missing.
+
+2. **Dashboard `openEstimates` will read 0 on real data.** Estimates expose
+   `work_status` (values like `"scheduled"`), not a `"open"` status. The metric
+   filters `status === "open"`. Redefine it against real HCP estimate lifecycle
+   values — likely `options[].approval_status` (pending/approved/declined) once
+   estimates have been acted on. `mapEstimate.status` now stores `work_status`.
+
+3. **Scale: prioritize incremental polling.** 1,497 customers / 3,090 jobs /
+   2,866 invoices / 933 estimates / 6 employees. A full all-pages resync every
+   15 min at `page_size=50` is ~150+ API calls per run. Confirm whether the list
+   endpoints support an `updated_after`/modified-since filter and switch the cron
+   to cursor-based incremental sync (see "Incremental polling" below).
+
+4. **Estimate/invoice → job/customer linkage is indirect.** Estimates and
+   invoices carry no `job_id`/`customer_id`. The **job** holds
+   `original_estimate_id` and an `invoice_number` (invoices share
+   `invoice_number`). To populate `estimates.job_id` / `invoices.job_id`, derive
+   the link during job sync rather than expecting it on the estimate/invoice.
+   Until then those FK columns stay null (harmless; the `raw` jsonb has everything).
+
+5. **Add tests for the corrected estimate/invoice mappers.** `mapEstimate`
+   (`work_status` → status, `options[0].total_amount` → amount_cents) and
+   `mapInvoice` (`amount` → amount_cents) were fixed against live data but have
+   no unit tests yet; `mappers.test.ts` still only covers customer + job.
+
+6. **Confirmed correct (no action):** auth (Bearer), endpoint paths + plural
+   resource keys, envelope `{page, page_size, total_pages, total_items,
+   <resource>}`, amounts in cents, and `mapJob`/`mapCustomer` field paths
+   (customer/tags/schedule/assigned_employees/address all present).
+
+Still unconfirmed (REST can't answer): the webhook `resource` value
+(singular vs plural) and whether webhook `data` is a full record or a delta —
+both need the dashboard's webhook docs. See the partial-payload item below.
+
 ## Data sync gaps
 
 - **Notes, attachments, and tags/job_tags sync.** The Phase 1 goal named these,
