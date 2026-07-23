@@ -35,7 +35,24 @@ describe("getDashboardSnapshot", () => {
         });
       }
       if (table === "estimates") {
-        return makeQueryBuilder({ data: [{ id: "e1", status: "open" }], error: null });
+        // `status` stores the live HCP `work_status`; option approval state lives
+        // in raw.options[].approval_status (Task 0). Open = not won/canceled, no
+        // option approved, and at least one option still awaiting a response.
+        return makeQueryBuilder({
+          data: [
+            // OPEN: awaiting a response, not won/canceled.
+            { id: "e1", status: "needs scheduling", raw: { options: [{ approval_status: null }] } },
+            // won -> not open (converted to a job).
+            { id: "e2", status: "created job from estimate", raw: { options: [{ approval_status: null }] } },
+            // dead -> not open (only expired options, none awaiting).
+            { id: "e3", status: "complete rated", raw: { options: [{ approval_status: "expired" }] } },
+            // accepted -> not open (an option is approved).
+            { id: "e4", status: "scheduled", raw: { options: [{ approval_status: "approved" }, { approval_status: null }] } },
+            // OPEN: one option awaiting, none approved (the other is declined).
+            { id: "e5", status: "in progress", raw: { options: [{ approval_status: null }, { approval_status: "declined" }] } },
+          ],
+          error: null,
+        });
       }
       if (table === "invoices") {
         return makeQueryBuilder({ data: [{ id: "i1", status: "pending", amount_cents: 30000 }], error: null });
@@ -50,9 +67,9 @@ describe("getDashboardSnapshot", () => {
     expect(snapshot.emergencyCalls).toBe(1);
   });
 
-  it("counts open estimates and pending invoices", async () => {
+  it("counts open estimates (awaiting a response, not won/canceled) and pending invoices", async () => {
     const snapshot = await getDashboardSnapshot();
-    expect(snapshot.openEstimates).toBe(1);
+    expect(snapshot.openEstimates).toBe(2); // e1 + e5
     expect(snapshot.pendingInvoices).toBe(1);
   });
 
