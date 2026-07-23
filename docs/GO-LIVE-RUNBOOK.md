@@ -65,10 +65,17 @@ npx supabase link --project-ref <your-new-project-ref>
 npx supabase db push
 ```
 
-Expected: the migration applies with no errors, creating `customers`,
-`technicians`, `jobs`, `estimates`, `invoices` (5 tables — notes/attachments/
-tags/sync_cursors are Phase 1.x, see the backlog). Copy the project URL, anon
-key, and service-role key into `.env.local`.
+Expected: three migrations apply with no errors:
+- `0001_init_schema.sql` — `customers`, `technicians`, `jobs`, `estimates`,
+  `invoices`.
+- `0002_geocode_cache.sql` — `geocode_cache` (backs the Census geocoding step;
+  Phase 1.x item 1).
+- `0003_sync_cursors.sql` — `sync_cursors` (backs incremental polling; item 4).
+
+Seven tables total (notes/attachments/tags remain descoped — see the backlog).
+Copy the project URL, anon key, and service-role key into `.env.local`. Optional:
+set `GEOCODE_MAX_PER_RUN` (default 500) to cap network geocode calls per cron
+run; run the first bulk backfill locally (Step 2, no timeout) to fill the cache.
 
 ---
 
