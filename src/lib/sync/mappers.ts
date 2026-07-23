@@ -33,7 +33,7 @@ export function mapEmployee(e: { id: string; first_name?: string; last_name?: st
 }
 
 export function mapJob(j: HcpJob) {
-  const tagNames = (j.tags ?? []).map((t) => t.name.toLowerCase());
+  const tagNames = (j.tags ?? []).map((t) => (t.name ?? "").toLowerCase());
   return {
     id: j.id,
     customer_id: j.customer?.id ?? null,

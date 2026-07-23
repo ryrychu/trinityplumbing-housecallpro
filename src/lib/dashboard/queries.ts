@@ -6,7 +6,9 @@ export interface DashboardSnapshot {
   commercialJobs: number;
   openEstimates: number;
   pendingInvoices: number;
-  revenueBookedThisWeekCents: number;
+  // Sum of all in_progress + scheduled job amounts. NOT date-scoped yet — a
+  // "this week" filter is a Phase 1.x fast-follow, so the name stays literal.
+  revenueBookedCents: number;
 }
 
 export async function getDashboardSnapshot(): Promise<DashboardSnapshot> {
@@ -33,7 +35,7 @@ export async function getDashboardSnapshot(): Promise<DashboardSnapshot> {
     commercialJobs: jobs.filter((j) => j.is_commercial).length,
     openEstimates: estimates.filter((e) => e.status === "open").length,
     pendingInvoices: invoices.filter((i) => i.status === "pending").length,
-    revenueBookedThisWeekCents: jobs
+    revenueBookedCents: jobs
       .filter((j) => j.work_status === "in_progress" || j.work_status === "scheduled")
       .reduce((sum, j) => sum + (j.total_amount_cents ?? 0), 0),
   };

@@ -16,8 +16,8 @@ export default async function DashboardPage() {
         <MetricCard label="Open Estimates" value={snapshot.openEstimates} />
         <MetricCard label="Pending Invoices" value={snapshot.pendingInvoices} />
         <MetricCard
-          label="Revenue Booked This Week"
-          value={`$${(snapshot.revenueBookedThisWeekCents / 100).toLocaleString()}`}
+          label="Revenue Booked"
+          value={`$${(snapshot.revenueBookedCents / 100).toLocaleString()}`}
         />
       </div>
     </main>

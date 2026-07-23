@@ -56,8 +56,8 @@ describe("getDashboardSnapshot", () => {
     expect(snapshot.pendingInvoices).toBe(1);
   });
 
-  it("sums revenue from in_progress and scheduled jobs as revenue booked this week", async () => {
+  it("sums revenue from in_progress and scheduled jobs as revenue booked", async () => {
     const snapshot = await getDashboardSnapshot();
-    expect(snapshot.revenueBookedThisWeekCents).toBe(35000);
+    expect(snapshot.revenueBookedCents).toBe(35000);
   });
 });
