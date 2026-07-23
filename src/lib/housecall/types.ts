@@ -53,7 +53,7 @@ export interface HcpInvoice {
   due_at?: string;
 }
 
-export interface HcpListResponse<T> {
+export interface HcpListResponse {
   page: number;
   total_pages: number;
   [resourceKey: string]: unknown;
