@@ -62,39 +62,12 @@ create table invoices (
   updated_at timestamptz not null default now()
 );
 
-create table tags (
-  id text primary key,
-  name text not null
-);
-
-create table job_tags (
-  job_id text references jobs(id),
-  tag_id text references tags(id),
-  primary key (job_id, tag_id)
-);
-
-create table notes (
-  id text primary key,
-  job_id text references jobs(id),
-  body text,
-  raw jsonb not null,
-  created_at timestamptz not null default now()
-);
-
-create table attachments (
-  id text primary key,
-  job_id text references jobs(id),
-  url text,
-  content_type text,
-  raw jsonb not null,
-  created_at timestamptz not null default now()
-);
-
--- Tracks the last successful poll per resource, so the backfill job knows where to resume.
-create table sync_cursors (
-  resource text primary key,            -- 'customers' | 'jobs' | 'estimates' | 'invoices' | 'technicians'
-  last_synced_at timestamptz not null default now()
-);
+-- Phase 1.x (intentionally descoped from Phase 1): tags, job_tags, notes,
+-- attachments, and sync_cursors are NOT created yet — no sync path populates
+-- them today (see docs/PHASE-1.x-BACKLOG.md). mapJob derives is_emergency /
+-- is_commercial directly from job tag NAMES on the job payload, so no separate
+-- tags table is required for Phase 1. Add these tables in the migration that
+-- introduces their sync + incremental (cursor-based) polling.
 
 create index jobs_scheduled_start_idx on jobs (scheduled_start);
 create index jobs_work_status_idx on jobs (work_status);
