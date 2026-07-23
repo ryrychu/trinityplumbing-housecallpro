@@ -5,6 +5,7 @@ export interface HcpCustomer {
   company?: string;
   email?: string;
   mobile_number?: string;
+  updated_at?: string; // ISO; drives incremental cursor sync
   addresses?: Array<{
     street: string;
     street_line_2?: string;
@@ -31,6 +32,7 @@ export interface HcpJob {
   tags?: Array<{ id: string; name: string }>;
   schedule?: { scheduled_start?: string; scheduled_end?: string };
   total_amount?: number; // cents
+  updated_at?: string; // ISO; drives incremental cursor sync
   // Live HCP jobs carry a full address object but no coordinates (Task 0); the
   // sync geocodes street/city/state/zip -> service_address_lat/lng.
   address?: {
@@ -55,6 +57,7 @@ export interface HcpEstimate {
   job_id?: string;
   customer?: { id: string };
   work_status?: string;
+  updated_at?: string; // ISO; drives incremental cursor sync
   options?: Array<{ total_amount?: number; approval_status?: string; status?: string }>;
 }
 
@@ -68,6 +71,7 @@ export interface HcpInvoice {
   status?: string;
   amount?: number;
   due_at?: string;
+  updated_at?: string; // ISO; drives incremental cursor sync
 }
 
 export interface HcpListResponse {

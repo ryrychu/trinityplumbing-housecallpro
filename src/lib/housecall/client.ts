@@ -31,9 +31,14 @@ export class HousecallClient {
   private async request<T>(
     path: string,
     resourceKey: string,
-    page = 1
+    page = 1,
+    sorted = false
   ): Promise<ListResult<T>> {
-    const res = await fetch(`${BASE_URL}${path}?page=${page}&page_size=50`, {
+    // HCP has no modified-since filter but honors sort_by/sort_direction (Task 0
+    // / item 4 probe). Newest-first ordering lets the cron stop paging early once
+    // it reaches records older than its cursor.
+    const sort = sorted ? "&sort_by=updated_at&sort_direction=desc" : "";
+    const res = await fetch(`${BASE_URL}${path}?page=${page}&page_size=50${sort}`, {
       headers: {
         Authorization: `Bearer ${this.apiKey}`,
         Accept: "application/json",
@@ -53,8 +58,10 @@ export class HousecallClient {
     };
   }
 
+  // The four incremental resources are fetched newest-first so the cron can
+  // stop early at its cursor. Employees (6 rows) stay a plain full resync.
   listCustomers(page = 1) {
-    return this.request<HcpCustomer>("/customers", "customers", page);
+    return this.request<HcpCustomer>("/customers", "customers", page, true);
   }
 
   listEmployees(page = 1) {
@@ -62,14 +69,14 @@ export class HousecallClient {
   }
 
   listJobs(page = 1) {
-    return this.request<HcpJob>("/jobs", "jobs", page);
+    return this.request<HcpJob>("/jobs", "jobs", page, true);
   }
 
   listEstimates(page = 1) {
-    return this.request<HcpEstimate>("/estimates", "estimates", page);
+    return this.request<HcpEstimate>("/estimates", "estimates", page, true);
   }
 
   listInvoices(page = 1) {
-    return this.request<HcpInvoice>("/invoices", "invoices", page);
+    return this.request<HcpInvoice>("/invoices", "invoices", page, true);
   }
 }

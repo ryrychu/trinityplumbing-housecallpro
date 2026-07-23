@@ -1,7 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const upsertMock = vi.fn().mockResolvedValue({ error: null });
-const fromMock = vi.fn(() => ({ upsert: upsertMock }));
+// sync_cursors read: from("sync_cursors").select(...) resolves to no cursors, so
+// every resource does a full backfill in this test.
+const selectMock = vi.fn().mockResolvedValue({ data: [], error: null });
+const fromMock = vi.fn(() => ({ upsert: upsertMock, select: selectMock }));
 
 vi.mock("@/lib/supabase/client", () => ({
   getSupabaseServerClient: () => ({ from: fromMock }),
