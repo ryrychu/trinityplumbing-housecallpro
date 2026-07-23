@@ -56,8 +56,10 @@ export function mapEstimate(e: HcpEstimate) {
     id: e.id,
     job_id: e.job_id ?? null,
     customer_id: e.customer?.id ?? null,
-    status: e.status ?? null,
-    amount_cents: e.total_amount ?? null,
+    // Live API (Task 0): the estimate's lifecycle field is `work_status`, and
+    // the dollar amount is on the first option, not the estimate itself.
+    status: e.work_status ?? null,
+    amount_cents: e.options?.[0]?.total_amount ?? null,
     raw: e,
     updated_at: new Date().toISOString(),
   };
@@ -69,7 +71,8 @@ export function mapInvoice(i: HcpInvoice) {
     job_id: i.job_id ?? null,
     customer_id: i.customer?.id ?? null,
     status: i.status ?? null,
-    amount_cents: i.total_amount ?? null,
+    // Live API (Task 0): the invoice total field is `amount`, in cents.
+    amount_cents: i.amount ?? null,
     due_date: i.due_at ? i.due_at.slice(0, 10) : null,
     raw: i,
     updated_at: new Date().toISOString(),

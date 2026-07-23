@@ -36,20 +36,27 @@ export interface HcpJob {
   attachments?: Array<{ id: string; url: string; content_type: string }>;
 }
 
+// Confirmed against the live account (Task 0): estimates carry `work_status`
+// (not `status`) and their amount lives in `options[].total_amount` (no
+// top-level amount). There is no estimate.job_id — the job carries
+// `original_estimate_id` instead.
 export interface HcpEstimate {
   id: string;
   job_id?: string;
   customer?: { id: string };
-  status?: string;
-  total_amount?: number;
+  work_status?: string;
+  options?: Array<{ total_amount?: number; approval_status?: string; status?: string }>;
 }
 
+// Confirmed against the live account (Task 0): invoices use `amount` (not
+// `total_amount`) and carry no top-level customer/job link — they associate
+// with a job via a shared `invoice_number`.
 export interface HcpInvoice {
   id: string;
   job_id?: string;
   customer?: { id: string };
   status?: string;
-  total_amount?: number;
+  amount?: number;
   due_at?: string;
 }
 
