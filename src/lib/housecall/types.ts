@@ -31,7 +31,17 @@ export interface HcpJob {
   tags?: Array<{ id: string; name: string }>;
   schedule?: { scheduled_start?: string; scheduled_end?: string };
   total_amount?: number; // cents
-  address?: { latitude?: number; longitude?: number };
+  // Live HCP jobs carry a full address object but no coordinates (Task 0); the
+  // sync geocodes street/city/state/zip -> service_address_lat/lng.
+  address?: {
+    street?: string;
+    street_line_2?: string;
+    city?: string;
+    state?: string;
+    zip?: string;
+    latitude?: number;
+    longitude?: number;
+  };
   notes?: Array<{ id: string; content: string; created_at: string }>;
   attachments?: Array<{ id: string; url: string; content_type: string }>;
 }

@@ -1,5 +1,7 @@
 import { getSupabaseServerClient } from "@/lib/supabase/client";
 import { mapCustomer, mapEmployee, mapJob, mapEstimate, mapInvoice } from "./mappers";
+import { buildGeocodeTargets } from "./geocodeSpecs";
+import { enrichRowsWithGeocode } from "@/lib/geo/geocode";
 import type { HcpCustomer, HcpJob, HcpEstimate, HcpInvoice } from "@/lib/housecall/types";
 
 type SyncConfig = { table: string; mapper: (x: unknown) => Record<string, unknown> };
@@ -20,6 +22,14 @@ export async function syncOneRecord(resource: string, event: string, data: unkno
 
   const supabase = getSupabaseServerClient();
   const row = config.mapper(data);
+
+  // Geocode this record's address (customers/jobs) before upserting. One record,
+  // so at most one network call; cache hits are free.
+  const targets = buildGeocodeTargets(resource, [data], [row]);
+  if (targets.length > 0) {
+    await enrichRowsWithGeocode(supabase, targets, { remaining: 1 });
+  }
+
   const { error } = await supabase.from(config.table).upsert(row);
 
   if (error) {
