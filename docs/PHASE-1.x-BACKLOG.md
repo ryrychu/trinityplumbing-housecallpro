@@ -31,12 +31,21 @@ Findings, most important first:
    endpoints support an `updated_after`/modified-since filter and switch the cron
    to cursor-based incremental sync (see "Incremental polling" below).
 
-4. **Estimate/invoice → job/customer linkage is indirect.** Estimates and
-   invoices carry no `job_id`/`customer_id`. The **job** holds
-   `original_estimate_id` and an `invoice_number` (invoices share
-   `invoice_number`). To populate `estimates.job_id` / `invoices.job_id`, derive
-   the link during job sync rather than expecting it on the estimate/invoice.
-   Until then those FK columns stay null (harmless; the `raw` jsonb has everything).
+4. **Estimate/invoice → job linkage — RESOLVED / partially infeasible (item 5,
+   2026-07-24).** Re-probed against the live account:
+   - **Invoices carry `job_id` directly** (e.g. `job_id: "job_a955…"`). The
+     earlier "invoices carry no job_id" note was wrong. `mapInvoice` already
+     maps it, so `invoices.job_id` is populated with no derivation. (Regression
+     test added in `mappers.test.ts`.)
+   - **Estimate → job is NOT achievable** with the current API surface. The job
+     exposes `original_estimate_id` / `original_estimate_uuids` prefixed `est_…`,
+     but the `/estimates` list resource ids are prefixed `csr_…` (different
+     UUIDs), the estimate object has no `est_`-prefixed field, and
+     `GET /estimates/est_…` returns 404. So there is no key to join on;
+     `estimates.job_id` stays null (the `raw` jsonb still has everything). Revisit
+     only if HCP later exposes the `est_`↔`csr_` mapping or a `job_id` on
+     estimates. A fuzzy customer+address+time match was considered and rejected
+     as unreliable.
 
 5. **Add tests for the corrected estimate/invoice mappers.** `mapEstimate`
    (`work_status` → status, `options[0].total_amount` → amount_cents) and

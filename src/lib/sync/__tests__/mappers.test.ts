@@ -82,9 +82,12 @@ describe("mapEstimate", () => {
 describe("mapInvoice", () => {
   // Live API (Task 0): the invoice total field is `amount` (cents), not
   // `total_amount`.
-  it("maps amount into amount_cents and truncates due_at to a date", () => {
+  it("maps amount into amount_cents, job_id passthrough, and truncates due_at to a date", () => {
     const row = mapInvoice({
       id: "i1",
+      // Live invoices (probe) carry job_id directly — unlike estimates, this is
+      // the reliable invoice->job link, no derivation needed.
+      job_id: "job_a955",
       customer: { id: "c1" },
       status: "pending",
       amount: 30000,
@@ -92,6 +95,7 @@ describe("mapInvoice", () => {
     });
 
     expect(row.id).toBe("i1");
+    expect(row.job_id).toBe("job_a955");
     expect(row.customer_id).toBe("c1");
     expect(row.status).toBe("pending");
     expect(row.amount_cents).toBe(30000);
