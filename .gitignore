@@ -37,3 +37,5 @@ next-env.d.ts
 
 # Supabase CLI link state (contains project ref)
 supabase/.temp/
+
+.vercel

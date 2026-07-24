@@ -44,6 +44,23 @@ function logPayloadShape(req: Request, rawBody: string) {
   console.log("[webhook-probe]", JSON.stringify({ headerNames, shape }));
 }
 
+/**
+ * Housecall Pro signs deliveries with an `api-signature` header and sends an
+ * `api-timestamp` alongside it — both confirmed from a real HCP request on
+ * 2026-07-24. The previously assumed `X-HousecallPro-Signature` is never sent;
+ * it is retained only as a fallback so the endpoint keeps working if HCP ever
+ * renames the header back.
+ */
+const SIGNATURE_HEADERS = ["api-signature", "x-housecallpro-signature"];
+
+function readSignature(req: Request): string {
+  for (const name of SIGNATURE_HEADERS) {
+    const value = req.headers.get(name);
+    if (value) return value;
+  }
+  return "";
+}
+
 export async function POST(req: Request) {
   const rawBody = await req.text();
 
@@ -51,7 +68,38 @@ export async function POST(req: Request) {
     logPayloadShape(req, rawBody);
   }
 
-  const signature = req.headers.get("X-HousecallPro-Signature") ?? "";
+  let payload: { event?: string; resource?: string; data?: unknown };
+  try {
+    payload = JSON.parse(rawBody);
+  } catch {
+    return NextResponse.json({ error: "Malformed JSON body" }, { status: 400 });
+  }
+
+  // Housecall Pro validates a webhook URL before saving it by POSTing a test
+  // body of {"foo":"bar"} and requiring a 2xx; a 401 blocks the URL from being
+  // saved at all. Such a request carries neither `resource` nor `data`, is never
+  // dispatched to the sync layer, and touches nothing — so answering 200 ahead
+  // of signature verification has no side effects. Requiring BOTH to be absent
+  // keeps a real-but-malformed event (e.g. `data` present, `resource` missing)
+  // on the 400 path rather than silently passing as a handshake.
+  if (payload?.resource == null && payload?.data == null) {
+    if (process.env.WEBHOOK_DEBUG === "1") {
+      // Safe to log in full: the handshake body is the fixed literal
+      // {"foo":"bar"} and contains no customer data. Captures the signature and
+      // timestamp values needed to derive HCP's signing construction.
+      console.log(
+        "[webhook-handshake]",
+        JSON.stringify({
+          apiSignature: req.headers.get("api-signature"),
+          apiTimestamp: req.headers.get("api-timestamp"),
+          rawBody,
+        })
+      );
+    }
+    return NextResponse.json({ ok: true, handshake: true }, { status: 200 });
+  }
+
+  const signature = readSignature(req);
   const secret = process.env.HOUSECALL_WEBHOOK_SECRET;
 
   if (!secret) {
@@ -60,13 +108,6 @@ export async function POST(req: Request) {
 
   if (!verifyWebhookSignature(rawBody, signature, secret)) {
     return NextResponse.json({ error: "Invalid signature" }, { status: 401 });
-  }
-
-  let payload: { event?: string; resource?: string; data?: unknown };
-  try {
-    payload = JSON.parse(rawBody);
-  } catch {
-    return NextResponse.json({ error: "Malformed JSON body" }, { status: 400 });
   }
 
   if (typeof payload?.resource !== "string" || payload.data == null) {

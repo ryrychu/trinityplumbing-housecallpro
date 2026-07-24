@@ -72,6 +72,65 @@ describe("POST /api/webhooks/housecall", () => {
     expect(syncOneRecord).not.toHaveBeenCalled();
   });
 
+  // Housecall Pro will not save a webhook URL unless a test POST of {"foo":"bar"}
+  // returns 2xx. It arrives unsigned, so this must succeed without verification.
+  it("answers the HCP URL-validation handshake with 200 without syncing", async () => {
+    const req = new Request("https://example.com/api/webhooks/housecall", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ foo: "bar" }),
+    });
+
+    const res = await POST(req);
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ handshake: true });
+    expect(syncOneRecord).not.toHaveBeenCalled();
+  });
+
+  // Regression guard: HCP sends `api-signature`, never `X-HousecallPro-Signature`.
+  // Reading only the latter made every real event fail verification.
+  it("verifies a signature supplied in the api-signature header", async () => {
+    const raw = JSON.stringify({
+      event: "job.updated",
+      resource: "jobs",
+      data: { id: "j1" },
+    });
+    const signature = crypto.createHmac("sha256", "test-secret").update(raw).digest("hex");
+    const req = new Request("https://example.com/api/webhooks/housecall", {
+      method: "POST",
+      headers: {
+        "api-signature": signature,
+        "api-timestamp": "1753326000",
+        "Content-Type": "application/json",
+      },
+      body: raw,
+    });
+
+    const res = await POST(req);
+
+    expect(res.status).toBe(200);
+    expect(syncOneRecord).toHaveBeenCalledWith("jobs", "job.updated", { id: "j1" });
+  });
+
+  it("still rejects an event whose api-signature is wrong", async () => {
+    const raw = JSON.stringify({
+      event: "job.updated",
+      resource: "jobs",
+      data: { id: "j1" },
+    });
+    const req = new Request("https://example.com/api/webhooks/housecall", {
+      method: "POST",
+      headers: { "api-signature": "deadbeef", "Content-Type": "application/json" },
+      body: raw,
+    });
+
+    const res = await POST(req);
+
+    expect(res.status).toBe(401);
+    expect(syncOneRecord).not.toHaveBeenCalled();
+  });
+
   it("acknowledges with 200 (not 500) and logs when the sync fails downstream", async () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     vi.mocked(syncOneRecord).mockRejectedValueOnce(new Error("FK violation"));
