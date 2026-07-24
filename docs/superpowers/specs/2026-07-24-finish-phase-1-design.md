@@ -26,7 +26,7 @@ the `list.md` Phase-1 checklist, the current state is:
 | Dashboard | Jobs in progress, Open estimates, Pending invoices, Revenue booked, Commercial jobs, Emergency calls | ✅ 6 of 10 cards |
 | Dashboard | **Today's schedule, Upcoming estimates, Technician workload, Revenue scheduled next week** | ❌ 4 missing |
 | Dashboard | Revenue booked "this week" | ⚠️ renders, but is all-time, not week-scoped |
-| Geo | Geographic Scheduling Assistant | ⚠️ geocoding infra only; no distance/zone/direction/drive-time |
+| Geo | Geographic Scheduling Assistant | ⚠️ math built + tested (`distance.ts`, `zones.ts`) but zone is rule-based not town-based, and nothing is surfaced in the UI |
 
 ### Design decisions locked during brainstorming
 
@@ -162,26 +162,33 @@ enable them in HCP until this ships).
 
 ## 4. Geographic Scheduling Assistant — computed fields
 
-New module `src/lib/geo/serviceArea.ts` — pure, side-effect-free functions over
-coordinates, independently testable:
+**Most of the math already exists and is tested** — do not rebuild it:
+- `src/lib/geo/distance.ts` — `distanceFromAverillPark(lat, lng)` returns
+  `{ miles, driveMinutes }` (drive-time = `miles ÷ AVG_SPEED_MPH`, 32 mph
+  constant), and `compassDirectionFromAverillPark(lat, lng)` returns an 8-point
+  bearing (N/NE/E/SE/S/SW/W/NW). Both unit-tested.
+- `src/lib/geo/zones.ts` — `classifyZone(lat, lng)` returns `{ zone, compass }`
+  using **distance + compass rules** (Albany Zone / North Route / Southern
+  Berkshire Route / Vermont Route / Extended / Outside). Unit-tested.
 
-- `AVERILL_PARK` — origin constant (lat/lng of Averill Park, NY).
-- `haversineMiles(a, b)` — great-circle distance in miles.
-- `driveTimeEstimate(miles)` — `miles × ROAD_WINDING_FACTOR ÷ AVG_SPEED_MPH`,
-  returned in minutes. A documented approximation; no external routing API. The
-  factor and speed are named constants, easy to tune.
-- `compassDirection(from, to)` — 8-point bearing (N/NE/E/SE/S/SW/W/NW).
-- `zoneForTown(town)` — lookup against a `TOWN_ZONES` config
-  (`Record<string, Zone>`, case-insensitive). Returns a fallback zone (e.g.
-  `"Other"`) for unknown towns.
+**The gap vs. the brainstorming decision (town→zone lookup):** `zones.ts`
+currently derives the zone from distance/direction, not from a town lookup. The
+plan reconciles this without discarding the tested code:
 
-`TOWN_ZONES` will be **seeded from the actual town/city distribution** in the
-synced customer/job data (a quick census query), then presented for approval
-before finalizing. Example zones from `list.md`: Albany Zone, North Route,
-Southern Berkshire Route, Vermont Route.
+- Add `src/lib/geo/townZones.ts` — a `TOWN_ZONES` config
+  (`Record<string, string>`, case-insensitive town → zone) plus
+  `zoneForTown(town): string | null` (null when the town is unknown).
+- Change `classifyZone` to a **town-first** resolver: `zoneForTown(town)` wins;
+  when it returns null (unknown town or missing town), fall back to the existing
+  distance/compass rules. New signature:
+  `classifyZone(lat, lng, town?: string) → { zone, compass, source: "town" | "distance" }`.
+- `TOWN_ZONES` is **seeded from the actual town/city distribution** in the synced
+  data (a census query over `customers.city` / `jobs.raw->address->city`), then
+  presented for approval before finalizing. Example zones from `list.md`: Albany
+  Zone, North Route, Southern Berkshire Route, Vermont Route.
 
-These fields are surfaced per-job in the Today's-schedule dashboard panel
-(§5). No new table; computed from `service_address_lat`/`lng` and the job's town.
+These fields are surfaced per-job in the Today's-schedule dashboard panel (§5),
+computed from `service_address_lat`/`lng` and the job's town. No new table.
 
 ---
 
