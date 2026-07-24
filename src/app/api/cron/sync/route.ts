@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { HousecallClient } from "@/lib/housecall/client";
 import { getSupabaseServerClient } from "@/lib/supabase/client";
-import { mapCustomer, mapEmployee, mapJob, mapEstimate, mapInvoice } from "@/lib/sync/mappers";
+import { mapCustomer, mapEmployee, mapJob, mapEstimate, mapInvoice, mapLead } from "@/lib/sync/mappers";
 import { buildGeocodeTargets } from "@/lib/sync/geocodeSpecs";
 import { enrichRowsWithGeocode, type GeocodeBudget } from "@/lib/geo/geocode";
 import { syncResourceIncremental, type IncrementalResult } from "@/lib/sync/incremental";
@@ -112,6 +112,7 @@ export async function GET(req: Request) {
     await syncResourceIncremental(supabase, "customers", (p) => hcp.listCustomers(p), mapCustomer, budget, cursors.get("customers") ?? null),
     await syncResourceIncremental(supabase, "jobs", (p) => hcp.listJobs(p), mapJob, budget, cursors.get("jobs") ?? null),
     await syncResourceIncremental(supabase, "estimates", (p) => hcp.listEstimates(p), mapEstimate, budget, cursors.get("estimates") ?? null),
+    await syncResourceIncremental(supabase, "leads", (p) => hcp.listLeads(p), mapLead, budget, cursors.get("leads") ?? null),
   ];
 
   if (shouldReconcileInvoices) {

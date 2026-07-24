@@ -59,4 +59,20 @@ describe("HousecallClient", () => {
     delete process.env.HOUSECALL_API_KEY;
     expect(() => new HousecallClient()).toThrow(/HOUSECALL_API_KEY/);
   });
+
+  it("listLeads fetches /leads with the leads resource key", async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ leads: [{ id: "lead_1" }], page: 1, total_pages: 1 }),
+    });
+
+    const client = new HousecallClient();
+    const result = await client.listLeads(1);
+
+    expect(result.items).toEqual([{ id: "lead_1" }]);
+    expect(global.fetch).toHaveBeenCalledWith(
+      expect.stringContaining("/leads"),
+      expect.anything()
+    );
+  });
 });

@@ -18,6 +18,7 @@ vi.mock("@/lib/housecall/client", () => ({
       listJobs: vi.fn().mockResolvedValue({ items: [{ id: "j1", tags: [] }], page: 1, totalPages: 1 }),
       listEstimates: vi.fn().mockResolvedValue({ items: [{ id: "es1" }], page: 1, totalPages: 1 }),
       listInvoices: vi.fn().mockResolvedValue({ items: [{ id: "i1" }], page: 1, totalPages: 1 }),
+      listLeads: vi.fn().mockResolvedValue({ items: [{ id: "lead_1" }], page: 1, totalPages: 1 }),
     };
   }),
 }));
@@ -48,6 +49,7 @@ describe("GET /api/cron/sync", () => {
     expect(fromMock).toHaveBeenCalledWith("jobs");
     expect(fromMock).toHaveBeenCalledWith("estimates");
     expect(fromMock).toHaveBeenCalledWith("invoices");
+    expect(fromMock).toHaveBeenCalledWith("leads");
   });
 
   // Invoices have no `updated_at` in the HCP payload, so their cursor can never

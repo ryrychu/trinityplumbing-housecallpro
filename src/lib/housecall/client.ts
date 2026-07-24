@@ -9,7 +9,7 @@
 //   - List envelope: { <resource>: [...], page, total_pages }
 // If the live check finds different values, update BASE_URL and the request()
 // method below; the rest of the codebase depends only on this file's interface.
-import { HcpCustomer, HcpEmployee, HcpJob, HcpEstimate, HcpInvoice } from "./types";
+import { HcpCustomer, HcpEmployee, HcpJob, HcpEstimate, HcpInvoice, HcpLead } from "./types";
 
 const BASE_URL = "https://api.housecallpro.com";
 
@@ -78,5 +78,9 @@ export class HousecallClient {
 
   listInvoices(page = 1) {
     return this.request<HcpInvoice>("/invoices", "invoices", page, true);
+  }
+
+  listLeads(page = 1) {
+    return this.request<HcpLead>("/leads", "leads", page, true);
   }
 }
