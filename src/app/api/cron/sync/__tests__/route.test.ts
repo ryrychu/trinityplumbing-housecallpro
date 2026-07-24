@@ -49,4 +49,41 @@ describe("GET /api/cron/sync", () => {
     expect(fromMock).toHaveBeenCalledWith("estimates");
     expect(fromMock).toHaveBeenCalledWith("invoices");
   });
+
+  // Invoices have no `updated_at` in the HCP payload, so their cursor can never
+  // advance and every run would otherwise re-page all ~2.9k of them. The
+  // reconcile is gated on elapsed time instead.
+  it("skips the invoice reconcile when one ran within the window", async () => {
+    selectMock.mockResolvedValueOnce({
+      data: [{ resource: "invoices", last_updated_at: null, synced_at: new Date().toISOString() }],
+      error: null,
+    });
+
+    const req = new Request("https://example.com/api/cron/sync", {
+      headers: { Authorization: "Bearer test-cron-secret" },
+    });
+    const res = await GET(req);
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ invoicesReconciled: false });
+    expect(fromMock).toHaveBeenCalledWith("jobs");
+    expect(fromMock).not.toHaveBeenCalledWith("invoices");
+  });
+
+  it("reconciles invoices when the last run is older than the window", async () => {
+    const stale = new Date(Date.now() - 48 * 3_600_000).toISOString();
+    selectMock.mockResolvedValueOnce({
+      data: [{ resource: "invoices", last_updated_at: null, synced_at: stale }],
+      error: null,
+    });
+
+    const req = new Request("https://example.com/api/cron/sync", {
+      headers: { Authorization: "Bearer test-cron-secret" },
+    });
+    const res = await GET(req);
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ invoicesReconciled: true });
+    expect(fromMock).toHaveBeenCalledWith("invoices");
+  });
 });

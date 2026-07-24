@@ -115,6 +115,45 @@ both need the dashboard's webhook docs. See the partial-payload item below.
 - **Commercial / Navien priority recommendations.** Scheduling-recommendation
   behavior (Phase 2 per the roadmap), dependent on live tagging conventions.
 
+## Go-live Step 2 findings (live data, 2026-07-24)
+
+Verifying the first real backfill against the live account surfaced five issues.
+Four are fixed; one needs a business decision.
+
+- **FIXED — hard FKs abort the sync.** A job assigned to a deactivated
+  technician (HCP `/employees` returns 6; a job referenced a 7th) violated
+  `jobs_technician_id_fkey` and killed the whole run. These tables mirror an
+  external source of truth that gives no referential guarantees, so migration
+  `0004_drop_external_fks.sql` drops all six inter-table FKs and indexes the
+  reference columns instead.
+- **FIXED — invoices have no `updated_at`.** The live invoice payload has no
+  modification timestamp at all, so the incremental cursor could never advance
+  and every run re-paged all ~2.9k invoices (58 calls, ~70s of a ~72s run;
+  ~5.6k wasted calls/day). The cron now reconciles invoices at most once per
+  `INVOICE_RECONCILE_HOURS` (default 24) and records `synced_at` with a null
+  `last_updated_at`; webhooks cover live invoice changes. Steady-state runs are
+  now ~2s.
+- **FIXED — dashboard matched status values that do not exist.** Live
+  `jobs.work_status` is `"in progress"` (a SPACE, not `"in_progress"`), and
+  invoices use `open`, never `pending`. Both cards read 0. Test fixtures had
+  encoded the same invented values, so the suite passed while production was
+  wrong — fixtures now use live strings.
+- **FIXED — PostgREST 1000-row cap silently truncated every count.** Listed
+  above as a performance nit ("aggregate in SQL"); it was actually a correctness
+  bug. `getDashboardSnapshot` now pages with `.range()` and selects only the
+  columns each metric needs. Jobs in progress went 19 → 91, pending invoices
+  24 → 25, revenue booked $36,195.59 → $145,708.30.
+- **OPEN — `emergencyCalls` and `commercialJobs` have no data source.** Both
+  derive from job tag names, but only 22 of 3,038 jobs carry any tag, and none
+  are emergency/commercial (actual names: "HomeServe", "My Website", "H-27",
+  "Dylan spiff up sell", "3LD"). No code change can populate these. Options:
+  adopt a tagging convention in HCP, derive from job type / line items, or drop
+  the cards. Needs a decision from Trinity.
+
+Geocoding after the uncapped local backfill: 92/1497 customers and 201/3038 jobs
+still lack coordinates — 63 are definitive Census no-matches, the rest lack a
+street or city/zip. That floor is expected, not a budget problem.
+
 ## Housekeeping
 
 - Add an assertion test that pins each mapper's output keys to the migration's
