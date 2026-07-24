@@ -58,13 +58,14 @@ export async function POST(req: Request) {
   // syncOneRecord normalizes the singular resource ("customer") to its plural
   // table key.
   const resource = event.split(".")[0];
+  const action = event.split(".").slice(1).join(".") || undefined;
   const record = payload[resource];
   if (record == null || typeof record !== "object" || Array.isArray(record)) {
     return NextResponse.json({ error: `Missing record for event ${event}` }, { status: 400 });
   }
 
   try {
-    await syncOneRecord(resource, event, record);
+    await syncOneRecord(resource, event, record, action);
   } catch (err) {
     // Log and acknowledge (200) rather than 500: a permanent failure (e.g. an
     // out-of-order event hitting an FK constraint) would otherwise trigger a

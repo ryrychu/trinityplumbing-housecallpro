@@ -55,7 +55,12 @@ describe("POST /api/webhooks/housecall", () => {
     const res = await POST(req);
 
     expect(res.status).toBe(200);
-    expect(syncOneRecord).toHaveBeenCalledWith("customer", "customer.updated", env.customer);
+    expect(syncOneRecord).toHaveBeenCalledWith(
+      "customer",
+      "customer.updated",
+      env.customer,
+      "updated"
+    );
   });
 
   it("derives the resource and record key from the event name for a job event", async () => {
@@ -70,7 +75,7 @@ describe("POST /api/webhooks/housecall", () => {
     const res = await POST(req);
 
     expect(res.status).toBe(200);
-    expect(syncOneRecord).toHaveBeenCalledWith("job", "job.created", env.job);
+    expect(syncOneRecord).toHaveBeenCalledWith("job", "job.created", env.job, "created");
   });
 
   it("rejects a request with an invalid signature", async () => {
@@ -143,7 +148,12 @@ describe("POST /api/webhooks/housecall", () => {
     const res = await POST(req);
 
     expect(res.status).toBe(200);
-    expect(syncOneRecord).toHaveBeenCalledWith("customer", "customer.updated", env.customer);
+    expect(syncOneRecord).toHaveBeenCalledWith(
+      "customer",
+      "customer.updated",
+      env.customer,
+      "updated"
+    );
   });
 
   it("still verifies a signature supplied in the legacy X-HousecallPro-Signature header", async () => {
@@ -153,7 +163,12 @@ describe("POST /api/webhooks/housecall", () => {
     const res = await POST(req);
 
     expect(res.status).toBe(200);
-    expect(syncOneRecord).toHaveBeenCalledWith("customer", "customer.updated", env.customer);
+    expect(syncOneRecord).toHaveBeenCalledWith(
+      "customer",
+      "customer.updated",
+      env.customer,
+      "updated"
+    );
   });
 
   it("still rejects an event whose api-signature is wrong", async () => {
@@ -172,6 +187,21 @@ describe("POST /api/webhooks/housecall", () => {
 
     expect(res.status).toBe(401);
     expect(syncOneRecord).not.toHaveBeenCalled();
+  });
+
+  it("passes action 'deleted' through for a delete event", async () => {
+    const env = customerEnvelope({ event: "customer.deleted", customer: { id: "cus_1" } });
+    const req = signedRequest(env, "test-secret");
+
+    const res = await POST(req);
+
+    expect(res.status).toBe(200);
+    expect(syncOneRecord).toHaveBeenCalledWith(
+      "customer",
+      "customer.deleted",
+      env.customer,
+      "deleted"
+    );
   });
 
   it("acknowledges with 200 (not 500) and logs when the sync fails downstream", async () => {
