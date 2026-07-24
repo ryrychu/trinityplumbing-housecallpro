@@ -8,12 +8,36 @@ vi.mock("@/lib/sync/syncService", () => ({
 import { POST } from "../route";
 import { syncOneRecord } from "@/lib/sync/syncService";
 
-function signedRequest(body: object, secret: string) {
+// A Housecall Pro delivery is `{ event, event_occurred_at, company_id, <typeKey> }`
+// where <typeKey> is the singular resource name (e.g. "customer") and holds the
+// FULL record — confirmed from a live 2026-07-24 capture. There is no `resource`
+// field and no `data` field. HCP signs `${api-timestamp}.${rawBody}` with
+// HMAC-SHA256 (secret as UTF-8), hex-encoded, in the `api-signature` header.
+const TS = "1784871495";
+
+function customerEnvelope(overrides: Record<string, unknown> = {}) {
+  return {
+    event: "customer.updated",
+    event_occurred_at: "2026-07-24T05:38:14Z",
+    company_id: "233b75f9-4b4f-4a83-b21b-c1ed9e571daa",
+    customer: { id: "cus_1", first_name: "A", tags: [], addresses: [], attachments: [] },
+    ...overrides,
+  };
+}
+
+function sign(ts: string, rawBody: string, secret: string) {
+  return crypto.createHmac("sha256", secret).update(`${ts}.${rawBody}`).digest("hex");
+}
+
+function signedRequest(body: object, secret: string, headerName = "api-signature") {
   const raw = JSON.stringify(body);
-  const signature = crypto.createHmac("sha256", secret).update(raw).digest("hex");
   return new Request("https://example.com/api/webhooks/housecall", {
     method: "POST",
-    headers: { "X-HousecallPro-Signature": signature, "Content-Type": "application/json" },
+    headers: {
+      [headerName]: sign(TS, raw, secret),
+      "api-timestamp": TS,
+      "Content-Type": "application/json",
+    },
     body: raw,
   });
 }
@@ -24,23 +48,33 @@ describe("POST /api/webhooks/housecall", () => {
     vi.clearAllMocks();
   });
 
-  it("accepts a validly signed event and calls syncOneRecord", async () => {
-    const req = signedRequest(
-      { event: "job.updated", resource: "jobs", data: { id: "j1" } },
-      "test-secret"
-    );
+  it("syncs a validly signed customer event using the record under payload.customer", async () => {
+    const env = customerEnvelope();
+    const req = signedRequest(env, "test-secret");
 
     const res = await POST(req);
 
     expect(res.status).toBe(200);
-    expect(syncOneRecord).toHaveBeenCalledWith("jobs", "job.updated", { id: "j1" });
+    expect(syncOneRecord).toHaveBeenCalledWith("customer", "customer.updated", env.customer);
+  });
+
+  it("derives the resource and record key from the event name for a job event", async () => {
+    const env = {
+      event: "job.created",
+      event_occurred_at: "2026-07-24T05:38:14Z",
+      company_id: "co_1",
+      job: { id: "job_1", work_status: "scheduled" },
+    };
+    const req = signedRequest(env, "test-secret");
+
+    const res = await POST(req);
+
+    expect(res.status).toBe(200);
+    expect(syncOneRecord).toHaveBeenCalledWith("job", "job.created", env.job);
   });
 
   it("rejects a request with an invalid signature", async () => {
-    const req = signedRequest(
-      { event: "job.updated", resource: "jobs", data: { id: "j1" } },
-      "wrong-secret"
-    );
+    const req = signedRequest(customerEnvelope(), "wrong-secret");
 
     const res = await POST(req);
 
@@ -50,10 +84,9 @@ describe("POST /api/webhooks/housecall", () => {
 
   it("returns 400 for a validly signed body that is not JSON", async () => {
     const raw = "this is not json";
-    const signature = crypto.createHmac("sha256", "test-secret").update(raw).digest("hex");
     const req = new Request("https://example.com/api/webhooks/housecall", {
       method: "POST",
-      headers: { "X-HousecallPro-Signature": signature },
+      headers: { "api-signature": sign(TS, raw, "test-secret"), "api-timestamp": TS },
       body: raw,
     });
 
@@ -63,8 +96,20 @@ describe("POST /api/webhooks/housecall", () => {
     expect(syncOneRecord).not.toHaveBeenCalled();
   });
 
-  it("returns 400 when the payload is missing resource or data", async () => {
-    const req = signedRequest({ event: "job.updated", data: { id: "j1" } }, "test-secret");
+  // The bug this whole change fixes: a real event carries neither `resource` nor
+  // `data`, so the old handshake gate (both absent → 200 without syncing)
+  // swallowed every delivery. The gate is now `event == null`, so a signed event
+  // whose named record key is missing must fail loudly with 400, not pass as a
+  // handshake.
+  it("returns 400 for a signed event whose named record is absent", async () => {
+    const req = signedRequest(
+      {
+        event: "customer.updated",
+        event_occurred_at: "2026-07-24T05:38:14Z",
+        company_id: "co_1",
+      },
+      "test-secret"
+    );
 
     const res = await POST(req);
 
@@ -73,7 +118,8 @@ describe("POST /api/webhooks/housecall", () => {
   });
 
   // Housecall Pro will not save a webhook URL unless a test POST of {"foo":"bar"}
-  // returns 2xx. It arrives unsigned, so this must succeed without verification.
+  // returns 2xx. It arrives unsigned and has no `event`, so it must succeed
+  // without verification and without syncing.
   it("answers the HCP URL-validation handshake with 200 without syncing", async () => {
     const req = new Request("https://example.com/api/webhooks/housecall", {
       method: "POST",
@@ -88,40 +134,37 @@ describe("POST /api/webhooks/housecall", () => {
     expect(syncOneRecord).not.toHaveBeenCalled();
   });
 
-  // Regression guard: HCP sends `api-signature`, never `X-HousecallPro-Signature`.
-  // Reading only the latter made every real event fail verification.
+  // Regression guard: HCP signs with `api-signature`; the legacy
+  // `X-HousecallPro-Signature` is retained only as a fallback.
   it("verifies a signature supplied in the api-signature header", async () => {
-    const raw = JSON.stringify({
-      event: "job.updated",
-      resource: "jobs",
-      data: { id: "j1" },
-    });
-    const signature = crypto.createHmac("sha256", "test-secret").update(raw).digest("hex");
-    const req = new Request("https://example.com/api/webhooks/housecall", {
-      method: "POST",
-      headers: {
-        "api-signature": signature,
-        "api-timestamp": "1753326000",
-        "Content-Type": "application/json",
-      },
-      body: raw,
-    });
+    const env = customerEnvelope();
+    const req = signedRequest(env, "test-secret", "api-signature");
 
     const res = await POST(req);
 
     expect(res.status).toBe(200);
-    expect(syncOneRecord).toHaveBeenCalledWith("jobs", "job.updated", { id: "j1" });
+    expect(syncOneRecord).toHaveBeenCalledWith("customer", "customer.updated", env.customer);
+  });
+
+  it("still verifies a signature supplied in the legacy X-HousecallPro-Signature header", async () => {
+    const env = customerEnvelope();
+    const req = signedRequest(env, "test-secret", "X-HousecallPro-Signature");
+
+    const res = await POST(req);
+
+    expect(res.status).toBe(200);
+    expect(syncOneRecord).toHaveBeenCalledWith("customer", "customer.updated", env.customer);
   });
 
   it("still rejects an event whose api-signature is wrong", async () => {
-    const raw = JSON.stringify({
-      event: "job.updated",
-      resource: "jobs",
-      data: { id: "j1" },
-    });
+    const raw = JSON.stringify(customerEnvelope());
     const req = new Request("https://example.com/api/webhooks/housecall", {
       method: "POST",
-      headers: { "api-signature": "deadbeef", "Content-Type": "application/json" },
+      headers: {
+        "api-signature": "deadbeef",
+        "api-timestamp": TS,
+        "Content-Type": "application/json",
+      },
       body: raw,
     });
 
@@ -135,10 +178,7 @@ describe("POST /api/webhooks/housecall", () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     vi.mocked(syncOneRecord).mockRejectedValueOnce(new Error("FK violation"));
 
-    const req = signedRequest(
-      { event: "job.created", resource: "jobs", data: { id: "j1" } },
-      "test-secret"
-    );
+    const req = signedRequest(customerEnvelope({ event: "customer.created" }), "test-secret");
 
     const res = await POST(req);
 
