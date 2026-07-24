@@ -1,6 +1,66 @@
+import crypto from "crypto";
 import { NextResponse } from "next/server";
 import { verifyWebhookSignature } from "@/lib/housecall/webhookVerify";
 import { syncOneRecord } from "@/lib/sync/syncService";
+
+/**
+ * Temporary: Housecall Pro does not document how `api-signature` is computed,
+ * and 480 candidate constructions tested offline against the URL-validation
+ * handshake all failed — most likely because that sample predates the signing
+ * secret now in use. This runs the same search server-side against a real
+ * delivery, where the secret is known to match, and logs only the NAME of the
+ * winning construction. The request body never reaches the logs, so a real
+ * customer record can be used as the sample without leaking PII.
+ *
+ * Delete this, and its WEBHOOK_DEBUG gate, once the scheme is pinned down and
+ * encoded in verifyWebhookSignature.
+ */
+const SIGNATURE_CANDIDATES: Array<[string, (ts: string, body: string) => string]> = [
+  ["body", (_ts, b) => b],
+  ["ts+body", (ts, b) => ts + b],
+  ["body+ts", (ts, b) => b + ts],
+  ["ts.body", (ts, b) => `${ts}.${b}`],
+  ["ts:body", (ts, b) => `${ts}:${b}`],
+  ["ts|body", (ts, b) => `${ts}|${b}`],
+  ["ts body", (ts, b) => `${ts} ${b}`],
+  ["ts\\nbody", (ts, b) => `${ts}\n${b}`],
+  ["v0:ts:body", (ts, b) => `v0:${ts}:${b}`],
+  ["body.ts", (ts, b) => `${b}.${ts}`],
+  ["ts-only", (ts) => ts],
+];
+
+function detectSignatureScheme(req: Request, rawBody: string, secret: string, received: string) {
+  const ts = req.headers.get("api-timestamp") ?? "";
+
+  const keys: Record<string, Buffer> = { utf8: Buffer.from(secret, "utf8") };
+  if (/^[0-9a-f]+$/i.test(secret) && secret.length % 2 === 0) {
+    keys.hex = Buffer.from(secret, "hex");
+  }
+  keys.b64 = Buffer.from(secret, "base64");
+
+  const matched: string[] = [];
+  for (const [keyName, key] of Object.entries(keys)) {
+    for (const [msgName, build] of SIGNATURE_CANDIDATES) {
+      for (const digest of ["sha256", "sha512", "sha1"]) {
+        const message = build(ts, rawBody);
+        const hex = crypto.createHmac(digest, key).update(message, "utf8").digest("hex");
+        const b64 = crypto.createHmac(digest, key).update(message, "utf8").digest("base64");
+        if (hex === received) matched.push(`${digest}/key=${keyName}/msg=${msgName}/hex`);
+        if (b64 === received) matched.push(`${digest}/key=${keyName}/msg=${msgName}/base64`);
+      }
+    }
+  }
+
+  console.log(
+    "[webhook-scheme]",
+    JSON.stringify({
+      matched,
+      timestampPresent: ts.length > 0,
+      receivedLength: received.length,
+      bodyLength: rawBody.length,
+    })
+  );
+}
 
 /**
  * Temporary go-live probe. Housecall Pro's OpenAPI spec documents the webhook
@@ -107,6 +167,9 @@ export async function POST(req: Request) {
   }
 
   if (!verifyWebhookSignature(rawBody, signature, secret)) {
+    if (process.env.WEBHOOK_DEBUG === "1" && signature) {
+      detectSignatureScheme(req, rawBody, secret, signature);
+    }
     return NextResponse.json({ error: "Invalid signature" }, { status: 401 });
   }
 
