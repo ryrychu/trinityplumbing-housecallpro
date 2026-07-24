@@ -21,10 +21,18 @@ const DEFAULT_GEOCODE_MAX_PER_RUN = 500;
 // finding: keys are id/items/taxes/amount/due_at/job_id/status/paid_at/...
 // invoice_date/service_date). The incremental cursor therefore can never
 // advance, so every run re-paged all ~2.9k invoices — 58 API calls and ~70s of
-// a ~72s run, ~5.6k wasted calls/day. Webhooks cover live invoice changes, so
-// the cron only needs to catch drift: do a full invoice pass at most once per
-// this many hours.
-const DEFAULT_INVOICE_RECONCILE_HOURS = 24;
+// a ~72s run, ~5.6k wasted calls/day. So do a full invoice pass at most once
+// per this many hours.
+//
+// IMPORTANT: HCP webhooks do NOT cover invoices (the dashboard offers events
+// only for Jobs, Job Appointments, Estimates, Estimate Options, Customers, and
+// Leads). This cron is therefore the ONLY thing that keeps invoices fresh.
+//
+// The threshold must stay comfortably BELOW the cron interval. On Vercel Hobby
+// the cron runs daily with ±59 min precision, so two runs can land ~23h apart;
+// a 24h threshold would skip the reconcile entirely on those days and push
+// staleness to ~47h. 20h leaves margin without ever double-running in a day.
+const DEFAULT_INVOICE_RECONCILE_HOURS = 20;
 
 async function syncAllPages<T>(
   fetchPage: (page: number) => Promise<{ items: T[]; page: number; totalPages: number }>,
