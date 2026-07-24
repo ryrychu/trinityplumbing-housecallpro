@@ -517,3 +517,53 @@ Real-time sync working does not finish Phase 1. Still outstanding from the
 6. Scope how much Geographic Scheduling Assistant is wanted now vs. Phase 2.
 7. Begin the tagging convention so emergency/commercial cards populate.
 
+---
+
+# FINISH PHASE 1 — implemented (2026-07-24, branch `finish-phase-1`)
+
+Items 2–7 above are now **code-complete** on the branch (item 3's delete handling
+shipped, so `customer.deleted`/`job.deleted` are now safe to enable). Spec:
+`docs/superpowers/specs/2026-07-24-finish-phase-1-design.md`. Plan:
+`docs/superpowers/plans/2026-07-24-finish-phase-1.md` (13 tasks, TDD,
+subagent-driven; each task committed + reviewed). Suite **99/99**, lint + build
+clean. NOT yet merged; migration NOT yet applied (see below).
+
+## What shipped (code complete, on branch)
+
+| Phase-1 gap | Status | Where |
+|-------------|--------|-------|
+| **Leads** sync | ✅ | `mapLead`, `client.listLeads`, cron incremental pass, `lead→leads` alias |
+| **Attachments** sync | ✅ code | `src/lib/sync/attachments.ts` — metadata always + best-effort copy to Supabase Storage (`hcp-attachments`) |
+| **Tags/Notes** first-class | ✅ | `jobs.tags/notes`, `customers.tags/notes`; mappers populate them |
+| **Delete handling** | ✅ | `syncOneRecord(...,action)` — `*.deleted` deletes (+ attachment cascade); webhook threads the action |
+| **Geo computed fields** | ✅ | `distance.ts`/`zones.ts` now town-first via `townZones.ts`; shown in Today's-schedule panel |
+| **Dashboard: 4 missing + panels** | ✅ | Upcoming Estimates, Revenue Scheduled (Next Week), Today's Schedule panel, Technician Workload panel |
+| **Revenue booked date-scoped** | ✅ | `revenueBookedThisWeekCents` (Mon–Sun, was all-time); `week.ts` helper |
+
+`TOWN_ZONES` finalized from a live census of customer cities with the owner's
+routing decisions (46 towns).
+
+## REQUIRED human/operational steps before this is live
+
+1. **Apply migration 0005** — `supabase db push` (interactive; owner runs it).
+   Adds `leads` + `attachments` tables and the 4 tags/notes columns. Until
+   applied, sync of leads/attachments/tags/notes has nowhere to write. (The
+   dashboard renders without it — its queries use pre-existing columns.)
+2. **Create the `hcp-attachments` Storage bucket** + run the Task-4 probe
+   (`curl -I` a real HCP attachment URL). If it needs auth, re-hosting silently
+   no-ops (metadata still syncs) — note as follow-up. Plan Task 4 Step 6.
+3. **Live dashboard check** after 0005: open `/dashboard`; confirm 8 cards, the
+   two panels, and week-scoped "Revenue Booked (This Week)".
+4. **Merge `finish-phase-1`** and redeploy (`vercel --prod`).
+5. **Enable HCP `invoice.*` webhooks**; delete handling now exists, so
+   `customer.deleted`/`job.deleted` are also safe to enable.
+6. **Remove `WEBHOOK_DEBUG=1`** from Vercel (no-op).
+
+## Deferred / fast-follow (from task reviews — not blocking)
+
+- `todaySchedule` resolves customer via `raw.customer.id` not the typed
+  `jobs.customer_id` column (marginal — `raw` fetched anyway for address city).
+- Attachment cascade-delete error unchecked (silent); jobs delete-cascade branch
+  and attachment success/storage-fail branch untested.
+- Week/day windows are UTC; business-local timezone is a follow-up.
+
