@@ -109,3 +109,70 @@ describe("mapInvoice", () => {
     expect(row.due_date).toBeNull();
   });
 });
+
+import { mapLead } from "../mappers";
+
+describe("mapCustomer tags/notes", () => {
+  it("maps tag names to a lowercased tags array and passes notes through", () => {
+    const row = mapCustomer({
+      id: "c1",
+      notes: "Gate code 1234",
+      tags: [{ id: "t1", name: "VIP" }, { id: "t2", name: "Navien" }],
+    });
+    expect(row.tags).toEqual(["vip", "navien"]);
+    expect(row.notes).toBe("Gate code 1234");
+  });
+
+  it("defaults tags to [] and notes to null when absent", () => {
+    const row = mapCustomer({ id: "c2" });
+    expect(row.tags).toEqual([]);
+    expect(row.notes).toBeNull();
+  });
+});
+
+describe("mapJob tags/notes", () => {
+  it("stores all tag names lowercased and joins note contents", () => {
+    const row = mapJob({
+      id: "j1",
+      tags: [{ id: "t1", name: "Emergency" }, { id: "t2", name: "Commercial" }],
+      notes: [
+        { id: "n1", content: "Called ahead", created_at: "2026-07-01T00:00:00Z" },
+        { id: "n2", content: "Needs permit", created_at: "2026-07-02T00:00:00Z" },
+      ],
+    });
+    expect(row.tags).toEqual(["emergency", "commercial"]);
+    expect(row.is_emergency).toBe(true);
+    expect(row.is_commercial).toBe(true);
+    expect(row.notes).toBe("Called ahead\nNeeds permit");
+  });
+
+  it("defaults tags to [] and notes to null when absent", () => {
+    const row = mapJob({ id: "j2" });
+    expect(row.tags).toEqual([]);
+    expect(row.notes).toBeNull();
+  });
+});
+
+describe("mapLead", () => {
+  it("maps id, customer link, status, source, timestamps", () => {
+    const row = mapLead({
+      id: "lead_1",
+      customer: { id: "c1" },
+      status: "new",
+      lead_source: "My Website",
+      created_at: "2026-07-01T00:00:00Z",
+      updated_at: "2026-07-02T00:00:00Z",
+    });
+    expect(row.id).toBe("lead_1");
+    expect(row.customer_id).toBe("c1");
+    expect(row.status).toBe("new");
+    expect(row.source).toBe("My Website");
+  });
+
+  it("defaults optional fields to null", () => {
+    const row = mapLead({ id: "lead_2" });
+    expect(row.customer_id).toBeNull();
+    expect(row.status).toBeNull();
+    expect(row.source).toBeNull();
+  });
+});

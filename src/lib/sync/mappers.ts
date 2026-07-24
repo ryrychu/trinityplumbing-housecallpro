@@ -1,4 +1,4 @@
-import { HcpCustomer, HcpJob, HcpEstimate, HcpInvoice } from "@/lib/housecall/types";
+import { HcpCustomer, HcpJob, HcpEstimate, HcpInvoice, HcpLead } from "@/lib/housecall/types";
 
 export function mapCustomer(c: HcpCustomer) {
   const address = c.addresses?.[0];
@@ -16,6 +16,8 @@ export function mapCustomer(c: HcpCustomer) {
     zip: address?.zip ?? null,
     lat: address?.latitude ?? null,
     lng: address?.longitude ?? null,
+    tags: (c.tags ?? []).map((t) => (t.name ?? "").toLowerCase()),
+    notes: c.notes ?? null,
     raw: c,
     updated_at: new Date().toISOString(),
   };
@@ -46,6 +48,8 @@ export function mapJob(j: HcpJob) {
     total_amount_cents: j.total_amount ?? null,
     service_address_lat: j.address?.latitude ?? null,
     service_address_lng: j.address?.longitude ?? null,
+    tags: tagNames,
+    notes: (j.notes ?? []).map((n) => n.content).join("\n") || null,
     raw: j,
     updated_at: new Date().toISOString(),
   };
@@ -75,6 +79,18 @@ export function mapInvoice(i: HcpInvoice) {
     amount_cents: i.amount ?? null,
     due_date: i.due_at ? i.due_at.slice(0, 10) : null,
     raw: i,
+    updated_at: new Date().toISOString(),
+  };
+}
+
+export function mapLead(l: HcpLead) {
+  return {
+    id: l.id,
+    customer_id: l.customer?.id ?? null,
+    status: l.status ?? null,
+    source: l.lead_source ?? null,
+    created_at: l.created_at ?? null,
+    raw: l,
     updated_at: new Date().toISOString(),
   };
 }
