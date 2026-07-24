@@ -168,3 +168,94 @@ Defect 2 was independently confirmed by the official OpenAPI spec: the
 ---
 
 *Generated at the end of the go-live Step 1–2 session (2026-07-24).*
+
+---
+
+# Step 3 session update (2026-07-24) — DEPLOYED
+
+## Git blocker: resolved
+
+There was no remote configured at all (`git remote -v` was empty), so the push
+had nowhere to go — it was never a credentials problem. The remote already
+existed on GitHub at `main = f31afab`, an ancestor of local `main`, so the push
+was a clean fast-forward with no force.
+
+Remote uses the **SSH host alias**, not github.com directly:
+
+```
+origin  git@github-personal:ryrychu/trinityplumbing-housecallpro.git
+```
+
+`github-personal` is defined in `C:\Users\Ryan\.ssh\config` → github.com with
+key `id_ed25519_personal`. Using `git@github.com:` instead picks the default
+`id_ed25519` key and fails auth — that is the original error.
+
+## Production is live and verified
+
+| Item | Value |
+|------|-------|
+| URL | https://trinity-housecallpro.vercel.app |
+| Vercel project | `trinity-plumbing-and-drains/trinity-housecallpro` |
+| Cron | `0 8 * * *` accepted (Hobby rejects sub-daily at deploy time) |
+
+Verified against production, not just a green build:
+
+- `GET /dashboard` → 200, renders **91 / 453 / 25 / $145,708.30** — matches local exactly.
+- `GET /api/cron/sync` unauthenticated → 401; with `CRON_SECRET` → 200 in **4.9s**,
+  `{"ok":true,...,"invoicesReconciled":false}`, upserting 1 each for
+  customers/jobs/estimates. This proves `HOUSECALL_API_KEY`,
+  `SUPABASE_SERVICE_ROLE_KEY` and the Supabase URL all work in production.
+- `POST /api/webhooks/housecall` unsigned → 401 (signature check working).
+
+7 production env vars set. `HOUSECALL_WEBHOOK_SECRET` is currently the
+placeholder `pending-hcp-subscription-placeholder` — a placeholder rather than
+empty so bad deliveries return 401 rather than 500, since repeated 5xx can cause
+a provider to auto-disable a subscription.
+
+## Two of the three webhook unknowns are now neutralised
+
+- **Singular vs plural `resource`** — no longer needs to be discovered. The
+  router accepts both and normalises to the plural key. Critically, the
+  normalised key is passed to `buildGeocodeTargets` too: `GEOCODE_SPECS` is keyed
+  on the same strings and returns `[]` silently for anything else, so aliasing
+  only the table lookup would have upserted records with no coordinates and
+  reported nothing. A regression test pins this.
+- **Signature header name** — will be revealed by the probe. The probe runs
+  *before* signature verification precisely so a wrong header name is still
+  diagnosable from a 401 rather than being invisible.
+- **Full record vs delta** — STILL OPEN. Only a real delivery answers it.
+
+## The probe
+
+`WEBHOOK_DEBUG=1` is set in production. It logs header names and payload **key
+names only** — never field values — so no customer PII reaches Vercel logs.
+
+Read it with (the table view truncates the message, `--json` does not):
+
+```bash
+vercel logs https://trinity-housecallpro.vercel.app --json | grep -o '\[webhook-probe\].*'
+```
+
+Already confirmed working against a synthetic POST.
+
+**If `dataKeys` comes back as a short list** (e.g. just `["id","work_status"]`)
+the payload is a delta, and `syncOneRecord`'s whole-row upsert would null out
+every unlisted column. The fix in that case is to ignore `data` and re-fetch the
+full record from the HCP API by id — one extra call per webhook, and it makes
+the question moot permanently.
+
+## Remaining
+
+1. Subscribe the webhook in the HCP dashboard (URL below) and capture the
+   signing secret it issues. The OpenAPI spec cannot help here: its
+   `/webhooks/subscription` request body is `schema: {type: object}` with no
+   properties, so subscribing via API would mean guessing the shape.
+   `https://trinity-housecallpro.vercel.app/api/webhooks/housecall`
+2. Replace the placeholder secret, redeploy, trigger one real change, read the probe.
+3. Remove or leave `WEBHOOK_DEBUG` unset once the shape is confirmed.
+4. Vercel↔GitHub push-to-deploy is **not** connected: Vercel could not parse the
+   SSH alias URL. Connect the repo from the Vercel dashboard if auto-deploy is
+   wanted; `vercel --prod` works regardless.
+5. Vercel Hobby is licensed for non-commercial use; this is a commercial
+   dashboard. Still the user's call.
+
