@@ -31,3 +31,23 @@ describe("classifyZone", () => {
     expect(result.zone).toBe("Outside Service Area");
   });
 });
+
+describe("classifyZone town-first", () => {
+  it("uses the town lookup when the town is known, marking source 'town'", () => {
+    const result = classifyZone(44.3, -73.2, "Delmar"); // coords far away, town wins
+    expect(result.zone).toBe("Albany Zone");
+    expect(result.source).toBe("town");
+    expect(result.compass).toBeTypeOf("string");
+  });
+
+  it("falls back to distance rules when the town is unknown", () => {
+    const result = classifyZone(42.6337, -73.5504, "Nowhereville");
+    expect(result.source).toBe("distance");
+    expect(result.zone).toBe("Albany Zone"); // origin -> within 15mi
+  });
+
+  it("falls back to distance rules when no town is given", () => {
+    const result = classifyZone(42.6337, -73.5504);
+    expect(result.source).toBe("distance");
+  });
+});
