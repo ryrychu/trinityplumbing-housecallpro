@@ -1,4 +1,6 @@
 import { getSupabaseServerClient } from "@/lib/supabase/client";
+import { weekRange, dayRange } from "./week";
+import { classifyZone } from "@/lib/geo/zones";
 
 // Live HCP estimates (Task 0) have no "open" status. `estimates.status` stores
 // the estimate `work_status`; per-option customer approval lives in
@@ -18,9 +20,8 @@ const APPROVED_STATUSES = new Set(["approved", "pro approved"]);
 //   complete rated 1158 | complete unrated 892 | pro canceled 412 |
 //   scheduled 244 | user canceled 241 | in progress 91
 // Note the SPACE: HCP sends "in progress", not "in_progress". Matching the
-// underscored form made jobsInProgress and revenueBooked silently report 0.
+// underscored form made jobsInProgress silently report 0.
 const JOB_IN_PROGRESS = "in progress";
-const JOB_SCHEDULED = "scheduled";
 
 // Live HCP invoice statuses over all 2,854 synced invoices:
 //   paid 2217 | canceled 570 | voided 42 | open 25
@@ -31,11 +32,62 @@ interface EstimateOption {
   approval_status?: string | null;
 }
 
-function isOpenEstimate(e: { status: string | null; raw?: { options?: EstimateOption[] } }): boolean {
+function isOpenEstimate(e: {
+  status: string | null;
+  raw?: { options?: EstimateOption[]; scheduled_start?: string };
+}): boolean {
   if (TERMINAL_ESTIMATE_STATUSES.has((e.status ?? "").toLowerCase())) return false;
   const options = e.raw?.options ?? [];
   if (options.some((o) => APPROVED_STATUSES.has((o.approval_status ?? "").toLowerCase()))) return false;
   return options.some((o) => !o.approval_status);
+}
+
+interface JobRow {
+  id: string;
+  work_status: string | null;
+  is_emergency: boolean;
+  is_commercial: boolean;
+  total_amount_cents: number | null;
+  scheduled_start: string | null;
+  scheduled_end: string | null;
+  technician_id: string | null;
+  service_address_lat: number | null;
+  service_address_lng: number | null;
+  raw?: { customer?: { id?: string }; address?: { city?: string } };
+}
+
+interface EstimateRow {
+  status: string | null;
+  raw?: { options?: EstimateOption[]; scheduled_start?: string };
+}
+
+interface CustomerRow {
+  id: string;
+  first_name: string | null;
+  last_name: string | null;
+  city: string | null;
+}
+
+interface TechRow {
+  id: string;
+  first_name: string | null;
+  last_name: string | null;
+}
+
+interface TodayScheduleRow {
+  id: string;
+  scheduledStart: string | null;
+  customerName: string | null;
+  technicianName: string | null;
+  zone: string;
+  compass: string;
+}
+
+interface TechWorkloadRow {
+  technicianId: string | null;
+  technicianName: string | null;
+  jobCount: number;
+  scheduledHours: number;
 }
 
 export interface DashboardSnapshot {
@@ -44,9 +96,13 @@ export interface DashboardSnapshot {
   commercialJobs: number;
   openEstimates: number;
   pendingInvoices: number;
-  // Sum of all in_progress + scheduled job amounts. NOT date-scoped yet — a
-  // "this week" filter is a Phase 1.x fast-follow, so the name stays literal.
-  revenueBookedCents: number;
+  upcomingEstimates: number;
+  // Sum of job amounts scheduled within the current Mon-Sun week.
+  revenueBookedThisWeekCents: number;
+  // Sum of job amounts scheduled within the following Mon-Sun week.
+  revenueScheduledNextWeekCents: number;
+  todaySchedule: TodayScheduleRow[];
+  technicianWorkload: TechWorkloadRow[];
 }
 
 // PostgREST caps every response at 1000 rows (db-max-rows). A bare select("*")
@@ -77,26 +133,81 @@ async function fetchAllRows<T>(
   return out;
 }
 
-export async function getDashboardSnapshot(): Promise<DashboardSnapshot> {
+export async function getDashboardSnapshot(now: Date = new Date()): Promise<DashboardSnapshot> {
   const supabase = getSupabaseServerClient();
+  const thisWeek = weekRange(now, "this");
+  const nextWeek = weekRange(now, "next");
+  const today = dayRange(now);
 
-  const [jobsResult, estimatesResult, invoicesResult] = await Promise.all([
-    fetchAllRows(supabase, "jobs", "work_status, is_emergency, is_commercial, total_amount_cents"),
-    fetchAllRows(supabase, "estimates", "status, raw"),
-    fetchAllRows(supabase, "invoices", "status"),
-  ]).then((r) => r.map((data) => ({ data })));
+  const [jobs, estimates, invoices, customers, technicians] = await Promise.all([
+    fetchAllRows<JobRow>(
+      supabase,
+      "jobs",
+      "id, work_status, is_emergency, is_commercial, total_amount_cents, scheduled_start, scheduled_end, technician_id, service_address_lat, service_address_lng, raw"
+    ),
+    fetchAllRows<EstimateRow>(supabase, "estimates", "status, raw"),
+    fetchAllRows<{ status: string | null }>(supabase, "invoices", "status"),
+    fetchAllRows<CustomerRow>(supabase, "customers", "id, first_name, last_name, city"),
+    fetchAllRows<TechRow>(supabase, "technicians", "id, first_name, last_name"),
+  ]);
 
-  const jobs = (jobsResult.data ?? []) as Array<{
-    work_status: string | null;
-    is_emergency: boolean;
-    is_commercial: boolean;
-    total_amount_cents: number | null;
-  }>;
-  const estimates = (estimatesResult.data ?? []) as Array<{
-    status: string | null;
-    raw?: { options?: EstimateOption[] };
-  }>;
-  const invoices = (invoicesResult.data ?? []) as Array<{ status: string | null }>;
+  const custById = new Map(customers.map((c) => [c.id, c]));
+  const techById = new Map(technicians.map((t) => [t.id, t]));
+  const fullName = (r?: { first_name: string | null; last_name: string | null }) =>
+    r ? [r.first_name, r.last_name].filter(Boolean).join(" ") || null : null;
+
+  const inWindow = (iso: string | null, w: { startIso: string; endIso: string }) =>
+    !!iso && iso >= w.startIso && iso < w.endIso;
+
+  const todayJobs = jobs.filter((j) => inWindow(j.scheduled_start, today));
+
+  const todaySchedule = todayJobs
+    .slice()
+    .sort((a, b) => (a.scheduled_start ?? "").localeCompare(b.scheduled_start ?? ""))
+    .map((j) => {
+      const cust = custById.get(j.raw?.customer?.id ?? "");
+      const town = j.raw?.address?.city ?? cust?.city ?? null;
+      const hasCoords = j.service_address_lat != null && j.service_address_lng != null;
+      const z = hasCoords
+        ? classifyZone(j.service_address_lat as number, j.service_address_lng as number, town)
+        : { zone: "Unknown", compass: "", source: "distance" as const };
+      return {
+        id: j.id,
+        scheduledStart: j.scheduled_start,
+        customerName: fullName(cust),
+        technicianName: fullName(techById.get(j.technician_id ?? "")),
+        zone: z.zone,
+        compass: z.compass,
+      };
+    });
+
+  const workloadMap = new Map<string, { jobCount: number; ms: number }>();
+  for (const j of todayJobs) {
+    const key = j.technician_id ?? "__unassigned";
+    const cur = workloadMap.get(key) ?? { jobCount: 0, ms: 0 };
+    cur.jobCount += 1;
+    if (j.scheduled_start && j.scheduled_end) {
+      cur.ms += Math.max(0, Date.parse(j.scheduled_end) - Date.parse(j.scheduled_start));
+    }
+    workloadMap.set(key, cur);
+  }
+  const technicianWorkload = Array.from(workloadMap.entries()).map(([techId, v]) => ({
+    technicianId: techId === "__unassigned" ? null : techId,
+    technicianName: techId === "__unassigned" ? "Unassigned" : fullName(techById.get(techId)),
+    jobCount: v.jobCount,
+    scheduledHours: Math.round((v.ms / 3_600_000) * 10) / 10,
+  }));
+
+  const bookedThisWeek = jobs
+    .filter((j) => inWindow(j.scheduled_start, thisWeek))
+    .reduce((s, j) => s + (j.total_amount_cents ?? 0), 0);
+  const scheduledNextWeek = jobs
+    .filter((j) => inWindow(j.scheduled_start, nextWeek))
+    .reduce((s, j) => s + (j.total_amount_cents ?? 0), 0);
+
+  const upcomingEstimates = estimates.filter(
+    (e) => isOpenEstimate(e) && !!e.raw?.scheduled_start && e.raw.scheduled_start >= today.startIso
+  ).length;
 
   return {
     jobsInProgress: jobs.filter((j) => j.work_status === JOB_IN_PROGRESS).length,
@@ -110,8 +221,10 @@ export async function getDashboardSnapshot(): Promise<DashboardSnapshot> {
     commercialJobs: jobs.filter((j) => j.is_commercial).length,
     openEstimates: estimates.filter(isOpenEstimate).length,
     pendingInvoices: invoices.filter((i) => i.status === INVOICE_PENDING).length,
-    revenueBookedCents: jobs
-      .filter((j) => j.work_status === JOB_IN_PROGRESS || j.work_status === JOB_SCHEDULED)
-      .reduce((sum, j) => sum + (j.total_amount_cents ?? 0), 0),
+    upcomingEstimates,
+    revenueBookedThisWeekCents: bookedThisWeek,
+    revenueScheduledNextWeekCents: scheduledNextWeek,
+    todaySchedule,
+    technicianWorkload,
   };
 }
