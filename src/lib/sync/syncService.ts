@@ -14,8 +14,31 @@ const TABLE_AND_MAPPER: Record<string, SyncConfig> = {
   invoices: { table: "invoices", mapper: (x) => mapInvoice(x as HcpInvoice) },
 };
 
+// Housecall Pro's OpenAPI spec does not document the webhook event payload, so
+// whether `resource` arrives singular ("job") or plural ("jobs") is unverified.
+// Accept either and normalize to the plural key that both TABLE_AND_MAPPER and
+// GEOCODE_SPECS are keyed on. The cron backfill always passes plural keys, so
+// normalization is a no-op there.
+const RESOURCE_ALIASES: Record<string, string> = {
+  customer: "customers",
+  employee: "employees",
+  job: "jobs",
+  estimate: "estimates",
+  invoice: "invoices",
+};
+
+function normalizeResource(resource: string): string {
+  const key = resource.toLowerCase();
+  return RESOURCE_ALIASES[key] ?? key;
+}
+
 export async function syncOneRecord(resource: string, event: string, data: unknown) {
-  const config = TABLE_AND_MAPPER[resource];
+  // Normalize once, up front: buildGeocodeTargets is keyed on the same strings
+  // as TABLE_AND_MAPPER and returns [] for an unrecognized resource. Looking the
+  // two up under different spellings would silently skip geocoding.
+  const key = normalizeResource(resource);
+
+  const config = TABLE_AND_MAPPER[key];
   if (!config) {
     throw new Error(`Unknown Housecall Pro resource for sync: ${resource}`);
   }
@@ -25,7 +48,7 @@ export async function syncOneRecord(resource: string, event: string, data: unkno
 
   // Geocode this record's address (customers/jobs) before upserting. One record,
   // so at most one network call; cache hits are free.
-  const targets = buildGeocodeTargets(resource, [data], [row]);
+  const targets = buildGeocodeTargets(key, [data], [row]);
   if (targets.length > 0) {
     await enrichRowsWithGeocode(supabase, targets, { remaining: 1 });
   }
