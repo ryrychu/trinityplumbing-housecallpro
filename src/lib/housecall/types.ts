@@ -5,6 +5,9 @@ export interface HcpCustomer {
   company?: string;
   email?: string;
   mobile_number?: string;
+  notes?: string;
+  tags?: Array<{ id: string; name: string }>;
+  attachments?: Array<{ id: string; url: string; content_type?: string; file_name?: string }>;
   updated_at?: string; // ISO; drives incremental cursor sync
   addresses?: Array<{
     street: string;
@@ -45,7 +48,7 @@ export interface HcpJob {
     longitude?: number;
   };
   notes?: Array<{ id: string; content: string; created_at: string }>;
-  attachments?: Array<{ id: string; url: string; content_type: string }>;
+  attachments?: Array<{ id: string; url: string; content_type?: string; file_name?: string }>;
 }
 
 // Confirmed against the live account (Task 0): estimates carry `work_status`
@@ -71,6 +74,15 @@ export interface HcpInvoice {
   status?: string;
   amount?: number;
   due_at?: string;
+  updated_at?: string; // ISO; drives incremental cursor sync
+}
+
+export interface HcpLead {
+  id: string;
+  customer?: { id: string };
+  status?: string;
+  lead_source?: string;
+  created_at?: string;
   updated_at?: string; // ISO; drives incremental cursor sync
 }
 
