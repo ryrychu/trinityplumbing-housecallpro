@@ -65,11 +65,16 @@ export async function syncOneRecord(
       throw new Error(`Failed to delete ${config.table} ${id} from event ${event}: ${error.message}`);
     }
     if (key === "customers" || key === "jobs") {
-      await supabase
+      // Cleanup, not core: a failed attachments cascade must be logged but must
+      // not throw (the parent row is already gone).
+      const { error: attErr } = await supabase
         .from("attachments")
         .delete()
         .eq("parent_type", key === "jobs" ? "job" : "customer")
         .eq("parent_id", id);
+      if (attErr) {
+        console.error(`Failed to cascade-delete attachments for ${key} ${id} from event ${event}: ${attErr.message}`);
+      }
     }
     return;
   }
@@ -88,10 +93,16 @@ export async function syncOneRecord(
     throw new Error(`Failed to upsert ${config.table} row from event ${event}: ${error.message}`);
   }
 
-  // Attachments ride embedded on customer/job payloads.
-  if (key === "customers") {
-    await syncAttachments(supabase, "customer", row.id as string, data);
-  } else if (key === "jobs") {
-    await syncAttachments(supabase, "job", row.id as string, data);
+  // Attachments ride embedded on customer/job payloads. The parent upsert has
+  // already succeeded; attachments (incl. best-effort re-host) must never fail
+  // the parent record sync, so swallow-and-log any error here.
+  try {
+    if (key === "customers") {
+      await syncAttachments(supabase, "customer", row.id as string, data);
+    } else if (key === "jobs") {
+      await syncAttachments(supabase, "job", row.id as string, data);
+    }
+  } catch (err) {
+    console.error(`Attachment sync failed for ${key} ${row.id} from event ${event}:`, err);
   }
 }

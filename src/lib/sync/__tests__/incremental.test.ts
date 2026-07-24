@@ -68,6 +68,47 @@ describe("syncResourceIncremental", () => {
     expect(result.newCursor).toBe("2026-07-21T00:00:00Z");
   });
 
+  // FIX 5: the incremental cron backfills attachment METADATA for fresh
+  // customer/job rows, without re-hosting (no fetch/storage), so the ~3000
+  // already-synced records eventually get attachment rows.
+  it("backfills attachment metadata (rehost:false) for fresh jobs without fetching", async () => {
+    const fetchSpy = vi.fn(() => Promise.reject(new Error("blocked")));
+    vi.stubGlobal("fetch", fetchSpy);
+
+    const jobsUpsert = vi.fn().mockResolvedValue({ error: null });
+    const attachmentsUpsert = vi.fn().mockResolvedValue({ error: null });
+    const storageFrom = vi.fn();
+    const localSupabase = {
+      from: vi.fn((table: string) => ({
+        upsert: table === "attachments" ? attachmentsUpsert : jobsUpsert,
+      })),
+      storage: { from: storageFrom },
+    } as unknown as SupabaseClient;
+
+    const jobMapper = (x: { id: string; updated_at?: string }) => ({ id: x.id, updated_at: x.updated_at });
+    const fetchPage = async (page: number) => ({
+      items: page === 1
+        ? [{ id: "j1", updated_at: "2026-07-23T00:00:00Z", attachments: [{ id: "a1", url: "https://hcp/f.pdf" }] }]
+        : [],
+      page,
+      totalPages: 1,
+    });
+
+    const result = await syncResourceIncremental(localSupabase, "jobs", fetchPage, jobMapper, { remaining: 0 }, null);
+
+    expect(result.upserted).toBe(1);
+    expect(attachmentsUpsert).toHaveBeenCalledOnce();
+    const rows = attachmentsUpsert.mock.calls[0][0] as Array<{ id: string; parent_type: string; storage_path: string | null }>;
+    expect(rows[0].id).toBe("a1");
+    expect(rows[0].parent_type).toBe("job");
+    expect(rows[0].storage_path).toBeNull();
+    // Metadata-only: never re-hosts, so neither fetch nor storage is touched.
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(storageFrom).not.toHaveBeenCalled();
+
+    vi.unstubAllGlobals();
+  });
+
   it("does nothing to upsert when the first record is already older than the cursor", async () => {
     const fetchPage = pager([[{ id: "j1", updated_at: "2026-07-01T00:00:00Z" }]]);
     const cursor = "2026-07-20T00:00:00Z";

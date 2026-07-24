@@ -36,7 +36,9 @@ const NOW = new Date("2026-07-22T12:00:00.000Z");
 //     this-week revenue despite having an amount.
 // j4: pro-canceled, also previous week (07-16) — excluded for the same reason.
 // j5: scheduled, inside NEXT week (07-29).
-const EXPECTED_THIS_WEEK = 35000; // j1 (20000) + j2 (15000)
+// j7: user-canceled, INSIDE this week (07-24) with a large amount — canceled
+//     jobs must NOT inflate booked revenue, so it stays out of EXPECTED_THIS_WEEK.
+const EXPECTED_THIS_WEEK = 35000; // j1 (20000) + j2 (15000); j7 canceled -> excluded
 const EXPECTED_NEXT_WEEK = 15000; // j5
 
 function defaultJobs() {
@@ -104,6 +106,22 @@ function defaultJobs() {
       total_amount_cents: 15000,
       scheduled_start: "2026-07-29T09:00:00.000Z",
       scheduled_end: "2026-07-29T10:00:00.000Z",
+      technician_id: "t2",
+      service_address_lat: 42.6526,
+      service_address_lng: -73.7562,
+      raw: { customer: { id: "c2" }, address: { city: "Albany" } },
+    },
+    // Canceled work INSIDE this week must NOT count toward booked revenue. Large
+    // amount so a regression (summing it) would be obvious. Scheduled 07-24
+    // (this week, not today) so it does not touch today's schedule/workload.
+    {
+      id: "j7",
+      work_status: "user canceled",
+      is_emergency: false,
+      is_commercial: false,
+      total_amount_cents: 88000,
+      scheduled_start: "2026-07-24T09:00:00.000Z",
+      scheduled_end: "2026-07-24T10:00:00.000Z",
       technician_id: "t2",
       service_address_lat: 42.6526,
       service_address_lng: -73.7562,
@@ -267,6 +285,58 @@ describe("getDashboardSnapshot", () => {
     expect(entry.compass).toBeTypeOf("string");
     // Town-based resolution: "Troy" maps to a known zone.
     expect(entry.zone).toBe("Albany Zone");
+    // FIX 3: a job WITH coordinates exposes numeric distance + drive time.
+    expect(entry.miles).toBeTypeOf("number");
+    expect(entry.driveMinutes).toBeTypeOf("number");
+  });
+
+  // FIX 2: canceled jobs (j7, user canceled, this week) must not inflate revenue.
+  it("excludes canceled jobs from booked revenue even when in-window", async () => {
+    const snap = await getDashboardSnapshot(NOW);
+    // j7 sits inside this week with an 88000 amount; if it were summed the total
+    // would be 123000. Booked revenue must stay at j1 + j2 only.
+    expect(snap.revenueBookedThisWeekCents).toBe(EXPECTED_THIS_WEEK);
+  });
+
+  // FIX 1: town-first zone resolution must work even when coordinates are null.
+  it("resolves zone from a known town when coordinates are missing", async () => {
+    fromMock.mockImplementation((table: string) => {
+      if (table === "jobs") {
+        return makeQueryBuilder({
+          data: [
+            {
+              id: "jn",
+              work_status: "scheduled",
+              is_emergency: false,
+              is_commercial: false,
+              total_amount_cents: 0,
+              scheduled_start: "2026-07-22T09:00:00.000Z",
+              scheduled_end: "2026-07-22T10:00:00.000Z",
+              technician_id: null,
+              service_address_lat: null,
+              service_address_lng: null,
+              raw: { customer: { id: "c2" }, address: { city: "Albany" } },
+            },
+          ],
+          error: null,
+        });
+      }
+      if (table === "customers") {
+        return makeQueryBuilder({
+          data: [{ id: "c2", first_name: "Bob", last_name: "Baker", city: "Albany" }],
+          error: null,
+        });
+      }
+      return makeQueryBuilder({ data: [], error: null });
+    });
+
+    const snap = await getDashboardSnapshot(NOW);
+    expect(snap.todaySchedule).toHaveLength(1);
+    const [entry] = snap.todaySchedule;
+    // Known town "Albany" -> "Albany Zone", NOT "Unknown", despite null coords.
+    expect(entry.zone).toBe("Albany Zone");
+    expect(entry.miles).toBeNull();
+    expect(entry.driveMinutes).toBeNull();
   });
 
   it("aggregates technician workload for today", async () => {

@@ -41,6 +41,34 @@ describe("syncAttachments", () => {
     expect(upsert).not.toHaveBeenCalled();
   });
 
+  // Metadata-only path used by the incremental cron backfill: it must upsert the
+  // row WITHOUT re-hosting (no fetch, no storage), leaving storage_path null.
+  it("with rehost:false, upserts metadata without calling fetch or storage", async () => {
+    const fetchSpy = vi.mocked(fetch);
+    fetchSpy.mockClear();
+    const upsert = vi.fn().mockResolvedValue({ error: null });
+    const storageFrom = vi.fn();
+    const supabase = {
+      from: vi.fn(() => ({ upsert })),
+      storage: { from: storageFrom },
+    } as unknown as SupabaseClient;
+
+    await syncAttachments(
+      supabase,
+      "job",
+      "j1",
+      { attachments: [{ id: "a1", url: "https://hcp/f1.pdf", created_at: "2026-01-02T03:04:05Z" }] },
+      { rehost: false }
+    );
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(storageFrom).not.toHaveBeenCalled();
+    expect(upsert).toHaveBeenCalledOnce();
+    const arg = upsert.mock.calls[0][0] as Array<{ storage_path: string | null; created_at: string | null }>;
+    expect(arg[0].storage_path).toBeNull();
+    expect(arg[0].created_at).toBe("2026-01-02T03:04:05Z");
+  });
+
   it("upserts extracted rows into the attachments table", async () => {
     const upsert = vi.fn().mockResolvedValue({ error: null });
     // No `storage` on the mock: rehost() accesses supabase.storage inside its

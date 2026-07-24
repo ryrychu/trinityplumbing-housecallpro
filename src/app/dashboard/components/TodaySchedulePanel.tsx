@@ -15,6 +15,8 @@ export function TodaySchedulePanel({ jobs }: { jobs: DashboardSnapshot["todaySch
               <th style={{ padding: 8 }}>Technician</th>
               <th style={{ padding: 8 }}>Zone</th>
               <th style={{ padding: 8 }}>Dir</th>
+              <th style={{ padding: 8 }}>Miles</th>
+              <th style={{ padding: 8 }}>Drive</th>
             </tr>
           </thead>
           <tbody>
@@ -27,6 +29,8 @@ export function TodaySchedulePanel({ jobs }: { jobs: DashboardSnapshot["todaySch
                 <td style={{ padding: 8 }}>{j.technicianName ?? "Unassigned"}</td>
                 <td style={{ padding: 8 }}>{j.zone}</td>
                 <td style={{ padding: 8 }}>{j.compass}</td>
+                <td style={{ padding: 8 }}>{j.miles ?? "—"}</td>
+                <td style={{ padding: 8 }}>{j.driveMinutes != null ? `${j.driveMinutes} min` : "—"}</td>
               </tr>
             ))}
           </tbody>

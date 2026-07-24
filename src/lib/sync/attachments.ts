@@ -12,6 +12,7 @@ export interface AttachmentRow {
   content_type: string | null;
   hcp_url: string | null;
   storage_path: string | null;
+  created_at: string | null;
   raw: unknown;
   updated_at: string;
 }
@@ -23,6 +24,7 @@ interface RawAttachment {
   url?: string;
   content_type?: string;
   file_name?: string;
+  created_at?: string;
 }
 
 function readAttachments(payload: unknown): RawAttachment[] {
@@ -44,6 +46,7 @@ export function extractAttachmentRows(
     content_type: att.content_type ?? null,
     hcp_url: att.url ?? null,
     storage_path: null,
+    created_at: att.created_at ?? null,
     raw: att,
     updated_at: nowIso,
   }));
@@ -79,13 +82,19 @@ export async function syncAttachments(
   supabase: SupabaseClient,
   parentType: "customer" | "job",
   parentId: string,
-  payload: unknown
+  payload: unknown,
+  opts: { rehost?: boolean } = { rehost: true }
 ): Promise<void> {
   const rows = extractAttachmentRows(parentType, parentId, payload);
   if (rows.length === 0) return;
 
-  for (const row of rows) {
-    row.storage_path = await rehost(supabase, row);
+  // Metadata-only mode (incremental cron backfill): skip the network re-host to
+  // avoid serverless timeouts over thousands of records. storage_path stays null
+  // and the real-time webhook path re-hosts later. Default keeps rehost on.
+  if (opts.rehost !== false) {
+    for (const row of rows) {
+      row.storage_path = await rehost(supabase, row);
+    }
   }
 
   const { error } = await supabase.from("attachments").upsert(rows);

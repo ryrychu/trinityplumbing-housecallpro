@@ -1,6 +1,8 @@
 import { getSupabaseServerClient } from "@/lib/supabase/client";
 import { weekRange, dayRange } from "./week";
 import { classifyZone } from "@/lib/geo/zones";
+import { zoneForTown } from "@/lib/geo/townZones";
+import { distanceFromAverillPark } from "@/lib/geo/distance";
 
 // Live HCP estimates (Task 0) have no "open" status. `estimates.status` stores
 // the estimate `work_status`; per-option customer approval lives in
@@ -22,6 +24,11 @@ const APPROVED_STATUSES = new Set(["approved", "pro approved"]);
 // Note the SPACE: HCP sends "in progress", not "in_progress". Matching the
 // underscored form made jobsInProgress silently report 0.
 const JOB_IN_PROGRESS = "in progress";
+
+// Canceled jobs must never inflate booked/scheduled revenue. These are the live
+// canceled work_status values (go-live Step 2 census); "complete rated",
+// "complete unrated", "scheduled", and "in progress" all still count as booked.
+const CANCELED_JOB_STATUSES = new Set(["pro canceled", "user canceled"]);
 
 // Live HCP invoice statuses over all 2,854 synced invoices:
 //   paid 2217 | canceled 570 | voided 42 | open 25
@@ -81,6 +88,8 @@ interface TodayScheduleRow {
   technicianName: string | null;
   zone: string;
   compass: string;
+  miles: number | null;
+  driveMinutes: number | null;
 }
 
 interface TechWorkloadRow {
@@ -168,9 +177,24 @@ export async function getDashboardSnapshot(now: Date = new Date()): Promise<Dash
       const cust = custById.get(j.raw?.customer?.id ?? "");
       const town = j.raw?.address?.city ?? cust?.city ?? null;
       const hasCoords = j.service_address_lat != null && j.service_address_lng != null;
-      const z = hasCoords
-        ? classifyZone(j.service_address_lat as number, j.service_address_lng as number, town)
-        : { zone: "Unknown", compass: "", source: "distance" as const };
+      // Town-first design: even without coordinates a known town resolves its
+      // zone. Only fall through to "Unknown" when the town is also unrecognized.
+      let z: { zone: string; compass: string; source: "town" | "distance" };
+      let miles: number | null = null;
+      let driveMinutes: number | null = null;
+      if (hasCoords) {
+        const lat = j.service_address_lat as number;
+        const lng = j.service_address_lng as number;
+        z = classifyZone(lat, lng, town);
+        const dist = distanceFromAverillPark(lat, lng);
+        miles = dist.miles;
+        driveMinutes = dist.driveMinutes;
+      } else {
+        const townZone = zoneForTown(town);
+        z = townZone
+          ? { zone: townZone, compass: "", source: "town" }
+          : { zone: "Unknown", compass: "", source: "distance" };
+      }
       return {
         id: j.id,
         scheduledStart: j.scheduled_start,
@@ -178,6 +202,8 @@ export async function getDashboardSnapshot(now: Date = new Date()): Promise<Dash
         technicianName: fullName(techById.get(j.technician_id ?? "")),
         zone: z.zone,
         compass: z.compass,
+        miles,
+        driveMinutes,
       };
     });
 
@@ -198,11 +224,12 @@ export async function getDashboardSnapshot(now: Date = new Date()): Promise<Dash
     scheduledHours: Math.round((v.ms / 3_600_000) * 10) / 10,
   }));
 
+  const isCanceled = (j: JobRow) => CANCELED_JOB_STATUSES.has((j.work_status ?? "").toLowerCase());
   const bookedThisWeek = jobs
-    .filter((j) => inWindow(j.scheduled_start, thisWeek))
+    .filter((j) => inWindow(j.scheduled_start, thisWeek) && !isCanceled(j))
     .reduce((s, j) => s + (j.total_amount_cents ?? 0), 0);
   const scheduledNextWeek = jobs
-    .filter((j) => inWindow(j.scheduled_start, nextWeek))
+    .filter((j) => inWindow(j.scheduled_start, nextWeek) && !isCanceled(j))
     .reduce((s, j) => s + (j.total_amount_cents ?? 0), 0);
 
   const upcomingEstimates = estimates.filter(

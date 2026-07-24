@@ -123,4 +123,19 @@ describe("syncOneRecord leads + delete", () => {
     expect(del).toHaveBeenCalledOnce();
     expect(eq).toHaveBeenCalledWith("id", "c1");
   });
+
+  // A job.deleted event removes the jobs row AND cascades an attachments delete
+  // scoped to parent_type "job" + parent_id, so orphan attachment rows can't
+  // linger. Mirrors the customer primary-delete coverage above.
+  it("deletes a job and cascades the attachments delete with parent_type 'job'", async () => {
+    await syncOneRecord("job", "job.deleted", { id: "j9" }, "deleted");
+    expect(fromMock).toHaveBeenCalledWith("jobs");
+    expect(deleteMock).toHaveBeenCalledOnce(); // primary jobs delete
+    expect(eqMock).toHaveBeenCalledWith("id", "j9");
+    // Cascade on the attachments table, scoped to this job's attachments.
+    expect(fromMock).toHaveBeenCalledWith("attachments");
+    expect(attachmentsDeleteMock).toHaveBeenCalledOnce();
+    expect(attachmentsEqMock).toHaveBeenCalledWith("parent_type", "job");
+    expect(attachmentsEqMock).toHaveBeenCalledWith("parent_id", "j9");
+  });
 });
