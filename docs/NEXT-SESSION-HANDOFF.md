@@ -360,3 +360,84 @@ bearing and permanently resolves the still-open delta-vs-full-record question.
   handshake-logging probes are still live in production — remove once the signing
   scheme is pinned and encoded in `verifyWebhookSignature`.
 
+---
+
+# BREAKTHROUGH: real webhook payload captured (2026-07-24)
+
+**Webhooks DO deliver.** The earlier "zero deliveries" was a log-window timing
+artifact — HCP fires on API-originated changes, just not instantly (the delivery
+landed ~1s after the API call but my snapshot windows had already closed). A
+`customer.updated` triggered on the test customer was captured in full. This
+answers all three open questions and reveals the code's envelope assumption is
+wrong.
+
+## The actual payload envelope (verified from a live delivery)
+
+```json
+{
+  "event": "customer.updated",
+  "event_occurred_at": "2026-07-24T05:38:14Z",
+  "company_id": "233b75f9-4b4f-4a83-b21b-c1ed9e571daa",
+  "customer": { /* FULL record: id, first_name, ..., tags:[], addresses:[], attachments:[] */ }
+}
+```
+
+Top-level keys: `["event", "event_occurred_at", "company_id", "customer"]`.
+
+### Three things this breaks / resolves
+
+1. **There is NO `resource` field and NO `data` field.** The record lives under a
+   key named after its type (`customer`), and the type is derived from the
+   `event` prefix (`customer.updated` → `customer`). The route currently requires
+   `resource` and `data`, both of which are absent — so a real event hits the
+   **handshake branch** (both null → 200, no sync) and is silently dropped. This
+   is THE reason nothing was syncing even once delivery worked. The
+   singular/plural `resource` aliasing built earlier is now moot; the resource
+   comes from the event name instead.
+2. **`data` is the FULL record, not a delta** — previously open, now settled. All
+   ~20 customer fields present. Whole-row upsert is safe; no API re-fetch needed
+   for correctness. (The re-fetch fallback is therefore optional, not required.)
+3. **Attachments arrive in the payload** (`"attachments":[]` on the customer) —
+   relevant to the Phase-1 "Attachments" gap; they may be syncable straight from
+   the webhook body rather than a separate pull.
+
+### Required route/mapper change (first task next session)
+- Parse the envelope as `{ event, <typeKey> }`, not `{ resource, data }`.
+- Derive resource from `event.split(".")[0]` (`customer`/`job`/`estimate`/
+  `invoice`/`lead`/`pro`...) and normalize to the plural table key (the existing
+  `RESOURCE_ALIASES` already maps singular→plural; extend for `pro`→technicians).
+- Read the record from `payload[resourceSingular]` (e.g. `payload.customer`).
+- Keep the handshake branch, but tighten it: a real event has an `event` key, so
+  gate the handshake on `event == null` rather than "resource and data absent",
+  otherwise real events keep getting swallowed as handshakes.
+- Update `syncOneRecord` callers and the webhook tests to the new shape.
+
+## Signing scheme — now derivable OFFLINE (no more live events needed)
+
+The captured delivery was signed with the CURRENT secret (unlike the stale
+handshake sample), so the scheme can be brute-forced offline against this triple.
+The body must be the EXACT raw bytes below (no reserialization — whitespace and
+key order matter for HMAC):
+
+```
+api-signature: 93e493e16de16478fbf4e76eacc0c4aed70212ae755bcf03c36883867839282c
+api-timestamp: 1784871495
+rawBody: {"event":"customer.updated","event_occurred_at":"2026-07-24T05:38:14Z","company_id":"233b75f9-4b4f-4a83-b21b-c1ed9e571daa","customer":{"id":"cus_d8924aacf0d24a888280e12187e40f6f","first_name":"ZZ-Webhook","last_name":"Test-DELETE-ME","email":"webhook-test@trinity.plumbing","mobile_number":null,"home_number":null,"work_number":null,"company":null,"notifications_enabled":false,"lead_source":null,"notes":"delivery retest 2","kind":"homeowner","created_at":"2026-07-24T04:00:37Z","updated_at":"2026-07-24T04:00:37Z","company_name":"Trinity Plumbing and Drains Inc.","company_id":"233b75f9-4b4f-4a83-b21b-c1ed9e571daa","tags":[],"addresses":[],"attachments":[]}}
+```
+
+Signature is 64 hex chars = HMAC-SHA256. Run `scratchpad/derive-sig.mjs` (or the
+in-route `detectSignatureScheme`) with the secret from `.env.local` against this
+exact body + timestamp. CAVEAT: the raw body above was reconstructed from the
+captured log; if no construction matches, it's because a byte differs from what
+HCP actually sent — in that case capture a fresh delivery and derive from the
+`[webhook-handshake]` log line, which records the byte-exact `rawBody`.
+
+Fallback if the scheme still won't derive: trust only the record `id` from the
+payload and re-fetch from the HCP API — signature becomes non-load-bearing.
+
+## Housekeeping update
+- The test customer `cus_d8924aacf0d24a888280e12187e40f6f` **could not be deleted
+  via API** — `DELETE /customers/{id}` returns 404 (HTML), so HCP does not expose
+  customer deletion there. **Delete it manually in the HCP UI** (labelled
+  `ZZ-Webhook Test-DELETE-ME`).
+
