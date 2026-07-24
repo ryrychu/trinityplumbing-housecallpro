@@ -259,3 +259,104 @@ the question moot permanently.
 5. Vercel Hobby is licensed for non-commercial use; this is a commercial
    dashboard. Still the user's call.
 
+---
+
+# Phase-1 gap assessment vs. client roadmap (2026-07-24)
+
+The client's full vision lives in `list.md` at the repo root — a 10-phase
+roadmap (Phases 1–10 plus "Future AI Features" and "Long-Term Vision"). **All
+work to date is inside Phase 1 only, and Phase 1 itself is not complete.** This
+section maps what exists against the Phase-1 list so the next session starts with
+an accurate picture. Statuses below were verified against code and live data this
+session, not assumed.
+
+## Phase 1 — Foundation
+
+### HCP Integration → Synchronize
+| List item | Status | Note |
+|-----------|--------|------|
+| Secure connection (API) | ✅ | Bearer `HOUSECALL_API_KEY`. The list says "OAuth/API"; we use API-key auth, not OAuth. |
+| Customers | ✅ | 1497 synced |
+| Jobs | ✅ | 3038 synced |
+| Estimates | ✅ | 922 synced |
+| Invoices | ✅ | 2854 synced |
+| Technicians | ✅ | 6 synced |
+| Job status | ✅ | Live `work_status` values censused (see `queries.ts`) |
+| **Leads** | ❌ | No `leads` table, no mapper. Not synced at all. HCP *does* emit `lead.*` webhooks. |
+| **Tags** | ⚠️ | Column synced, but only 22/3038 jobs carry any tag and none are emergency/commercial. Drives the two 0-value cards. |
+| **Notes** | ⚠️ | Customer `notes` present; job-level notes not confirmed synced. |
+| **Attachments** | ❌ | Not synced. No table, no mapper. |
+
+### Operations Dashboard
+The list names **10 cards**. `DashboardSnapshot` (`src/lib/dashboard/queries.ts`)
+implements **6**. The other 4 are not built — confirmed by the interface having
+exactly six fields.
+
+| Card (from list) | Status | Note |
+|------------------|--------|------|
+| Jobs in progress | ✅ | 91 |
+| Open estimates | ✅ | 453 (derived; HCP has no "open" estimate status — see `isOpenEstimate`) |
+| Pending invoices | ✅ | 25 ("open" = unpaid; there is no "pending" status) |
+| Revenue booked this week | ⚠️ | Value renders ($145,708.30) but is **all-time booked, NOT week-scoped**. `revenueBookedCents` is explicitly not date-filtered; a "this week" filter is a noted 1.x fast-follow. |
+| Commercial jobs | ❌ | Reads 0 — depends on tags. Tagging convention being adopted; no retroactive backfill. |
+| Emergency calls | ❌ | Reads 0 — same tag dependency. |
+| Today's schedule | ❌ | Not implemented (no snapshot field). |
+| Upcoming estimates | ❌ | Not implemented. |
+| Technician workload | ❌ | Not implemented. |
+| Revenue scheduled next week | ❌ | Not implemented. |
+
+### Geographic Scheduling Assistant
+⚠️ **Infrastructure only, not the feature.** Geocoding exists (`geocode_cache`,
+addresses resolved on sync into lat/lng). The described capabilities —
+distance-from-Averill-Park, estimated drive time, service-zone assignment,
+compass direction, and "already working nearby" recommendations — are **not
+built**. This overlaps heavily with Phase 2 (Scheduling Intelligence).
+
+## Phases 2–10 + Future AI + Long-Term Vision
+❌ **Not started.** Scheduling intelligence, inventory integration, SOP/training,
+AI job assistant, commercial management, customer portal, marketing automation,
+KPI dashboard, predictive scheduling, and the Trinity-OS vision are all future
+roadmap. Not in scope for any session to date.
+
+## The live blocker (above everything else on this list)
+
+**Real-time sync does not work yet.** HCP is not delivering webhooks to the
+endpoint: two API-triggered test events (`customer.created`, `customer.updated`)
+plus a full 5-minute `vercel logs --follow` produced **zero deliveries**. The
+webhook *code* is correct and verified (handshake passes, `api-signature` header
+read, bad signatures rejected) — the problem is on the subscription/delivery
+side. Until resolved, all data refreshes once daily at 08:00 UTC via cron.
+
+**Next session should start with these three cheap checks (no code):**
+1. Does HCP show a **delivery/retry log** for the subscription? Attempts with
+   error codes → firing-but-failing; empty → not firing.
+2. Is the subscription **saved and active** after enabling events? (Saving the
+   URL and enabling events may be separate steps.)
+3. Does HCP **suppress webhooks for API-originated changes**? If so, only a
+   manual UI edit produces an event, and the API-driven tests could never fire.
+
+The signing construction is still unconfirmed (480 offline candidates failed; a
+server-side detector is armed behind `WEBHOOK_DEBUG=1` and will name the scheme
+on the first real delivery). If real-time proves troublesome, the decided
+fallback is to **trust only the record `id` in the payload and re-fetch the
+authoritative record from the HCP API** — this makes the signature non-load-
+bearing and permanently resolves the still-open delta-vs-full-record question.
+
+## Honest Phase-1 completion checklist (to actually finish Phase 1)
+1. Fix webhook delivery (the 3 checks above) — unblocks real-time.
+2. Enable `invoice.*` webhooks — closes the documented ~21h invoice lag. (The
+   "invoices have no webhook" claim elsewhere in this doc is WRONG; HCP has 9.)
+3. Do NOT enable `customer.deleted` / `job.deleted` until delete handling exists
+   (`syncOneRecord` only upserts — a delete event would re-insert the record).
+4. Sync **Leads** and **Attachments** (both on the Phase-1 list, both missing).
+5. Build the 4 missing dashboard cards; date-scope "revenue booked this week".
+6. Scope how much Geographic Scheduling Assistant is wanted now vs. Phase 2.
+7. Begin the tagging convention so emergency/commercial cards populate.
+
+## Housekeeping left open
+- Test record still in **production HCP**: customer `ZZ-Webhook Test-DELETE-ME`
+  (`cus_d8924aacf0d24a888280e12187e40f6f`). Delete when convenient.
+- `WEBHOOK_DEBUG=1` and the `logPayloadShape` / `detectSignatureScheme` /
+  handshake-logging probes are still live in production — remove once the signing
+  scheme is pinned and encoded in `verifyWebhookSignature`.
+
