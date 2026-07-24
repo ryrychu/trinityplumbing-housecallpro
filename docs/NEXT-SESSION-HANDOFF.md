@@ -6,6 +6,13 @@ continue. It's written to be self-contained.
 *Supersedes the Phase 1 handoff (2026-07-23). Phase 1.x items 1–5 are done,
 committed, and merged; this covers go-live item 6.*
 
+> **⚠️ READ THIS FIRST (2026-07-24, latest):** Real-time webhook sync is now
+> **LIVE and verified end-to-end in production** — see the final section,
+> "RESOLVED: real-time sync working". The webhook route envelope fix and the
+> signing scheme (both described below as open "first task next session" items)
+> are **DONE, committed (`5f793b9`), pushed, and deployed.** Do NOT re-do them.
+> Everything between here and that final section is retained for history only.
+
 ---
 
 ## Copy-paste prompt
@@ -440,4 +447,73 @@ payload and re-fetch from the HCP API — signature becomes non-load-bearing.
   via API** — `DELETE /customers/{id}` returns 404 (HTML), so HCP does not expose
   customer deletion there. **Delete it manually in the HCP UI** (labelled
   `ZZ-Webhook Test-DELETE-ME`).
+
+---
+
+# RESOLVED: real-time sync working (2026-07-24)
+
+Everything above about the webhook being broken is now **fixed and verified in
+production.** Commit `5f793b9` (`fix(webhook): parse real HCP event envelope and
+correct signing scheme`) is pushed and deployed.
+
+## Two bugs fixed (both required for a single event to sync)
+
+1. **Envelope parsing** (`src/app/api/webhooks/housecall/route.ts`). The route
+   required `resource` + `data`; a real HCP event sends neither, so every
+   delivery fell into the URL-validation handshake branch and was silently
+   dropped. Now it derives the resource from `event.split(".")[0]`, reads the
+   full record from `payload[resource]` (e.g. `payload.customer`), and gates the
+   handshake on `event == null`.
+2. **Signing scheme** (`src/lib/housecall/webhookVerify.ts`). Derived offline
+   from the captured live delivery: HCP signs
+   **`HMAC-SHA256(secret_as_utf8, `${api-timestamp}.${rawBody}`)`, hex-encoded**,
+   in the `api-signature` header (Stripe-style `timestamp.body`). The old
+   verifier hashed the body only, so even with bug 1 fixed every real delivery
+   would still have 401'd. The route now reads `api-timestamp` and threads it in.
+
+The temporary probes (`detectSignatureScheme`, `logPayloadShape`,
+`SIGNATURE_CANDIDATES`, the `WEBHOOK_DEBUG` handshake logging) are **removed** —
+the scheme is pinned, so they served no further purpose. Tests updated to the
+real envelope + signing scheme; 71/71 pass, lint + build clean.
+
+## Verified end-to-end in production
+
+- A signed POST to `https://trinity-housecallpro.vercel.app/api/webhooks/housecall`
+  (correct secret + scheme) returned **HTTP 200 `{"ok":true}`** and upserted the
+  record — proving deployed code, secret, signature verification, envelope
+  parsing, and the Supabase upsert all work.
+- A real HCP API change (customer notes edit, **no** manual POST) appeared in
+  Supabase **~2 seconds** later via a genuine webhook delivery. Real-time sync is
+  live.
+- The production `HOUSECALL_WEBHOOK_SECRET` is correct (matches HCP); it is **not**
+  the old placeholder.
+
+## Gotcha discovered while verifying (avoid re-tripping)
+
+`customers` has **no top-level `notes` column** — `notes` lives inside the `raw`
+jsonb blob. Querying `select=...,notes` returns a PostgREST *error object*, which
+is easy to mishandle as "row absent" and mistake for a broken sync. Verify via
+`select=id,updated_at,notes:raw->>notes`. The same applies to any field not in a
+mapper (see `src/lib/sync/mappers.ts` for the actual column set per table).
+
+## Env note
+
+`WEBHOOK_DEBUG=1` is still set in production but is now a **no-op** — the code it
+gated was deleted. Remove it from Vercel whenever convenient; harmless if left.
+
+## What's next (Phase 1 remainder — still open, unchanged by this fix)
+
+Real-time sync working does not finish Phase 1. Still outstanding from the
+"Honest Phase-1 completion checklist" above:
+1. ~~Fix webhook delivery~~ ✅ **DONE.**
+2. Enable `invoice.*` webhooks to close the ~21h invoice lag (currently
+   invoices reconcile via the daily cron only).
+3. Do NOT enable `customer.deleted` / `job.deleted` until delete handling
+   exists — `syncOneRecord` only upserts, so a delete event would re-insert the
+   record. (Confirmed live: deleting a customer in the HCP UI does **not** remove
+   it from Supabase.)
+4. Sync **Leads** and **Attachments** (both on the Phase-1 list, both missing).
+5. Build the 4 missing dashboard cards; date-scope "revenue booked this week".
+6. Scope how much Geographic Scheduling Assistant is wanted now vs. Phase 2.
+7. Begin the tagging convention so emergency/commercial cards populate.
 
