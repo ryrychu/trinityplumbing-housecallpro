@@ -1,3 +1,4 @@
+import Image from "next/image";
 import { getDashboardSnapshot } from "@/lib/dashboard/queries";
 import { StatCard } from "./components/StatCard";
 import { SectionHeading } from "./components/SectionHeading";
@@ -35,7 +36,19 @@ export default async function DashboardPage() {
     <main className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
       <header className="mb-8 border-b border-surface-divider pb-5">
         <div className="flex items-center gap-3">
-          <span aria-hidden="true" className="h-8 w-1 rounded-full bg-brand" />
+          {/* Decorative: the <h1> beside it already names the company, so an
+              alt here would make a screen reader announce it twice. The asset
+              is a raster PNG inside an SVG wrapper, hence `unoptimized` —
+              Next's image optimizer rejects SVG without dangerouslyAllowSVG. */}
+          <Image
+            src="/trinity-logo.svg"
+            alt=""
+            width={44}
+            height={44}
+            unoptimized
+            priority
+            className="h-10 w-10 shrink-0 sm:h-11 sm:w-11"
+          />
           <div>
             <h1 className="text-xl font-bold tracking-tight text-ink-primary sm:text-2xl">
               Trinity Plumbing <span className="text-ink-muted">&middot; Operations</span>
