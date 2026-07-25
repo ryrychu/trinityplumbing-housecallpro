@@ -748,3 +748,72 @@ subagent-driven**, for cost control. Ask the owner for Trinity's real brand
 colour/logo before finalising — the plan currently uses a placeholder steel-blue
 token. Fold in follow-up 6 (the page title) while you're there.
 
+---
+
+# GOAL 2 COMPLETE — dashboard UI redesign shipped (2026-07-25)
+
+All 7 plan tasks done. Suite **130/130** (was 112: +20 new, −2 from the deleted
+`MetricCard` test), lint + build clean, `/dashboard` still **138 B** of client JS
+— everything stayed a server component. NOT yet deployed (`vercel --prod` is the
+owner's step).
+
+## The plan's placeholder palette was NOT used
+
+The plan specified a light theme (slate-50 page, white cards) on a placeholder
+steel-blue `#1e3a5f`. The owner pointed to **`docs/color-scheme.md`**, which is
+the real identity shared by trinity.plumbing and trinityplumbingny:
+**dark surfaces + a single gold accent `#f2c400` + warm off-white text + Inter.**
+The dashboard was built on that instead. Structure, tasks, and tests followed the
+plan; only the palette and typography changed.
+
+Token naming departs from the plan deliberately. A 50→900 ramp reads backwards on
+a dark surface, so each semantic colour exposes two slots:
+
+| Class | Meaning |
+|---|---|
+| `<name>` | bright foreground (text, icons, bars) |
+| `<name>-tint` | dark desaturated background (badge/chip fill) |
+
+plus `surface-{page,card,raised,elevated,divider,border}` and
+`ink-{primary,muted,faint,inverse}`. Inter is loaded via `next/font/google`
+(build-time fetch); **Geist Mono is retained for all numerals** — Geist Sans is
+gone. `tailwind.config.ts` cites `docs/color-scheme.md` as source of truth.
+
+## Three fixes beyond the plan's scope
+
+1. **`ZoneBadge` was missing a zone.** The plan's `ZONE_STYLES` had 5 keys, but
+   `classifyZone()` (`src/lib/geo/zones.ts:28`) can also return
+   **`"Outside Service Area"`**, which would have fallen through to the neutral
+   unknown style. It now gets a danger tint. A parametrised test pins all six.
+2. **Times rendered in UTC.** Both panels and the page header used bare
+   `toLocaleTimeString`, so on Vercel (UTC) a 10:00 Eastern job displayed as
+   14:00. Now pinned to `America/New_York`, matching the Eastern-scoped revenue
+   windows already in the data layer. Verified: 12:30Z renders as 08:30 AM.
+3. **Money now always shows 2 decimals** (`$1,000.00`, not `$1,000`).
+
+## Visual verification — both panels WERE checked with data
+
+Live at 1440px and 375px against real production numbers (93 · 0 · 0 · 453 · 0 ·
+25 · $22,441.89 · $4,334.84), 0 console errors. Because both panels are
+legitimately empty on a Saturday, a **throwaway preview route with synthetic rows**
+was used to confirm the parts the empty state hides: the desktop table, the
+mobile card stack, all six zone badge colours, gold load bars vs. grey for the
+Unassigned bucket, an empty bar at 0h (no divide-by-zero), and em-dash fallbacks
+for null time/miles/drive. That scaffold was deleted and never committed —
+confirm with `git log --oneline` that no `zzpreview` route exists.
+
+⚠️ **App Router gotcha:** a folder named `_preview`/`__preview` returns **404** —
+leading-underscore folders are private and opted out of routing. Use a plain name.
+
+## Still open (unchanged by this work)
+
+- Handoff follow-ups **1–5, 7, 8** below are untouched: `rehost()` skip-guard and
+  `AbortSignal.timeout()`, weekday panel re-verification, `Upcoming Estimates = 0`
+  unconfirmed, and whether the owner's `vercel --prod` shipped `eedf801`.
+  Follow-up **6 (page title) is DONE** — now "Trinity Plumbing — Operations".
+- **No logo.** `public/` does not exist; the header is a gold-rule + wordmark. Drop
+  a PNG/SVG in `public/` and add it to the header in `page.tsx` if one is wanted.
+- Emergency/Commercial still read 0 — tag dependency, not a UI issue.
+- A light-theme variant, if ever wanted, is a `tailwind.config.ts` + `globals.css`
+  change only; no component touches it (all colours go through tokens).
+
