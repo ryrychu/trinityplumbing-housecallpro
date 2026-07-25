@@ -567,3 +567,184 @@ routing decisions (46 towns).
   and attachment success/storage-fail branch untested.
 - Week/day windows are UTC; business-local timezone is a follow-up.
 
+---
+
+# PHASE 1 IS COMPLETE (2026-07-25)
+
+All six operational steps are done and verified. **Goal 2 (the dashboard UI
+redesign) has NOT been started** — that is the entire remaining scope. Plan:
+`docs/superpowers/plans/2026-07-24-dashboard-ui.md`.
+
+| # | Step | Status |
+|---|------|--------|
+| 1 | Apply migration 0005 | ✅ verified via PostgREST (2 tables + 4 columns) |
+| 2 | Storage bucket + attachment probe | ✅ bucket private; probe done; **3 real defects found and fixed** |
+| 3 | Live dashboard check | ✅ 8 cards + 2 panels; revenue week-scoped |
+| 4 | `vercel --prod` | ✅ run by the owner |
+| 5 | Enable HCP `invoice.*` + `*.deleted` webhooks | ✅ done by the owner |
+| 6 | Remove `WEBHOOK_DEBUG=1` | ✅ done by the owner |
+
+## Production verification (2026-07-25)
+
+`GET /dashboard` → 200, and **Revenue Booked (This Week) = $22,441.89** — the key
+assertion, since the old value was all-time `$145,708.30`.
+
+```
+Jobs in Progress 93 · Emergency Calls 0 · Commercial Jobs 0 · Open Estimates 453
+Upcoming Estimates 0 · Pending Invoices 25
+Revenue Booked (This Week) $22,441.89 · Revenue Scheduled (Next Week) $4,334.84
+Panels: "No jobs scheduled today." / "No assigned work today."
+```
+
+`POST /api/webhooks/housecall` unsigned → 401 (signature check still correct).
+
+## The attachment probe changed the design — read this before touching attachments
+
+The Task-4 probe was specified as `curl -I`. **`curl -I` gives a false negative:**
+HCP attachment URLs are presigned S3 links signed for GET, so `HEAD` returns
+**403**. Use a ranged GET instead. Measured on a live URL:
+
+```
+HEAD        -> 403 Forbidden
+GET (range) -> 206  image/png  bytes 0-1023/2208388
+GET (full)  -> 200  2,208,388 bytes      <- no auth header needed
+upload into private hcp-attachments bucket -> 200
+```
+
+`hcp_url` carries `X-Amz-Expires=3600`, so **the stored URL string dies after one
+hour.** An earlier note in this doc concluded from that "metadata-only is
+permanently unrecoverable" — **that was WRONG and is corrected here.** The URL
+expires; the *file* does not. HCP re-mints a fresh presigned URL on every API
+call (verified: the same attachment id was fetched twice minutes apart, both
+returning working URLs). The stored metadata (`id`, `parent_id`, `file_name`) is
+all you need to ask for a new one.
+
+**Consequence:** re-hosting is an *archive*, not a durability requirement. HCP is
+already the durable store. If storage ever becomes a constraint again, deleting
+re-hosted files is safe and reversible — refetch with
+`GET /jobs?expand[]=attachments` and match on attachment `id`.
+
+## Three real defects found and fixed — commit `eedf801`
+
+The Attachments feature shipped "code complete" but was **completely inert**.
+
+| # | Defect | Fix |
+|---|--------|-----|
+| 1 | HCP omits attachments unless expanded (`expand[]=attachments`); `client.request()` never sent it, so **3038/3038 jobs had no `attachments` key at all** | `client.ts` `request()` takes an `expand` array; `listJobs`/`listCustomers` pass `["attachments"]` |
+| 2 | Live attachments are `{id, file_name, url, file_type}` — there is **no `content_type`** — but the mapper read `att.content_type`, so the column was always null and uploads had no content type | `content_type: att.file_type ?? att.content_type ?? null` |
+| 3 | Metadata-only mode stored a URL dead within the hour | Re-hosting is now default, bounded by a run-scoped `RehostBudget` (mirrors `GeocodeBudget`) |
+
+`expand` is a general mechanism — the jobs endpoint also supports
+`expand[]=appointments`. Enum values live in `housecall.v1.yaml` near line 630.
+
+## Data state after the backfill
+
+One full local sync (26 min, 10:57–11:23Z, `ATTACHMENT_REHOST_MAX_PER_RUN=3000`),
+re-paging customers (1498 / 30 pages) and jobs (3093 / 62 pages):
+
+| Table | Count |
+|-------|-------|
+| `attachments` | **436** — all re-hosted, 0 metadata-only |
+| Storage used | **912.1 MB** across 436 objects, avg 2.1 MB |
+| Types | 386 `image/jpeg`, 8 `application/pdf`, 1 `image/png` |
+| `jobs.notes` | 319 |
+| `jobs.tags` | **22** — matches the earlier census exactly |
+| `leads` | **0 — legitimately.** The HCP account has no leads; sync works, there is simply nothing to sync. Not a bug. |
+
+Largest files are 8–12 MB technician phone photos (`IMG_*.jpeg`,
+`ios_*.jpg`). 436 is the COMPLETE set — an earlier extrapolation of "~800 files /
+1.5–2 GB" was wrong; don't trust it.
+
+**Cursors were reset for the backfill and are RESTORED:**
+`customers=2026-07-23T21:30:49+00:00`, `jobs=2026-07-23T22:55:14+00:00`.
+If you ever null them again, restore them afterwards or the daily production cron
+re-pages all 92 pages every run.
+
+**Supabase is now on the Pro plan** (100 GB storage). At 912 MB the backfill would
+have consumed **89% of the free tier's 1 GB** — it was killed mid-run and resumed
+after the upgrade.
+
+## Follow-ups — none blocking, all real
+
+1. **`rehost()` re-copies files it already has.** There is no
+   `if (row.storage_path) continue` guard, so the resumed run spent **16 minutes**
+   re-downloading and re-uploading the 388 files already present before reaching
+   new ones (visible in the watchdog log: count frozen at 395 from 11:04→11:20).
+   A skip-guard makes repeat runs nearly free.
+2. **`rehost()` has no fetch timeout — a genuine hang vector.** Node's `fetch`
+   has no default timeout, so a stalled S3 socket blocks the whole run
+   indefinitely. Add `AbortSignal.timeout(...)` to both the download and the
+   upload. The function already swallows errors, so it degrades to
+   `storage_path: null`.
+3. **Keep `ATTACHMENT_REHOST_MAX_PER_RUN` at 25 in production.** The cap exists
+   for the 300 s function limit, NOT for storage — Supabase Pro does not make it
+   safe to raise. Only raise it for local runs, which have no timeout.
+4. **Both dashboard panels rendered empty**, but that was Saturday 2026-07-25 —
+   plausible, yet unproven. Re-check on a weekday, especially given the known
+   quirk that `todaySchedule` resolves customers via `raw.customer.id` rather
+   than the typed `jobs.customer_id` column.
+5. **`Upcoming Estimates` reads 0** — not confirmed against underlying data.
+6. **Page `<title>` is still "Create Next App"** — fix during the UI redesign.
+7. **Unverified:** that the owner's `vercel --prod` shipped commit `eedf801`.
+   The week-scoped revenue proves the earlier dashboard code is live, but the
+   attachment fix only touches client/cron and isn't observable externally.
+   Confirm with `npx vercel ls` or the commit shown in the Vercel dashboard.
+8. Emergency/Commercial cards still read 0 — unchanged tag dependency, waiting on
+   the tagging convention. Not a code issue.
+
+## BOTH CLIs WERE LOGGED INTO THE WRONG ACCOUNT — the biggest time sink today
+
+This cost more than any technical problem. Check both *before* starting work.
+
+**Supabase** — billing and permissions are per **organization**, and this account
+has two:
+
+| Org | Contains |
+|-----|----------|
+| `nganepfbxyolejfbkwpz` | **`wrvaenkyrfvbooogqhev`** — "Trinity Plumbing Housecall" ← the project |
+| `fwdsxsgiulcuodmqsjhz` | "Trinity Plumbing Inventory", `trinity.plumbing.ny@gmail.com's Project` |
+
+`npx supabase projects list` initially showed only the *second* org, so
+`db push` would have 403'd. Verify `wrvaenkyrfvbooogqhev` appears in that list
+before running anything.
+
+**Vercel** — `vercel --prod` failed with *"Could not retrieve Project Settings"*.
+`.vercel/project.json` points at org `team_xeYCTfns0UGL7Vj9JwDOC8NT` (team
+`trinity-plumbing-and-drains`), but `vercel teams ls` listed only `dragonfly-ai`
+and `ryan-8593s-projects`, and `whoami` returned `Not authorized`. The fix is
+`npx vercel login` as the owning account.
+
+⚠️ **Do NOT follow the CLI's suggestion to delete `.vercel/` and re-link while
+signed into the wrong account** — that creates a *new* project under the wrong
+team with a different URL and orphans `trinity-housecallpro.vercel.app`.
+
+## Vercel plan: no upgrade needed
+
+Hobby does not block deploys, webhooks, real-time sync, or `maxDuration = 300`.
+The one functional cost was daily-only cron causing the ~21 h invoice lag — and
+enabling `invoice.*` webhooks (step 5, now done) makes invoices real-time, so the
+main reason to upgrade is gone. **Still open (non-technical):** Hobby is licensed
+for non-commercial use and this is a commercial dashboard. Owner's call.
+
+## Session mechanics worth repeating
+
+- **Poll the database, not the process.** `npm run dev | tail` and backgrounded
+  `curl` both buffer their output, so their log files stay 0 bytes and tell you
+  nothing. Row counts are the reliable progress signal.
+- **A background watchdog beats repeated manual polling** — one 60 s-interval
+  sampler with a stall detector, read once at the end, replaces dozens of
+  expensive check-in round trips. Repeated polling was a large share of this
+  session's cost.
+- Git Bash `/tmp` is NOT Windows `C:\tmp`. `curl -o /tmp/x` then `node` reading
+  `/tmp/x` fails with ENOENT; use the scratchpad path in both.
+- GateGuard blocks the **first** Edit per file regardless of facts already stated,
+  then allows the retry — budget two attempts per new file.
+
+## Next session: Goal 2 only
+
+Execute `docs/superpowers/plans/2026-07-24-dashboard-ui.md` (7 tasks, Tailwind
+**v3** not v4, responsive, no data-layer changes). Run it **inline, not
+subagent-driven**, for cost control. Ask the owner for Trinity's real brand
+colour/logo before finalising — the plan currently uses a placeholder steel-blue
+token. Fold in follow-up 6 (the page title) while you're there.
+
