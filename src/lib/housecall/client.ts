@@ -32,13 +32,18 @@ export class HousecallClient {
     path: string,
     resourceKey: string,
     page = 1,
-    sorted = false
+    sorted = false,
+    expand: readonly string[] = []
   ): Promise<ListResult<T>> {
     // HCP has no modified-since filter but honors sort_by/sort_direction (Task 0
     // / item 4 probe). Newest-first ordering lets the cron stop paging early once
     // it reaches records older than its cursor.
     const sort = sorted ? "&sort_by=updated_at&sort_direction=desc" : "";
-    const res = await fetch(`${BASE_URL}${path}?page=${page}&page_size=50${sort}`, {
+    // Nested resources are omitted entirely unless named here — the OpenAPI
+    // Attachment schema says "Only present if expanded with attachments". Sent as
+    // repeated `expand[]` params (unencoded brackets, verified live).
+    const expansions = expand.map((e) => `&expand[]=${e}`).join("");
+    const res = await fetch(`${BASE_URL}${path}?page=${page}&page_size=50${sort}${expansions}`, {
       headers: {
         Authorization: `Bearer ${this.apiKey}`,
         Accept: "application/json",
@@ -60,8 +65,11 @@ export class HousecallClient {
 
   // The four incremental resources are fetched newest-first so the cron can
   // stop early at its cursor. Employees (6 rows) stay a plain full resync.
+  // Customers and jobs are the two resources that carry attachments, and HCP
+  // returns them only when expanded — without this the attachments table can
+  // never populate from the polling path.
   listCustomers(page = 1) {
-    return this.request<HcpCustomer>("/customers", "customers", page, true);
+    return this.request<HcpCustomer>("/customers", "customers", page, true, ["attachments"]);
   }
 
   listEmployees(page = 1) {
@@ -69,7 +77,7 @@ export class HousecallClient {
   }
 
   listJobs(page = 1) {
-    return this.request<HcpJob>("/jobs", "jobs", page, true);
+    return this.request<HcpJob>("/jobs", "jobs", page, true, ["attachments"]);
   }
 
   listEstimates(page = 1) {

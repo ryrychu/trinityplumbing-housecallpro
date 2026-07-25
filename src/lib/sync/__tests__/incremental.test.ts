@@ -68,10 +68,10 @@ describe("syncResourceIncremental", () => {
     expect(result.newCursor).toBe("2026-07-21T00:00:00Z");
   });
 
-  // FIX 5: the incremental cron backfills attachment METADATA for fresh
-  // customer/job rows, without re-hosting (no fetch/storage), so the ~3000
-  // already-synced records eventually get attachment rows.
-  it("backfills attachment metadata (rehost:false) for fresh jobs without fetching", async () => {
+  // The incremental cron backfills attachment METADATA for fresh customer/job
+  // rows. Re-hosting is opt-in via a run-scoped budget: with no budget supplied
+  // this stays metadata-only (no fetch/storage), which is the safe default.
+  it("backfills attachment metadata without fetching when no rehost budget is supplied", async () => {
     const fetchSpy = vi.fn(() => Promise.reject(new Error("blocked")));
     vi.stubGlobal("fetch", fetchSpy);
 
@@ -105,6 +105,52 @@ describe("syncResourceIncremental", () => {
     // Metadata-only: never re-hosts, so neither fetch nor storage is touched.
     expect(fetchSpy).not.toHaveBeenCalled();
     expect(storageFrom).not.toHaveBeenCalled();
+
+    vi.unstubAllGlobals();
+  });
+
+  // With a budget supplied, re-hosting runs but is capped across the whole run
+  // (not per parent record), so a first backfill over ~3000 records stays inside
+  // the 300s serverless limit. hcp_url expires in 1h, so this is how files last.
+  it("re-hosts attachments when a run budget is supplied, and stops at the cap", async () => {
+    const fetchSpy = vi.fn(() => Promise.reject(new Error("blocked")));
+    vi.stubGlobal("fetch", fetchSpy);
+
+    const jobsUpsert = vi.fn().mockResolvedValue({ error: null });
+    const attachmentsUpsert = vi.fn().mockResolvedValue({ error: null });
+    const localSupabase = {
+      from: vi.fn((table: string) => ({
+        upsert: table === "attachments" ? attachmentsUpsert : jobsUpsert,
+      })),
+    } as unknown as SupabaseClient;
+
+    const jobMapper = (x: { id: string; updated_at?: string }) => ({ id: x.id, updated_at: x.updated_at });
+    const fetchPage = async (page: number) => ({
+      items:
+        page === 1
+          ? [
+              { id: "j1", updated_at: "2026-07-23T00:00:00Z", attachments: [{ id: "a1", url: "https://hcp/1" }] },
+              { id: "j2", updated_at: "2026-07-22T00:00:00Z", attachments: [{ id: "a2", url: "https://hcp/2" }] },
+            ]
+          : [],
+      page,
+      totalPages: 1,
+    });
+
+    const rehostBudget = { remaining: 1 };
+    await syncResourceIncremental(
+      localSupabase,
+      "jobs",
+      fetchPage,
+      jobMapper,
+      { remaining: 0 },
+      null,
+      rehostBudget
+    );
+
+    expect(fetchSpy).toHaveBeenCalledOnce(); // capped: j2's attachment not fetched
+    expect(rehostBudget.remaining).toBe(0);
+    expect(attachmentsUpsert).toHaveBeenCalledTimes(2); // metadata for both jobs
 
     vi.unstubAllGlobals();
   });

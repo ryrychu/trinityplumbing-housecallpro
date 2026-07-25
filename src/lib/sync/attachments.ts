@@ -19,9 +19,21 @@ export interface AttachmentRow {
 
 const STORAGE_BUCKET = "hcp-attachments";
 
+// Re-host network calls are bounded per cron run (same shape as GeocodeBudget)
+// so a first backfill over thousands of records cannot exceed the 300s
+// serverless limit. Shared by reference across every syncAttachments call in a
+// run, so the cap is run-wide rather than per parent record.
+export interface RehostBudget {
+  remaining: number;
+}
+
 interface RawAttachment {
   id: string;
   url?: string;
+  // Live HCP sends `file_type`; the OpenAPI Attachment schema is
+  // {id, file_name, url, file_type} with no content_type. `content_type` is
+  // tolerated as an alias in case a webhook payload uses it.
+  file_type?: string;
   content_type?: string;
   file_name?: string;
   created_at?: string;
@@ -43,7 +55,7 @@ export function extractAttachmentRows(
     parent_type: parentType,
     parent_id: parentId,
     file_name: att.file_name ?? null,
-    content_type: att.content_type ?? null,
+    content_type: att.file_type ?? att.content_type ?? null,
     hcp_url: att.url ?? null,
     storage_path: null,
     created_at: att.created_at ?? null,
@@ -83,16 +95,25 @@ export async function syncAttachments(
   parentType: "customer" | "job",
   parentId: string,
   payload: unknown,
-  opts: { rehost?: boolean } = { rehost: true }
+  opts: { rehost?: boolean; budget?: RehostBudget } = {}
 ): Promise<void> {
   const rows = extractAttachmentRows(parentType, parentId, payload);
   if (rows.length === 0) return;
 
-  // Metadata-only mode (incremental cron backfill): skip the network re-host to
-  // avoid serverless timeouts over thousands of records. storage_path stays null
-  // and the real-time webhook path re-hosts later. Default keeps rehost on.
+  // hcp_url is a presigned S3 link that expires in 1 hour (X-Amz-Expires=3600),
+  // so metadata alone is NOT a durable record — re-hosting is the only way a
+  // file stays retrievable. Still best-effort: a failure leaves storage_path
+  // null and never blocks the metadata upsert below.
+  //
+  // `budget`, when supplied, caps network calls across the whole run; once it is
+  // spent the remaining rows are stored metadata-only and a later run picks them
+  // up. Metadata-only mode (rehost:false) leaves storage_path null entirely.
   if (opts.rehost !== false) {
     for (const row of rows) {
+      if (opts.budget) {
+        if (opts.budget.remaining <= 0) break;
+        opts.budget.remaining -= 1;
+      }
       row.storage_path = await rehost(supabase, row);
     }
   }

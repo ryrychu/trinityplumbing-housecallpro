@@ -12,7 +12,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { buildGeocodeTargets } from "./geocodeSpecs";
 import { enrichRowsWithGeocode, type GeocodeBudget } from "@/lib/geo/geocode";
-import { syncAttachments } from "./attachments";
+import { syncAttachments, type RehostBudget } from "./attachments";
 
 export interface IncrementalResult {
   resource: string;
@@ -33,7 +33,8 @@ export async function syncResourceIncremental<T extends WithUpdatedAt>(
   fetchPage: (page: number) => Promise<{ items: T[]; page: number; totalPages: number }>,
   mapper: (x: T) => Record<string, unknown>,
   budget: GeocodeBudget,
-  cursor: string | null
+  cursor: string | null,
+  rehostBudget?: RehostBudget
 ): Promise<IncrementalResult> {
   let page = 1;
   let totalPages = 1;
@@ -72,17 +73,23 @@ export async function syncResourceIncremental<T extends WithUpdatedAt>(
       }
       upserted += rows.length;
 
-      // Backfill attachment METADATA for the ~3000 already-synced records that
-      // never went through the webhook path. Metadata-only (rehost:false) so the
-      // network re-host stays on the real-time webhook path and this bulk pass
-      // can't hit serverless timeouts. Best-effort: attachments must never fail
+      // Backfill attachments for the ~3000 already-synced records that never
+      // went through the webhook path. Best-effort: attachments must never fail
       // the parent sync — the parent rows are already upserted above.
+      //
+      // With a rehostBudget the files are copied into Storage until the run's cap
+      // is spent (hcp_url is a 1h presigned link, so metadata alone would leave
+      // the file unreachable); later runs pick up where this one stopped. Without
+      // a budget this stays metadata-only and can't hit serverless timeouts.
       if (resource === "customers" || resource === "jobs") {
         const parentType = resource === "jobs" ? "job" : "customer";
+        const attachmentOpts = rehostBudget
+          ? { rehost: true, budget: rehostBudget }
+          : { rehost: false };
         for (let i = 0; i < fresh.length; i++) {
           const id = rows[i].id as string;
           try {
-            await syncAttachments(supabase, parentType, id, fresh[i], { rehost: false });
+            await syncAttachments(supabase, parentType, id, fresh[i], attachmentOpts);
           } catch (err) {
             console.error(`Incremental attachment sync failed for ${parentType} ${id}:`, err);
           }

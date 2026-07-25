@@ -5,6 +5,7 @@ import { mapCustomer, mapEmployee, mapJob, mapEstimate, mapInvoice, mapLead } fr
 import { buildGeocodeTargets } from "@/lib/sync/geocodeSpecs";
 import { enrichRowsWithGeocode, type GeocodeBudget } from "@/lib/geo/geocode";
 import { syncResourceIncremental, type IncrementalResult } from "@/lib/sync/incremental";
+import { type RehostBudget } from "@/lib/sync/attachments";
 
 // A steady-state incremental run costs ~2s (each resource stops after one page);
 // the daily invoice reconcile below costs ~70s. 300s leaves generous headroom.
@@ -16,6 +17,13 @@ export const maxDuration = 300;
 // the serverless timeout. Cache hits are free; the cache fills over successive
 // runs. Run the one-time bulk backfill locally (no timeout) to fill it fast.
 const DEFAULT_GEOCODE_MAX_PER_RUN = 500;
+
+// Attachment files must be copied into Supabase Storage because hcp_url is a
+// presigned S3 link that expires in 1 hour — metadata alone leaves the file
+// unreachable. Each copy is a download + upload of a real file (~2MB photos are
+// typical), so cap them per run and let successive runs finish the backfill.
+// Only ~1.6% of jobs carry an attachment, so the tail is short.
+const DEFAULT_ATTACHMENT_REHOST_MAX_PER_RUN = 25;
 
 // Invoices carry no `updated_at` in the live HCP payload (go-live Step 2
 // finding: keys are id/items/taxes/amount/due_at/job_id/status/paid_at/...
@@ -78,6 +86,11 @@ export async function GET(req: Request) {
   const budget: GeocodeBudget = {
     remaining: Number(process.env.GEOCODE_MAX_PER_RUN ?? DEFAULT_GEOCODE_MAX_PER_RUN),
   };
+  const rehostBudget: RehostBudget = {
+    remaining: Number(
+      process.env.ATTACHMENT_REHOST_MAX_PER_RUN ?? DEFAULT_ATTACHMENT_REHOST_MAX_PER_RUN
+    ),
+  };
 
   // Load per-resource cursors. A missing/null cursor => full backfill.
   const { data: cursorRows } = await supabase
@@ -109,8 +122,8 @@ export async function GET(req: Request) {
   await syncAllPages((p) => hcp.listEmployees(p), "technicians", mapEmployee, budget);
 
   const results: IncrementalResult[] = [
-    await syncResourceIncremental(supabase, "customers", (p) => hcp.listCustomers(p), mapCustomer, budget, cursors.get("customers") ?? null),
-    await syncResourceIncremental(supabase, "jobs", (p) => hcp.listJobs(p), mapJob, budget, cursors.get("jobs") ?? null),
+    await syncResourceIncremental(supabase, "customers", (p) => hcp.listCustomers(p), mapCustomer, budget, cursors.get("customers") ?? null, rehostBudget),
+    await syncResourceIncremental(supabase, "jobs", (p) => hcp.listJobs(p), mapJob, budget, cursors.get("jobs") ?? null, rehostBudget),
     await syncResourceIncremental(supabase, "estimates", (p) => hcp.listEstimates(p), mapEstimate, budget, cursors.get("estimates") ?? null),
     await syncResourceIncremental(supabase, "leads", (p) => hcp.listLeads(p), mapLead, budget, cursors.get("leads") ?? null),
   ];

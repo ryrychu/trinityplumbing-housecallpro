@@ -27,6 +27,23 @@ describe("extractAttachmentRows", () => {
     expect(rows[0].storage_path).toBeNull();
   });
 
+  // Live HCP attachments are {id, file_name, url, file_type} — there is no
+  // content_type key (OpenAPI Attachment schema confirms it). Reading the wrong
+  // name left the column null and uploaded re-hosted files with no content type.
+  it("maps HCP file_type into content_type", () => {
+    const rows = extractAttachmentRows("job", "j1", {
+      attachments: [{ id: "a1", url: "https://hcp/f.png", file_type: "image/png", file_name: "f.png" }],
+    });
+    expect(rows[0].content_type).toBe("image/png");
+  });
+
+  it("still accepts content_type as an alias", () => {
+    const rows = extractAttachmentRows("job", "j1", {
+      attachments: [{ id: "a1", url: "https://hcp/f.pdf", content_type: "application/pdf" }],
+    });
+    expect(rows[0].content_type).toBe("application/pdf");
+  });
+
   it("returns [] when there are no attachments", () => {
     expect(extractAttachmentRows("customer", "c1", {})).toEqual([]);
     expect(extractAttachmentRows("customer", "c1", { attachments: [] })).toEqual([]);
@@ -67,6 +84,48 @@ describe("syncAttachments", () => {
     const arg = upsert.mock.calls[0][0] as Array<{ storage_path: string | null; created_at: string | null }>;
     expect(arg[0].storage_path).toBeNull();
     expect(arg[0].created_at).toBe("2026-01-02T03:04:05Z");
+  });
+
+  // hcp_url is a presigned S3 link that expires in 1 hour, so re-hosting is the
+  // only way a file stays retrievable. Network calls are bounded per cron run
+  // (mirrors GeocodeBudget) so a first backfill cannot blow the 300s timeout.
+  it("stops re-hosting once the run budget is exhausted, but still upserts metadata", async () => {
+    const fetchSpy = vi.mocked(fetch);
+    fetchSpy.mockClear();
+    const upsert = vi.fn().mockResolvedValue({ error: null });
+    const supabase = { from: vi.fn(() => ({ upsert })) } as unknown as SupabaseClient;
+    const budget = { remaining: 1 };
+
+    await syncAttachments(
+      supabase,
+      "job",
+      "j1",
+      { attachments: [{ id: "a1", url: "https://hcp/1" }, { id: "a2", url: "https://hcp/2" }] },
+      { budget }
+    );
+
+    expect(fetchSpy).toHaveBeenCalledOnce(); // second attachment skipped by budget
+    expect(budget.remaining).toBe(0);
+    const rows = upsert.mock.calls[0][0] as Array<{ id: string }>;
+    expect(rows.map((r) => r.id)).toEqual(["a1", "a2"]); // metadata for both
+  });
+
+  it("does not touch the network when the budget starts at zero", async () => {
+    const fetchSpy = vi.mocked(fetch);
+    fetchSpy.mockClear();
+    const upsert = vi.fn().mockResolvedValue({ error: null });
+    const supabase = { from: vi.fn(() => ({ upsert })) } as unknown as SupabaseClient;
+
+    await syncAttachments(
+      supabase,
+      "job",
+      "j1",
+      { attachments: [{ id: "a1", url: "https://hcp/1" }] },
+      { budget: { remaining: 0 } }
+    );
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(upsert).toHaveBeenCalledOnce();
   });
 
   it("upserts extracted rows into the attachments table", async () => {

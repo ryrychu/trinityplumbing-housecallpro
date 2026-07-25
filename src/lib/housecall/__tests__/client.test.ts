@@ -60,6 +60,42 @@ describe("HousecallClient", () => {
     expect(() => new HousecallClient()).toThrow(/HOUSECALL_API_KEY/);
   });
 
+  // HCP omits attachments from list responses unless explicitly expanded
+  // ("Only present if expanded with attachments" — OpenAPI Attachment schema).
+  // Without this, every synced record carried no attachments key at all and the
+  // attachments table could never populate from the cron path.
+  it("expands attachments for jobs and customers", async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ jobs: [], customers: [], page: 1, total_pages: 1 }),
+    });
+
+    const client = new HousecallClient();
+    await client.listJobs();
+    await client.listCustomers();
+
+    const urls = vi.mocked(global.fetch).mock.calls.map((c) => String(c[0]));
+    expect(urls).toHaveLength(2);
+    for (const url of urls) expect(url).toContain("expand[]=attachments");
+  });
+
+  it("does not expand attachments for resources that carry none", async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ estimates: [], invoices: [], leads: [], employees: [], page: 1, total_pages: 1 }),
+    });
+
+    const client = new HousecallClient();
+    await client.listEstimates();
+    await client.listInvoices();
+    await client.listLeads();
+    await client.listEmployees();
+
+    for (const call of vi.mocked(global.fetch).mock.calls) {
+      expect(String(call[0])).not.toContain("expand[]");
+    }
+  });
+
   it("listLeads fetches /leads with the leads resource key", async () => {
     global.fetch = vi.fn().mockResolvedValue({
       ok: true,
