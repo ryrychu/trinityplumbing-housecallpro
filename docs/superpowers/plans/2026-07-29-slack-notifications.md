@@ -147,12 +147,31 @@ on conflict do nothing;
 -- fallback for an option with no id MUST match estimateOptionKey() in
 -- src/lib/notifications/detect.ts, or seeded rows will fail to suppress the
 -- notifications they exist to suppress.
+-- The jsonb_typeof guard is not decoration. jsonb_array_elements raises
+-- "cannot extract elements from a scalar/an object" on any non-array input,
+-- and that aborts the ENTIRE insert for ALL estimates — one malformed
+-- historical row would leave estimate_approved completely unseeded, which is
+-- exactly the partial-seed state this migration exists to prevent. A missing
+-- 'options' key is already safe (SQL NULL yields zero rows); an explicit JSON
+-- null, object, or scalar is not.
 insert into notifications_sent (kind, entity_id)
 select 'estimate_approved', e.id || ':' || coalesce(o->>'id', '0')
-from estimates e, jsonb_array_elements(e.raw->'options') o
+from estimates e,
+     jsonb_array_elements(
+       case when jsonb_typeof(e.raw->'options') = 'array'
+            then e.raw->'options'
+            else '[]'::jsonb
+       end
+     ) o
 where lower(o->>'approval_status') in ('approved', 'pro approved')
 on conflict do nothing;
 ```
+
+With that guard, no statement in this migration can fail on data shape, so the
+file does not depend on whether Supabase CLI wraps it in a transaction —
+partial application stops being reachable. Do **not** add explicit
+`begin;`/`commit;`: Supabase may already wrap the file, and a nested `BEGIN`
+only emits warnings.
 
 - [ ] **Step 2: Do NOT apply the migration**
 

@@ -152,9 +152,19 @@ insert into notifications_sent (kind, entity_id)
 select 'invoice_paid', id from invoices where status = 'paid'
 on conflict do nothing;
 
+-- jsonb_array_elements raises on any non-array input, and that aborts the
+-- ENTIRE insert for ALL estimates. One malformed row would leave
+-- estimate_approved unseeded — the exact partial-seed state this migration
+-- exists to prevent — so the type is guarded.
 insert into notifications_sent (kind, entity_id)
 select 'estimate_approved', e.id || ':' || coalesce(o->>'id', '0')
-from estimates e, jsonb_array_elements(e.raw->'options') o
+from estimates e,
+     jsonb_array_elements(
+       case when jsonb_typeof(e.raw->'options') = 'array'
+            then e.raw->'options'
+            else '[]'::jsonb
+       end
+     ) o
 where lower(o->>'approval_status') in ('approved', 'pro approved')
 on conflict do nothing;
 ```
