@@ -22,7 +22,7 @@ export async function claimMany(
   kind: NotificationKind,
   entityIds: string[]
 ): Promise<string[]> {
-  const unique = [...new Set(entityIds)];
+  const unique = Array.from(new Set(entityIds));
   if (unique.length === 0) return [];
 
   const { data, error } = await supabase
