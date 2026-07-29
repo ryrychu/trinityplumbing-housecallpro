@@ -943,7 +943,13 @@ export function detectApprovedEstimates(estimates: unknown[]): ApprovedEstimateL
 
     // Approval is per-option: approving option B must not be silenced by
     // option A, so each approved option is its own claim key.
-    for (const opt of est.options ?? []) {
+    //
+    // Array.isArray, not `?? []`: `??` only substitutes on null/undefined, so a
+    // non-array `options` (an object or scalar) would make for...of throw and
+    // abort the ENTIRE batch, losing every other estimate in the run. This
+    // mirrors the jsonb_typeof guard in migration 0006 — the same malformed
+    // shape is documented there as occurring in real data.
+    for (const opt of Array.isArray(est.options) ? est.options : []) {
       if (!APPROVED_STATUSES.has((opt.approval_status ?? "").toLowerCase())) continue;
       out.push({
         key: estimateOptionKey(est.id, opt.id),
