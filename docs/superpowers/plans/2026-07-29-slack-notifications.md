@@ -154,14 +154,19 @@ where lower(o->>'approval_status') in ('approved', 'pro approved')
 on conflict do nothing;
 ```
 
-- [ ] **Step 2: Apply the migration**
+- [ ] **Step 2: Do NOT apply the migration**
 
-Run: `npx supabase db push`
-Expected: migration applies without error.
+**Decision (2026-07-29): the repo owner applies this to production themselves.**
+Write and commit the file only. Do not run `npx supabase db push`, `npx supabase
+db execute`, or any other command that writes to the Supabase project.
 
-- [ ] **Step 3: Verify the seed took**
+Applying it is Task 13's rollout step, performed by a human:
 
-In the Supabase SQL editor (or `npx supabase db execute`), run:
+```bash
+npx supabase db push
+```
+
+followed by this verification, whose result gates everything after it:
 
 ```sql
 select kind, count(*) from notifications_sent group by kind;
@@ -169,9 +174,11 @@ select kind, count(*) from notifications_sent group by kind;
 
 Expected: `invoice_paid` ≈ **2217** (matching `select count(*) from invoices where status='paid'`), and `estimate_approved` > 0.
 
-**If `invoice_paid` is 0 or near 0, STOP.** The seed did not take, and proceeding will produce a Slack flood. Diagnose before continuing.
+**If `invoice_paid` is 0 or near 0, STOP.** The seed did not take, and proceeding will produce a Slack flood.
 
-- [ ] **Step 4: Commit**
+Tasks 3–13 do not depend on the migration having been applied — every test mocks Supabase — so the rest of the plan proceeds normally against the unapplied schema.
+
+- [ ] **Step 3: Commit**
 
 ```bash
 git add supabase/migrations/0006_notifications.sql
@@ -1279,7 +1286,9 @@ describe("listPaidInvoicesSince", () => {
     expect(result.items).toEqual([{ id: "inv_1" }]);
     const url = fetchMock.mock.calls[0][0] as string;
     expect(url).toContain("/invoices?");
-    expect(url).toContain("status=paid");
+    // Array form, unencoded brackets. Bare `status=paid` returns 422
+    // "must be an array" on the live API (probe, 2026-07-29).
+    expect(url).toContain("status[]=paid");
     expect(url).toContain("paid_at_min=2026-07-29T00%3A00%3A00Z");
     expect(url).toContain("sort_by=paid_at");
     expect(url).toContain("sort_direction=desc");
@@ -1316,13 +1325,17 @@ Add to the `HousecallClient` class in `src/lib/housecall/client.ts`. It bypasses
   // Filtering server-side on status + paid_at makes this ONE call per run, so
   // 15-minute latency is cheaper than the 20-hour reconcile, not costlier.
   // Query params verified live by scripts/probe-invoice-filters.mjs.
+  //
+  // `status[]=paid`, not `status=paid`: the live API returns 422 "must be an
+  // array" for the bare form (probe, 2026-07-29). Unencoded brackets, matching
+  // the `expand[]` convention in request() above.
   async listPaidInvoicesSince(
     paidAtMin: string | null,
     page = 1
   ): Promise<{ items: HcpInvoice[]; page: number; totalPages: number }> {
     const since = paidAtMin ? `&paid_at_min=${encodeURIComponent(paidAtMin)}` : "";
     const res = await fetch(
-      `${BASE_URL}/invoices?page=${page}&page_size=50&status=paid&sort_by=paid_at&sort_direction=desc${since}`,
+      `${BASE_URL}/invoices?page=${page}&page_size=50&status[]=paid&sort_by=paid_at&sort_direction=desc${since}`,
       { headers: { Authorization: `Bearer ${this.apiKey}`, Accept: "application/json" } }
     );
 
