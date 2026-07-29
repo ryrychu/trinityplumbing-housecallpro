@@ -89,7 +89,7 @@ export function formatPaidInvoices(lines: PaidInvoiceLine[]): string {
   const body = lines
     .map((l) => {
       const number = l.invoiceNumber ? ` #${l.invoiceNumber}` : "";
-      return `• Invoice paid — ${l.customerName ?? "Unknown customer"} — ${formatCents(l.amountCents)}${number}`;
+      return `• ${l.customerName ?? "Unknown customer"} — ${formatCents(l.amountCents)}${number}`;
     })
     .join("\n");
   return `${header}\n${body}`;

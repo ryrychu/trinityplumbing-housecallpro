@@ -78,6 +78,19 @@ describe("formatDailyDigest", () => {
     expect(out).not.toContain("undefined");
     expect(out).not.toContain("NaN");
   });
+
+  it("renders zero miles and zero drive minutes rather than dropping them — a job in Averill Park itself is a real case", () => {
+    const zeroDistance = { ...row, id: "job_3", miles: 0, driveMinutes: 0 };
+    const out = formatDailyDigest(now, [zeroDistance], 4);
+    expect(out).toContain("0 mi");
+    expect(out).toContain("0 min");
+  });
+
+  it("shows zero minutes since last sync rather than falling back to 'unknown'", () => {
+    const out = formatDailyDigest(now, [row], 0);
+    expect(out).toContain("last sync: 0 min ago");
+    expect(out).not.toContain("last sync: unknown");
+  });
 });
 
 describe("formatWeeklyLookahead", () => {
@@ -114,7 +127,7 @@ describe("formatPaidInvoices", () => {
       { id: "inv_1", customerName: "Mary Kolakowski", amountCents: 428000, invoiceNumber: "1042" },
       { id: "inv_2", customerName: null, amountCents: null, invoiceNumber: null },
     ]);
-    expect(out).toContain("Invoice paid");
+    expect(out).toContain("2 invoices paid");
     expect(out).toContain("Mary Kolakowski");
     expect(out).toContain("$4,280.00");
     expect(out).toContain("#1042");
