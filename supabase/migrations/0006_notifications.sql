@@ -13,8 +13,9 @@ create table notifications_sent (
 );
 
 -- SEEDS — must stay in this file, never split into 0007.
--- 2,217 invoices are already paid and ~hundreds of estimate options already
--- approved. Without these seeds the first notifier run treats every one as new
+-- Thousands of invoices are already paid and ~hundreds of estimate options
+-- already approved (as of 2026-07-29, ~2,234 paid invoices; verify against live count).
+-- Without these seeds the first notifier run treats every one as new
 -- and posts thousands of Slack messages.
 
 insert into notifications_sent (kind, entity_id)
@@ -25,8 +26,18 @@ on conflict do nothing;
 -- fallback for an option with no id MUST match estimateOptionKey() in
 -- src/lib/notifications/detect.ts, or seeded rows will fail to suppress the
 -- notifications they exist to suppress.
+-- Guard jsonb_array_elements with a type check: if a historical estimate has
+-- options stored as null, an object, or a scalar, unguarded jsonb_array_elements
+-- would raise an error and abort the entire insert, leaving estimate_approved
+-- completely unseeded (the exact partial-seed state this migration exists to prevent).
 insert into notifications_sent (kind, entity_id)
 select 'estimate_approved', e.id || ':' || coalesce(o->>'id', '0')
-from estimates e, jsonb_array_elements(e.raw->'options') o
+from estimates e,
+     jsonb_array_elements(
+       case when jsonb_typeof(e.raw->'options') = 'array'
+            then e.raw->'options'
+            else '[]'::jsonb
+       end
+     ) o
 where lower(o->>'approval_status') in ('approved', 'pro approved')
 on conflict do nothing;
