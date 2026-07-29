@@ -25,6 +25,18 @@ npm run build                # production build / typecheck / lint
 - `NEXT_PUBLIC_SUPABASE_ANON_KEY` — Supabase anon key.
 - `SUPABASE_SERVICE_ROLE_KEY` — service role key (server-only, never exposed to the client).
 - `CRON_SECRET` — shared secret for authorizing the `/api/cron/sync` polling route.
+- `SLACK_WEBHOOK_SCHEDULE` — Slack incoming webhook for the job-schedule channel
+  (6:00 a.m. weekday digest + Monday week-ahead), read in
+  `src/app/api/cron/sync/route.ts`.
+- `SLACK_WEBHOOK_INVOICES` — Slack incoming webhook for the paid-invoice
+  channel, read in `src/lib/notifications/dispatch.ts`.
+- `SLACK_WEBHOOK_ESTIMATES` — Slack incoming webhook for the approved-estimate
+  channel, read in `src/lib/notifications/dispatch.ts`.
+- `SLACK_ALERTS_ENABLED` — master kill switch for all Slack output. Only the
+  exact string `true` enables posting; unset, empty, or any other value (e.g.
+  `false`, `1`) disables it. **Do not set this until you have applied and
+  verified migration `0006_notifications.sql` — see
+  [`docs/SLACK-ROLLOUT.md`](docs/SLACK-ROLLOUT.md).**
 
 ## Database
 
@@ -49,6 +61,39 @@ HMAC-SHA256 of the raw request body sent in the `X-HousecallPro-Signature`
 header — confirm this header name against your account's webhook settings and
 update `src/app/api/webhooks/housecall/route.ts` if it differs.
 
+## Slack notifications
+
+Three notification types post to Slack, all gated behind `SLACK_ALERTS_ENABLED`:
+a 6:00 a.m. weekday schedule digest, a Monday week-ahead digest, and near-real-time
+alerts for paid invoices and approved estimates. **Do not enable this without
+first reading [`docs/SLACK-ROLLOUT.md`](docs/SLACK-ROLLOUT.md)** — the live
+database already holds thousands of paid invoices and approved estimates, and
+enabling alerts before the dedupe ledger is seeded and verified will flood the
+Slack channels with historical data.
+
+Two behaviors worth understanding before touching this:
+
+- **Digest timing is decided in code, not by the cron schedule.** Every run of
+  `GET /api/cron/sync` evaluates the current time in `America/New_York`
+  (`src/lib/notifications/schedule.ts`) and sends that day's digest if it's a
+  weekday between 06:00 and 12:00 local time and one hasn't been sent yet
+  (`claim()` in `src/lib/notifications/dedupe.ts` guarantees exactly one per
+  day). Cron expressions can't express "6am Eastern" — only a fixed UTC hour,
+  which is wrong for half the year across DST — so the window check runs on
+  every invocation instead. A missed 6:00 run self-heals on the next one,
+  right up until the 12:00 cutoff.
+- **This makes an external scheduler load-bearing.** For the digest to arrive
+  anywhere near 6am, and for paid-invoice alerts to be timely, something must
+  call `GET /api/cron/sync` with an `Authorization: Bearer $CRON_SECRET` header
+  roughly every 15 minutes. The `vercel.json` cron (`0 8 * * *`, once a day) is
+  **not** that scheduler — it's a safety net, because Vercel's Hobby plan caps
+  cron invocations at once per day. Paid invoices have no Housecall Pro
+  webhook and are only ever picked up by this polling route, so if the
+  external scheduler dies silently, paid-invoice alerts stop with it — that's
+  why the daily digest footer includes `last sync: N min ago`, as a tripwire.
+  Estimate approvals, by contrast, arrive by webhook and post almost
+  instantly regardless of the poller's health.
+
 ## Deploy
 
 ```bash
@@ -59,11 +104,16 @@ vercel env add NEXT_PUBLIC_SUPABASE_URL
 vercel env add NEXT_PUBLIC_SUPABASE_ANON_KEY
 vercel env add SUPABASE_SERVICE_ROLE_KEY
 vercel env add CRON_SECRET
+vercel env add SLACK_WEBHOOK_SCHEDULE
+vercel env add SLACK_WEBHOOK_INVOICES
+vercel env add SLACK_WEBHOOK_ESTIMATES
+# Leave SLACK_ALERTS_ENABLED unset for now — see docs/SLACK-ROLLOUT.md.
 vercel --prod
 ```
 
-The Vercel Cron job defined in `vercel.json` runs the backfill sync every 15
-minutes automatically once deployed — no manual scheduling needed. Confirm
-whether your Vercel plan authorizes cron requests via a `Bearer $CRON_SECRET`
-`Authorization` header or the built-in `x-vercel-cron` header, and adjust the
-auth check in `src/app/api/cron/sync/route.ts` accordingly before deploying.
+The Vercel Cron job defined in `vercel.json` runs the sync once a day as a
+safety net — it is not a substitute for the external 15-minute scheduler
+described above. Confirm whether your Vercel plan authorizes cron requests via
+a `Bearer $CRON_SECRET` `Authorization` header or the built-in `x-vercel-cron`
+header, and adjust the auth check in `src/app/api/cron/sync/route.ts`
+accordingly before deploying.
