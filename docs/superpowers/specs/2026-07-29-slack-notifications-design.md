@@ -24,6 +24,12 @@ These are load-bearing. Each is documented in the repo already.
   only for Jobs, Job Appointments, Estimates, Estimate Options, Customers, and
   Leads (`docs/NEXT-SESSION-HANDOFF.md`). Paid-invoice detection *must* be
   poll-based. Estimates *do* have webhooks, so approvals can be near-instant.
+- **The current invoice poll is gated to once per 20 hours.** Invoices carry no
+  `updated_at`, so the incremental cursor can never advance and every run
+  re-paged all ~2.9k invoices (58 API calls, ~70s). `DEFAULT_INVOICE_RECONCILE_HOURS`
+  in `src/app/api/cron/sync/route.ts` caps that at one full pass per 20h.
+  **Naively reusing that path would make "real-time" paid-invoice alerts up to
+  20 hours stale** — see "Targeted invoice polling" below for the fix.
 - **Vercel Hobby caps cron at once per day.** `vercel.json` runs `0 8 * * *`;
   commit `a01c105` set that deliberately. An external scheduler (GitHub Actions
   or similar) will ping `/api/cron/sync` every 15 minutes instead.
@@ -122,6 +128,12 @@ create table notifications_sent (
 This is idempotent under retries, overlapping cron runs, and duplicate HCP
 webhook deliveries, with no locking.
 
+The primitive is **batch**: `claimMany(kind, ids) -> newlyClaimedIds`, a single
+`upsert(..., { ignoreDuplicates: true }).select()`. Postgres returns only the
+rows it actually inserted. This matters because the 20-hour full reconcile
+re-touches all ~2,200 paid invoices; per-row claims would be 2,200 round trips,
+whereas `claimMany` is one. `claim()` is a thin single-id wrapper.
+
 **Trade-off, accepted:** a crash between insert and post loses that one
 notification. The inverse order would risk double-posting on every retry.
 Losing an alert beats spamming the channel, and the daily digest re-surfaces the
@@ -208,7 +220,45 @@ This is deliberate: a "find all paid invoices not yet notified" query would hit
 the 1000-row PostgREST cap that already caused a production bug. Detection stays
 O(changes) and that bug class cannot recur.
 
-- **Invoice paid** — touched invoice with `status === 'paid'` →
+### Targeted invoice polling
+
+The 20-hour reconcile gate would defeat the whole point of a 15-minute
+scheduler. `housecall.v1.yaml` (lines 3341–3465) documents query parameters on
+`GET /invoices` that the existing client does not use:
+
+- `status` — enum `open | pending_payment | paid | voided | uncollectible | canceled`
+- `paid_at_min` / `paid_at_max` — ISO instants
+- `sort_by` — enum including `paid_at`
+
+So paid-invoice detection can ask for exactly what it needs:
+
+```
+GET /invoices?status=paid&paid_at_min=<watermark>&sort_by=paid_at&sort_direction=desc&page_size=50
+```
+
+**One API call per run instead of 58**, and the result is already scoped to
+newly-paid invoices. This makes 15-minute latency *cheaper* than the current
+20-hour reconcile, not more expensive.
+
+**This must be verified empirically before it is relied on.** The same OpenAPI
+file previously documented behavior the live account did not honor — the item 4
+probe found `updated_after` / `updated_since` silently ignored, and the live
+invoice payload has no `updated_at` even though `sort_by` lists it. Task 1 is a
+probe script; the plan branches on its result.
+
+The watermark is stored in `sync_cursors` under resource `invoices_paid`
+(`last_updated_at` = max `paid_at` seen), reusing the existing table rather than
+adding another. `notifications_sent` remains the correctness guarantee; the
+watermark is only a fetch optimization.
+
+**Fallback if the filters do not work:** keep the existing full reconcile but
+lower `INVOICE_RECONCILE_HOURS` to 1, accepting ~1,400 API calls/day for
+one-hour latency. Slower and costlier, but no code restructuring.
+
+The 20-hour full reconcile stays either way, as a correctness backstop against a
+missed or mis-filtered window.
+
+- **Invoice paid** — invoice with `status === 'paid'` →
   `claim('invoice_paid', id)` → post. A newly-created already-paid invoice
   notifies, which is correct.
 - **Estimate approved** — for each `raw.options[]` with `approval_status` in
