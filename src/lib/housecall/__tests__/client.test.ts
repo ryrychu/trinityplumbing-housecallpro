@@ -111,4 +111,36 @@ describe("HousecallClient", () => {
       expect.anything()
     );
   });
+
+  describe("listPaidInvoicesSince", () => {
+    it("requests only paid invoices at or after the watermark, newest first", async () => {
+      global.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ invoices: [{ id: "inv_1" }], page: 1, total_pages: 1 }),
+      });
+
+      const client = new HousecallClient();
+      const result = await client.listPaidInvoicesSince("2026-07-29T00:00:00Z");
+
+      expect(result.items).toEqual([{ id: "inv_1" }]);
+      const url = vi.mocked(global.fetch).mock.calls[0][0] as string;
+      expect(url).toContain("/invoices?");
+      // Array form, unencoded brackets. Bare `status=paid` returns 422
+      // "must be an array" on the live API (probe, 2026-07-29).
+      expect(url).toContain("status[]=paid");
+      expect(url).toContain("paid_at_min=2026-07-29T00%3A00%3A00Z");
+      expect(url).toContain("sort_by=paid_at");
+      expect(url).toContain("sort_direction=desc");
+    });
+
+    it("omits paid_at_min entirely on a null watermark", async () => {
+      global.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ invoices: [], page: 1, total_pages: 1 }),
+      });
+
+      await new HousecallClient().listPaidInvoicesSince(null);
+      expect(vi.mocked(global.fetch).mock.calls[0][0]).not.toContain("paid_at_min");
+    });
+  });
 });
