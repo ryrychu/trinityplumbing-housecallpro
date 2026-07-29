@@ -22,10 +22,17 @@ describe("slackAlertsEnabled", () => {
 });
 
 describe("postSlack", () => {
+  let errorSpy: ReturnType<typeof vi.spyOn>;
+  let warnSpy: ReturnType<typeof vi.spyOn>;
+
   beforeEach(() => {
     vi.restoreAllMocks();
-    vi.spyOn(console, "error").mockImplementation(() => {});
-    vi.spyOn(console, "warn").mockImplementation(() => {});
+    errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
   it("posts the text as JSON to the webhook url", async () => {
@@ -48,6 +55,8 @@ describe("postSlack", () => {
 
     expect(await postSlack(undefined, "hello")).toBe(false);
     expect(fetchMock).not.toHaveBeenCalled();
+    expect(warnSpy).toHaveBeenCalled();
+    expect(errorSpy).not.toHaveBeenCalled();
   });
 
   it("returns false instead of throwing when Slack responds non-2xx", async () => {
@@ -56,10 +65,13 @@ describe("postSlack", () => {
       vi.fn().mockResolvedValue({ ok: false, status: 500, text: async () => "boom" })
     );
     expect(await postSlack("https://hooks.slack.com/services/XXX", "hello")).toBe(false);
+    expect(errorSpy).toHaveBeenCalled();
+    expect(warnSpy).not.toHaveBeenCalled();
   });
 
   it("returns false instead of throwing when fetch rejects", async () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("network down")));
     expect(await postSlack("https://hooks.slack.com/services/XXX", "hello")).toBe(false);
+    expect(errorSpy).toHaveBeenCalled();
   });
 });
