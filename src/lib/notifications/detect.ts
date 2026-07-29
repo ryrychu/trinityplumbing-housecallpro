@@ -37,6 +37,13 @@ function customerName(c: RawCustomer | undefined): string | null {
   return person || c.company || null;
 }
 
+// Guard unvalidated string fields to prevent .toLowerCase() throwing on
+// non-string values (numbers, booleans). Returns empty string if not a string,
+// which fails the approval check gracefully.
+function asLower(v: unknown): string {
+  return typeof v === "string" ? v.toLowerCase() : "";
+}
+
 // The "0" fallback MUST match coalesce(o->>'id','0') in migration 0006, or
 // seeded rows will not suppress the notifications they were written to suppress.
 export function estimateOptionKey(
@@ -58,7 +65,7 @@ export function detectPaidInvoices(invoices: unknown[]): PaidInvoiceLine[] {
       customer?: RawCustomer;
     };
     if (!inv?.id) continue;
-    if ((inv.status ?? "").toLowerCase() !== PAID_STATUS) continue;
+    if (asLower(inv.status) !== PAID_STATUS) continue;
 
     out.push({
       id: inv.id,
@@ -90,8 +97,12 @@ export function detectApprovedEstimates(estimates: unknown[]): ApprovedEstimateL
 
     // Approval is per-option: approving option B must not be silenced by
     // option A, so each approved option is its own claim key.
-    for (const opt of est.options ?? []) {
-      if (!APPROVED_STATUSES.has((opt.approval_status ?? "").toLowerCase())) continue;
+    // Guard est.options with Array.isArray to match the parallel jsonb_typeof
+    // guard in supabase/migrations/0006_notifications.sql. If options is not
+    // an array (e.g., an object or scalar), treat it as empty to prevent
+    // throwing on for...of iteration and aborting the entire batch.
+    for (const opt of Array.isArray(est.options) ? est.options : []) {
+      if (!APPROVED_STATUSES.has(asLower(opt.approval_status))) continue;
       out.push({
         key: estimateOptionKey(est.id, opt.id),
         customerName: customerName(est.customer),

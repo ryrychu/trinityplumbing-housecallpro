@@ -10,6 +10,12 @@ describe("estimateOptionKey", () => {
     expect(estimateOptionKey("est_1", null)).toBe("est_1:0");
     expect(estimateOptionKey("est_1", undefined)).toBe("est_1:0");
   });
+
+  it("preserves empty string as key component, does not use '0' fallback", () => {
+    // SQL coalesce(o->>'id','0') only fires on NULL, not empty string.
+    // Must use ?? not || to preserve this divergence.
+    expect(estimateOptionKey("est_1", "")).toBe("est_1:");
+  });
 });
 
 describe("detectPaidInvoices", () => {
@@ -43,6 +49,19 @@ describe("detectPaidInvoices", () => {
 
   it("skips records with no id", () => {
     expect(detectPaidInvoices([{ status: "paid" }])).toEqual([]);
+  });
+
+  it("survives non-string status values without throwing", () => {
+    // Guard against unvalidated unknown fields that may be numbers, booleans, etc.
+    const out = detectPaidInvoices([
+      { id: "inv_3", status: 123, customer }, // numeric status
+      { id: "inv_4", status: true, customer }, // boolean status
+      { id: "inv_5", status: "paid", customer }, // valid status follows
+    ]);
+    // Malformed statuses fail the match gracefully; valid invoice is detected.
+    expect(out).toEqual([
+      { id: "inv_5", customerName: "Mary Kolakowski", amountCents: null, invoiceNumber: null },
+    ]);
   });
 });
 
@@ -88,5 +107,55 @@ describe("detectApprovedEstimates", () => {
 
   it("survives an estimate with no options array", () => {
     expect(detectApprovedEstimates([{ id: "est_4", customer }])).toEqual([]);
+  });
+
+  it("survives options as an object and skips that estimate gracefully", () => {
+    // Guard est.options with Array.isArray to match jsonb_typeof in migration 0006.
+    // If options is an object (not an array), treat as empty.
+    const out = detectApprovedEstimates([
+      {
+        id: "est_5",
+        customer,
+        options: { id: "opt_x", approval_status: "approved" }, // object, not array
+      },
+    ]);
+    expect(out).toEqual([]);
+  });
+
+  it("survives options as a scalar and skips that estimate gracefully", () => {
+    // If options is a scalar (number, string, boolean), treat as empty.
+    const out = detectApprovedEstimates([
+      { id: "est_6", customer, options: 5 },
+    ]);
+    expect(out).toEqual([]);
+  });
+
+  it("skips malformed estimate but detects valid estimates in same batch", () => {
+    // Critical: a malformed estimate must not abort the entire batch.
+    const out = detectApprovedEstimates([
+      { id: "est_7", customer, options: {} }, // malformed (object, not array)
+      { id: "est_8", customer, options: [{ id: "o1", approval_status: "approved", total_amount: 300 }] }, // valid
+    ]);
+    expect(out).toEqual([
+      { key: "est_8:o1", customerName: "R. Hoffman", amountCents: 300, optionName: null },
+    ]);
+  });
+
+  it("survives non-string approval_status values without throwing", () => {
+    // Guard against unvalidated approval_status that may be numbers, booleans, etc.
+    const out = detectApprovedEstimates([
+      {
+        id: "est_9",
+        customer,
+        options: [
+          { id: "o1", approval_status: 123 }, // numeric status
+          { id: "o2", approval_status: true }, // boolean status
+          { id: "o3", approval_status: "approved" }, // valid status follows
+        ],
+      },
+    ]);
+    expect(out).toEqual([
+      { key: "est_9:o3", customerName: "R. Hoffman", amountCents: null, optionName: null },
+    ]);
   });
 });
