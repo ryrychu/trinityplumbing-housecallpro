@@ -172,7 +172,7 @@ followed by this verification, whose result gates everything after it:
 select kind, count(*) from notifications_sent group by kind;
 ```
 
-Expected: `invoice_paid` ≈ **2217** (matching `select count(*) from invoices where status='paid'`), and `estimate_approved` > 0.
+Expected: `invoice_paid` in the **low 2,200s** — it must equal `select count(*) from invoices where status='paid'` exactly. (The go-live census recorded 2,217; the 2026-07-29 probe saw ~2,234. The number grows over time, so match it against the live count, not against a constant.) `estimate_approved` > 0.
 
 **If `invoice_paid` is 0 or near 0, STOP.** The seed did not take, and proceeding will produce a Slack flood.
 
