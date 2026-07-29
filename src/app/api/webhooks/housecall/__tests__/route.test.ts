@@ -16,6 +16,7 @@ vi.mock("@/lib/notifications/dispatch", () => ({
 import { POST } from "../route";
 import { syncOneRecord } from "@/lib/sync/syncService";
 import { notifyApprovedEstimates } from "@/lib/notifications/dispatch";
+import { getSupabaseServerClient } from "@/lib/supabase/client";
 
 // A Housecall Pro delivery is `{ event, event_occurred_at, company_id, <typeKey> }`
 // where <typeKey> is the singular resource name (e.g. "customer") and holds the
@@ -281,5 +282,63 @@ describe("POST /api/webhooks/housecall", () => {
 
     expect(res.status).toBe(200);
     expect(notifyApprovedEstimates).not.toHaveBeenCalled();
+  });
+
+  // Regression guard for the notification's own try/catch: a Slack failure
+  // (async rejection from notifyApprovedEstimates) must be invisible to HCP —
+  // same 200, same success body — not just "not a 500". A future edit that
+  // moves this call outside its try/catch, or lets its rejection propagate,
+  // would otherwise slip past every other test here.
+  it("swallows an async notification failure and still returns the normal success response", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.mocked(notifyApprovedEstimates).mockRejectedValueOnce(new Error("slack down"));
+
+    const env = {
+      event: "estimate.updated",
+      event_occurred_at: "2026-07-24T05:38:14Z",
+      company_id: "co_1",
+      estimate: {
+        id: "est_1",
+        options: [{ id: "opt_a", approval_status: "approved", total_amount: 100 }],
+      },
+    };
+    const req = signedRequest(env, "test-secret");
+
+    const res = await POST(req);
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true });
+    expect(errorSpy).toHaveBeenCalled();
+    errorSpy.mockRestore();
+  });
+
+  // Same guarantee, but for the real-world trigger: getSupabaseServerClient()
+  // throws synchronously when a Supabase env var is missing in production.
+  // That throw happens while evaluating the arguments to
+  // notifyApprovedEstimates(...), still inside the notification's try block,
+  // so it must be caught there rather than escaping to the response.
+  it("swallows a synchronous getSupabaseServerClient() failure and still returns 200", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.mocked(getSupabaseServerClient).mockImplementationOnce(() => {
+      throw new Error("Missing env var: NEXT_PUBLIC_SUPABASE_URL");
+    });
+
+    const env = {
+      event: "estimate.updated",
+      event_occurred_at: "2026-07-24T05:38:14Z",
+      company_id: "co_1",
+      estimate: {
+        id: "est_1",
+        options: [{ id: "opt_a", approval_status: "approved", total_amount: 100 }],
+      },
+    };
+    const req = signedRequest(env, "test-secret");
+
+    const res = await POST(req);
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true });
+    expect(errorSpy).toHaveBeenCalled();
+    errorSpy.mockRestore();
   });
 });
