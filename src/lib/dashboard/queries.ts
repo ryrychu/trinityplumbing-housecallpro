@@ -81,7 +81,7 @@ interface TechRow {
   last_name: string | null;
 }
 
-interface TodayScheduleRow {
+export interface TodayScheduleRow {
   id: string;
   scheduledStart: string | null;
   customerName: string | null;
