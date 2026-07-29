@@ -85,14 +85,19 @@ Two behaviors worth understanding before touching this:
 - **This makes an external scheduler load-bearing.** For the digest to arrive
   anywhere near 6am, and for paid-invoice alerts to be timely, something must
   call `GET /api/cron/sync` with an `Authorization: Bearer $CRON_SECRET` header
-  roughly every 15 minutes. The `vercel.json` cron (`0 8 * * *`, once a day) is
-  **not** that scheduler — it's a safety net, because Vercel's Hobby plan caps
-  cron invocations at once per day. Paid invoices have no Housecall Pro
-  webhook and are only ever picked up by this polling route, so if the
-  external scheduler dies silently, paid-invoice alerts stop with it — that's
-  why the daily digest footer includes `last sync: N min ago`, as a tripwire.
-  Estimate approvals, by contrast, arrive by webhook and post almost
-  instantly regardless of the poller's health.
+  roughly every 15 minutes. The `vercel.json` cron (`0 11 * * *`, once a day)
+  is **not** that scheduler — it's a safety net, because Vercel's Hobby plan
+  caps cron invocations at once per day. It is scheduled for 11:00 UTC
+  specifically because that is the only hour that lands inside the 06:00–12:00
+  `America/New_York` digest window year-round (06:00 EST in winter, 07:00 EDT
+  in summer) — any earlier UTC hour, including the previous `0 8 * * *`, falls
+  before 06:00 Eastern in both DST regimes and can only ever run the sync,
+  never produce a digest. Paid invoices have no Housecall Pro webhook and are
+  only ever picked up by this polling route, so if the external scheduler dies
+  silently, paid-invoice alerts stop with it — that's why the daily digest
+  footer includes `last sync: N min ago`, as a tripwire. Estimate approvals,
+  by contrast, arrive by webhook and post almost instantly regardless of the
+  poller's health.
 
 ## Deploy
 

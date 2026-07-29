@@ -122,11 +122,31 @@ paid invoices and approved estimates, plus the daily/weekly schedule digest
 when its time window comes around (see the README's "Slack notifications"
 section for the digest-timing rule).
 
-Confirm the next weekday morning's digest arrives in the schedule channel
-between 6:00 and 8:00 a.m. Eastern (whichever run happens to land first in
-that window — see below). Check its `last sync: N min ago` footer; a large
-number there is your first sign the external scheduler (Step 6) isn't
-running yet or has stalled.
+Don't wait until tomorrow morning to find out whether the wiring works —
+trigger a run by hand right now:
+
+```bash
+curl -H "Authorization: Bearer <CRON_SECRET>" https://<your-vercel-domain>/api/cron/sync
+```
+
+**This only produces a digest if you run it inside the 06:00–12:00 Eastern
+window** (`isDailyDigestDue`/`isWeeklyLookaheadDue` in
+`src/lib/notifications/schedule.ts`). Outside that window — say, you're
+doing this rollout at 3pm — the call still syncs normally and returns
+`{ "ok": true, ... }`, it just correctly declines to post a digest. That is
+expected behavior, not a failure; don't take an empty schedule channel at
+3pm as a sign anything is broken. If you want to see a digest post
+immediately as a smoke test, run the curl command again between 6:00 a.m.
+and 12:00 p.m. Eastern on a weekday (Monday if you also want to see the
+week-ahead message). Paid-invoice and approved-estimate alerts, by contrast,
+post any time there's genuinely new data, regardless of the hour — those you
+can confirm right now if you have a live one to trigger.
+
+Once you do land a run inside the window (whether by hand or via the
+`0 11 * * *` `vercel.json` cron — see the README for why that specific UTC
+hour was chosen), confirm the digest arrives in the schedule channel and
+check its `last sync: N min ago` footer; a large number there is your first
+sign the external scheduler (Step 6) isn't running yet or has stalled.
 
 ---
 
@@ -158,12 +178,15 @@ roughly every 15 minutes. This is genuinely load-bearing, not a nice-to-have:
   poller, so they keep working even if the scheduler goes down — only the
   digest and the paid-invoice alerts depend on it.
 
-The `vercel.json` cron (`0 8 * * *`, once daily) stays in place as a safety
+The `vercel.json` cron (`0 11 * * *`, once daily) stays in place as a safety
 net — it is not, and was never meant to be, the primary scheduler. It exists
-because Vercel's Hobby plan caps cron at once a day; it guarantees the sync
-(and therefore a chance at the digest) runs at least once even if the
-external scheduler is down, but on Hobby it cannot deliver 15-minute
-paid-invoice timeliness on its own.
+because Vercel's Hobby plan caps cron at once a day; 11:00 UTC is chosen
+specifically because it's the only hour that lands inside the 06:00–12:00
+`America/New_York` digest window in both DST regimes (06:00 EST in winter,
+07:00 EDT in summer), so this safety net can actually produce a digest and
+not just a silent sync. It guarantees the sync (and a real chance at the
+digest) runs at least once even if the external scheduler is down, but on
+Hobby it cannot deliver 15-minute paid-invoice timeliness on its own.
 
 ---
 
