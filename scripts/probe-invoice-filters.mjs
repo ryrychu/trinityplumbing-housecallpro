@@ -25,19 +25,23 @@ const baseline = await get("page=1&page_size=50");
 console.log("baseline           :", baseline.items?.length, "items, total_pages", baseline.total);
 console.log("  sample keys      :", Object.keys(baseline.items?.[0] ?? {}).join(", "));
 
-const paidOnly = await get("page=1&page_size=50&status=paid");
+// housecall.v1.yaml types `status` as an array, and the live API enforces it
+// literally: a bare `status=paid` 422s with {"errors":{"status":"must be an
+// array"}}. Confirmed 2026-07-29. Must be sent as `status[]=paid` (unencoded
+// brackets, same convention as `expand[]` in src/lib/housecall/client.ts).
+const paidOnly = await get("page=1&page_size=50&status[]=paid");
 const statuses = new Set((paidOnly.items ?? []).map((i) => i.status));
-console.log("status=paid        :", paidOnly.items?.length, "items, statuses seen:", [...statuses]);
+console.log("status[]=paid      :", paidOnly.items?.length, "items, statuses seen:", [...statuses]);
 console.log("  FILTER WORKS?    :", statuses.size === 1 && statuses.has("paid"));
 
 const since = new Date(Date.now() - 30 * 86400000).toISOString();
-const recent = await get(`page=1&page_size=50&status=paid&paid_at_min=${since}`);
+const recent = await get(`page=1&page_size=50&status[]=paid&paid_at_min=${since}`);
 const older = (recent.items ?? []).filter((i) => i.paid_at && i.paid_at < since);
 console.log(`paid_at_min=${since}`);
 console.log("                   :", recent.items?.length, "items,", older.length, "older than cutoff");
 console.log("  FILTER WORKS?    :", recent.items?.length > 0 && older.length === 0);
 
-const sorted = await get("page=1&page_size=50&status=paid&sort_by=paid_at&sort_direction=desc");
+const sorted = await get("page=1&page_size=50&status[]=paid&sort_by=paid_at&sort_direction=desc");
 const paidAts = (sorted.items ?? []).map((i) => i.paid_at).filter(Boolean);
 const desc = paidAts.every((v, i) => i === 0 || paidAts[i - 1] >= v);
 console.log("sort_by=paid_at    :", paidAts.length, "with paid_at, descending?", desc);

@@ -159,16 +159,16 @@ street or city/zip. That floor is expected, not a budget problem.
 `scripts/probe-invoice-filters.mjs` hit the live `GET /invoices` endpoint to
 check whether `status=paid`, `paid_at_min`, and `sort_by=paid_at` (all
 documented in `housecall.v1.yaml`) actually work, so a paid-invoice poll can
-use one targeted call instead of paging all ~2.9k invoices. Unlike the earlier
-`updated_after` probe, **all three filters work on the live account** — with
-one syntax gotcha:
+use one targeted call instead of paging all ~2.9k invoices. **All three
+filters work on the live account:**
 
-- **`status=paid` as a bare query param 422s**: `{"errors":{"status":"must be
-  an array"}}`. The spec does mark `status` as `type: array`, and the live API
-  enforces it — it must be sent as `status[]=paid`. With that syntax, the
-  response is HTTP 200 and every returned item has `status: "paid"`
+- **`status` filters correctly, sent as `status[]=paid`** (array form —
+  `housecall.v1.yaml` types `status` as an array and the live API enforces it
+  literally; a bare `status=paid` 422s with `{"errors":{"status":"must be an
+  array"}}`). With `status[]=paid`, every returned item has `status: "paid"`
   (2,234 of ~2,900 total invoices came back as paid; baseline `total_pages`
-  58 → 45 with the filter applied).
+  58 → 45 with the filter applied). Same unencoded-bracket convention already
+  used for `expand[]` in `src/lib/housecall/client.ts`.
 - **`paid_at_min` filters correctly**: `status[]=paid&paid_at_min=<30-days-ago
   ISO timestamp>` returned only invoices paid within that window (26 items,
   0 older than the cutoff).
@@ -176,18 +176,12 @@ one syntax gotcha:
   with `paid_at` populated in strictly descending order.
 - **`paid_at` is present on the invoice payload** — it's one of the top-level
   fields (`id, status, invoice_number, amount, ..., paid_at, sent_at, ...`),
-  populated for paid invoices and (as expected) not filtered items.
-
-Caveat: the literal probe script as specified (sending `status=paid` without
-the `[]`) reproduces the 422 and would misreport all three checks as `false`
-solely because that one request is malformed, not because the filters don't
-exist. The corrected query (`status[]=paid`) is what confirmed the findings
-above; see the task report for the raw transcript of both runs.
+  populated for paid invoices.
 
 **Conclusion for Task 8:** build `listPaidInvoicesSince` using
 `status[]=paid`, `paid_at_min=<cursor>`, `sort_by=paid_at`,
-`sort_direction=desc` — this should let the cron detect newly-paid invoices
-with a single API call instead of the current 58-call full pass.
+`sort_direction=desc` — this lets the cron detect newly-paid invoices with a
+single API call instead of the current 58-call full pass.
 
 ## Housekeeping
 
