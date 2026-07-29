@@ -6,6 +6,17 @@ import { buildGeocodeTargets } from "@/lib/sync/geocodeSpecs";
 import { enrichRowsWithGeocode, type GeocodeBudget } from "@/lib/geo/geocode";
 import { syncResourceIncremental, type IncrementalResult } from "@/lib/sync/incremental";
 import { type RehostBudget } from "@/lib/sync/attachments";
+import { notifyPaidInvoices } from "@/lib/notifications/dispatch";
+import { claim } from "@/lib/notifications/dedupe";
+import {
+  isDailyDigestDue,
+  isWeeklyLookaheadDue,
+  localDateKey,
+  mondayDateKey,
+} from "@/lib/notifications/schedule";
+import { getDashboardSnapshot, getWeekAheadSchedule } from "@/lib/dashboard/queries";
+import { formatDailyDigest, formatWeeklyLookahead } from "@/lib/slack/format";
+import { postSlack, slackAlertsEnabled } from "@/lib/slack/client";
 
 // A steady-state incremental run costs ~2s (each resource stops after one page);
 // the daily invoice reconcile below costs ~70s. 300s leaves generous headroom.
@@ -136,6 +147,32 @@ export async function GET(req: Request) {
     );
   }
 
+  // Targeted paid-invoice poll — ONE API call per run, unlike the 58-call full
+  // reconcile above, which is why it can run every 15 minutes. The watermark
+  // lives in sync_cursors under a dedicated resource key; notifications_sent is
+  // still the correctness guarantee, so a wrong watermark can only delay a
+  // notification, never duplicate one.
+  const paidWatermark = cursors.get("invoices_paid") ?? null;
+  let newPaidWatermark = paidWatermark;
+  try {
+    const paidPage = await hcp.listPaidInvoicesSince(paidWatermark);
+    await notifyPaidInvoices(supabase, paidPage.items);
+    for (const inv of paidPage.items as Array<{ paid_at?: string }>) {
+      if (inv.paid_at && (!newPaidWatermark || inv.paid_at > newPaidWatermark)) {
+        newPaidWatermark = inv.paid_at;
+      }
+    }
+    results.push({
+      resource: "invoices_paid",
+      newCursor: newPaidWatermark,
+      upserted: 0,
+      pagesFetched: 1,
+    });
+  } catch (err) {
+    // A notification failure must never fail the sync the dashboard depends on.
+    console.error("[cron] paid-invoice notification pass failed:", err);
+  }
+
   // Persist cursors for every resource that ran. Resources with no usable
   // timestamp (invoices) still record `synced_at`, which is what gates the
   // reconcile above; `last_updated_at` stays null for them.
@@ -147,6 +184,34 @@ export async function GET(req: Request) {
   }));
   if (cursorUpserts.length > 0) {
     await supabase.from("sync_cursors").upsert(cursorUpserts);
+  }
+
+  // Digest timing is decided here rather than by the cron schedule: cron cannot
+  // express "6am Eastern", only a UTC hour that is wrong for half the year.
+  // Any run inside the local morning window sends it, so a missed 6:00 ping
+  // self-heals on the next one; claim() guarantees exactly one per day.
+  if (slackAlertsEnabled()) {
+    const now = new Date();
+    try {
+      if (isWeeklyLookaheadDue(now) && (await claim(supabase, "weekly_lookahead", mondayDateKey(now)))) {
+        const days = await getWeekAheadSchedule(now);
+        await postSlack(process.env.SLACK_WEBHOOK_SCHEDULE, formatWeeklyLookahead(now, days));
+      }
+
+      if (isDailyDigestDue(now) && (await claim(supabase, "daily_digest", localDateKey(now)))) {
+        const snapshot = await getDashboardSnapshot(now);
+        // Sync age surfaces a stalled external scheduler in the message that is
+        // already read every morning.
+        const minutesAgo = Math.round((now.getTime() - Date.parse(syncedAt)) / 60_000);
+        await postSlack(
+          process.env.SLACK_WEBHOOK_SCHEDULE,
+          formatDailyDigest(now, snapshot.todaySchedule, Number.isFinite(minutesAgo) ? minutesAgo : null)
+        );
+      }
+    } catch (err) {
+      // A Slack/digest problem must never fail the sync the dashboard depends on.
+      console.error("[cron] digest pass failed:", err);
+    }
   }
 
   return NextResponse.json(
