@@ -1,8 +1,9 @@
 import { getSupabaseServerClient } from "@/lib/supabase/client";
-import { weekRange, dayRange } from "./week";
+import { weekRange, dayRange, localParts } from "./week";
 import { classifyZone } from "@/lib/geo/zones";
 import { zoneForTown } from "@/lib/geo/townZones";
 import { distanceFromAverillPark } from "@/lib/geo/distance";
+import { localDateKey as localDateKeyOf } from "@/lib/notifications/schedule";
 
 // Live HCP estimates (Task 0) have no "open" status. `estimates.status` stores
 // the estimate `work_status`; per-option customer approval lives in
@@ -142,6 +143,47 @@ async function fetchAllRows<T>(
   return out;
 }
 
+// Shared by the dashboard's todaySchedule and the Slack week-ahead digest.
+// Both MUST render from one implementation, or the two can silently drift.
+function buildScheduleRow(
+  j: JobRow,
+  custById: Map<string, CustomerRow>,
+  techById: Map<string, TechRow>,
+  fullName: (r?: { first_name: string | null; last_name: string | null }) => string | null
+): TodayScheduleRow {
+  const cust = custById.get(j.raw?.customer?.id ?? "");
+  const town = j.raw?.address?.city ?? cust?.city ?? null;
+  const hasCoords = j.service_address_lat != null && j.service_address_lng != null;
+  // Town-first design: even without coordinates a known town resolves its
+  // zone. Only fall through to "Unknown" when the town is also unrecognized.
+  let z: { zone: string; compass: string; source: "town" | "distance" };
+  let miles: number | null = null;
+  let driveMinutes: number | null = null;
+  if (hasCoords) {
+    const lat = j.service_address_lat as number;
+    const lng = j.service_address_lng as number;
+    z = classifyZone(lat, lng, town);
+    const dist = distanceFromAverillPark(lat, lng);
+    miles = dist.miles;
+    driveMinutes = dist.driveMinutes;
+  } else {
+    const townZone = zoneForTown(town);
+    z = townZone
+      ? { zone: townZone, compass: "", source: "town" }
+      : { zone: "Unknown", compass: "", source: "distance" };
+  }
+  return {
+    id: j.id,
+    scheduledStart: j.scheduled_start,
+    customerName: fullName(cust),
+    technicianName: fullName(techById.get(j.technician_id ?? "")),
+    zone: z.zone,
+    compass: z.compass,
+    miles,
+    driveMinutes,
+  };
+}
+
 export async function getDashboardSnapshot(now: Date = new Date()): Promise<DashboardSnapshot> {
   const supabase = getSupabaseServerClient();
   const thisWeek = weekRange(now, "this");
@@ -173,39 +215,7 @@ export async function getDashboardSnapshot(now: Date = new Date()): Promise<Dash
   const todaySchedule = todayJobs
     .slice()
     .sort((a, b) => (a.scheduled_start ?? "").localeCompare(b.scheduled_start ?? ""))
-    .map((j) => {
-      const cust = custById.get(j.raw?.customer?.id ?? "");
-      const town = j.raw?.address?.city ?? cust?.city ?? null;
-      const hasCoords = j.service_address_lat != null && j.service_address_lng != null;
-      // Town-first design: even without coordinates a known town resolves its
-      // zone. Only fall through to "Unknown" when the town is also unrecognized.
-      let z: { zone: string; compass: string; source: "town" | "distance" };
-      let miles: number | null = null;
-      let driveMinutes: number | null = null;
-      if (hasCoords) {
-        const lat = j.service_address_lat as number;
-        const lng = j.service_address_lng as number;
-        z = classifyZone(lat, lng, town);
-        const dist = distanceFromAverillPark(lat, lng);
-        miles = dist.miles;
-        driveMinutes = dist.driveMinutes;
-      } else {
-        const townZone = zoneForTown(town);
-        z = townZone
-          ? { zone: townZone, compass: "", source: "town" }
-          : { zone: "Unknown", compass: "", source: "distance" };
-      }
-      return {
-        id: j.id,
-        scheduledStart: j.scheduled_start,
-        customerName: fullName(cust),
-        technicianName: fullName(techById.get(j.technician_id ?? "")),
-        zone: z.zone,
-        compass: z.compass,
-        miles,
-        driveMinutes,
-      };
-    });
+    .map((j) => buildScheduleRow(j, custById, techById, fullName));
 
   const workloadMap = new Map<string, { jobCount: number; ms: number }>();
   for (const j of todayJobs) {
@@ -254,4 +264,71 @@ export async function getDashboardSnapshot(now: Date = new Date()): Promise<Dash
     todaySchedule,
     technicianWorkload,
   };
+}
+
+// Monday-Sunday of the local week containing `now`, grouped by local day.
+// Every day is present even when empty, so the digest can say "No jobs".
+//
+// Deliberately does NOT filter out canceled jobs: getDashboardSnapshot's
+// todaySchedule doesn't either (only its revenue sums do). Filtering here
+// would let a job the live dashboard still shows silently vanish from the
+// Slack digest for the same day -- exactly the drift buildScheduleRow exists
+// to prevent.
+export async function getWeekAheadSchedule(
+  now: Date = new Date()
+): Promise<Array<{ dateKey: string; rows: TodayScheduleRow[] }>> {
+  const supabase = getSupabaseServerClient();
+  const week = weekRange(now, "this");
+
+  // Never select("*"): PostgREST caps responses at 1000 rows and truncates
+  // silently. fetchAllRows pages; the column list stays explicit.
+  const [jobs, customers, technicians] = await Promise.all([
+    fetchAllRows<JobRow>(
+      supabase,
+      "jobs",
+      "id, work_status, is_emergency, is_commercial, total_amount_cents, scheduled_start, scheduled_end, technician_id, service_address_lat, service_address_lng, raw"
+    ),
+    fetchAllRows<CustomerRow>(supabase, "customers", "id, first_name, last_name, city"),
+    fetchAllRows<TechRow>(supabase, "technicians", "id, first_name, last_name"),
+  ]);
+
+  const custById = new Map(customers.map((c) => [c.id, c]));
+  const techById = new Map(technicians.map((t) => [t.id, t]));
+  const fullName = (r?: { first_name: string | null; last_name: string | null }) =>
+    r ? [r.first_name, r.last_name].filter(Boolean).join(" ") || null : null;
+
+  const inWeek = jobs
+    .filter((j) => !!j.scheduled_start && j.scheduled_start >= week.startIso && j.scheduled_start < week.endIso)
+    .slice()
+    .sort((a, b) => (a.scheduled_start ?? "").localeCompare(b.scheduled_start ?? ""));
+
+  // Build the seven local day buckets from the week's Monday. NOT built by
+  // adding i * 86_400_000ms to Monday's UTC instant: a week containing a DST
+  // transition has a 23- or 25-hour day, so fixed 24h-multiples off a single
+  // UTC instant can drift off local midnight for days after the transition.
+  // Instead we advance the *calendar* date (y, m0, d + i) and anchor each day
+  // at 16:00 UTC -- noon-ish Eastern under either offset (-04:00 or -05:00),
+  // never within hours of a DST boundary -- so it always resolves to the
+  // correct calendar day before handing off to dayRange for that day's true
+  // local midnight-to-midnight boundaries.
+  const monday = localParts(new Date(week.startIso));
+  const buckets: Array<{ dateKey: string; rows: TodayScheduleRow[]; startIso: string; endIso: string }> = [];
+  for (let i = 0; i < 7; i += 1) {
+    const noonAnchor = new Date(Date.UTC(monday.y, monday.m0, monday.d + i, 16, 0, 0));
+    const range = dayRange(noonAnchor);
+    buckets.push({
+      dateKey: localDateKeyOf(noonAnchor),
+      rows: [],
+      startIso: range.startIso,
+      endIso: range.endIso,
+    });
+  }
+
+  for (const j of inWeek) {
+    const iso = j.scheduled_start as string;
+    const bucket = buckets.find((b) => iso >= b.startIso && iso < b.endIso);
+    if (bucket) bucket.rows.push(buildScheduleRow(j, custById, techById, fullName));
+  }
+
+  return buckets.map(({ dateKey, rows }) => ({ dateKey, rows }));
 }
