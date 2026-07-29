@@ -5,8 +5,17 @@ vi.mock("@/lib/sync/syncService", () => ({
   syncOneRecord: vi.fn().mockResolvedValue(undefined),
 }));
 
+vi.mock("@/lib/supabase/client", () => ({
+  getSupabaseServerClient: vi.fn().mockReturnValue({}),
+}));
+
+vi.mock("@/lib/notifications/dispatch", () => ({
+  notifyApprovedEstimates: vi.fn().mockResolvedValue(0),
+}));
+
 import { POST } from "../route";
 import { syncOneRecord } from "@/lib/sync/syncService";
+import { notifyApprovedEstimates } from "@/lib/notifications/dispatch";
 
 // A Housecall Pro delivery is `{ event, event_occurred_at, company_id, <typeKey> }`
 // where <typeKey> is the singular resource name (e.g. "customer") and holds the
@@ -216,5 +225,61 @@ describe("POST /api/webhooks/housecall", () => {
     expect(syncOneRecord).toHaveBeenCalledTimes(1);
     expect(errorSpy).toHaveBeenCalled();
     errorSpy.mockRestore();
+  });
+
+  // Estimates are the one notification class HCP delivers by webhook (the
+  // instant path); the cron re-checks the same records as a safety net.
+  it("notifies on an approved estimate option after a successful sync", async () => {
+    const env = {
+      event: "estimate.updated",
+      event_occurred_at: "2026-07-24T05:38:14Z",
+      company_id: "co_1",
+      estimate: {
+        id: "est_1",
+        customer: { first_name: "R.", last_name: "Hoffman" },
+        options: [{ id: "opt_b", approval_status: "approved", total_amount: 250000 }],
+      },
+    };
+    const req = signedRequest(env, "test-secret");
+
+    const res = await POST(req);
+
+    expect(res.status).toBe(200);
+    expect(notifyApprovedEstimates).toHaveBeenCalledOnce();
+    expect(vi.mocked(notifyApprovedEstimates).mock.calls[0][1]).toEqual([
+      expect.objectContaining({ id: "est_1" }),
+    ]);
+  });
+
+  // Pins rule 1: announcing an approval we failed to persist would put Slack
+  // ahead of the database, so a sync failure must suppress the notification.
+  it("does not notify when the sync throws", async () => {
+    vi.mocked(syncOneRecord).mockRejectedValueOnce(new Error("db down"));
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const env = {
+      event: "estimate.updated",
+      event_occurred_at: "2026-07-24T05:38:14Z",
+      company_id: "co_1",
+      estimate: { id: "est_1" },
+    };
+    const req = signedRequest(env, "test-secret");
+
+    const res = await POST(req);
+
+    expect(res.status).toBe(200);
+    expect(notifyApprovedEstimates).not.toHaveBeenCalled();
+    errorSpy.mockRestore();
+  });
+
+  // Pins the resource guard: a non-estimate event must never reach the
+  // notification path.
+  it("does not notify for a non-estimate event", async () => {
+    const req = signedRequest(customerEnvelope(), "test-secret");
+
+    const res = await POST(req);
+
+    expect(res.status).toBe(200);
+    expect(notifyApprovedEstimates).not.toHaveBeenCalled();
   });
 });

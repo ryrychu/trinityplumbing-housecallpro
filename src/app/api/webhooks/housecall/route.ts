@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { verifyWebhookSignature } from "@/lib/housecall/webhookVerify";
 import { syncOneRecord } from "@/lib/sync/syncService";
+import { getSupabaseServerClient } from "@/lib/supabase/client";
+import { notifyApprovedEstimates } from "@/lib/notifications/dispatch";
 
 /**
  * Housecall Pro signs deliveries with an `api-signature` header — HMAC-SHA256 of
@@ -75,6 +77,23 @@ export async function POST(req: Request) {
       { ok: false, error: "sync failed; logged for reconciliation" },
       { status: 200 }
     );
+  }
+
+  // Estimates are the one notification class HCP delivers by webhook, so this
+  // is the instant path. The cron re-checks the same records as a safety net;
+  // the shared claim ledger makes the overlap harmless rather than duplicative.
+  //
+  // Notify only AFTER the sync succeeds (we are past the try/catch above,
+  // which returns early on failure) — announcing an approval we failed to
+  // persist would put Slack ahead of the database.
+  if (resource === "estimate" || resource === "estimates") {
+    try {
+      await notifyApprovedEstimates(getSupabaseServerClient(), [record]);
+    } catch (err) {
+      // Never fail the webhook for a notification problem: a non-2xx triggers
+      // an HCP retry storm, and the record is already synced.
+      console.error(`[webhook] estimate notification failed for event=${event}:`, err);
+    }
   }
 
   return NextResponse.json({ ok: true }, { status: 200 });
