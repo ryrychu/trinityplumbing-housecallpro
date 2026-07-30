@@ -14,6 +14,10 @@ const APPROVED_STATUSES = new Set(["approved", "pro approved"]);
 export interface PaidInvoiceLine {
   id: string;
   customerName: string | null;
+  // Carried alongside customerName (not resolved here) so a caller with DB
+  // access can fall back to a local-table lookup when customerName is null —
+  // see dispatch.ts's fillMissingCustomerNames. detect.ts stays pure/no-I/O.
+  customerId: string | null;
   amountCents: number | null;
   invoiceNumber: string | null;
 }
@@ -21,11 +25,21 @@ export interface PaidInvoiceLine {
 export interface ApprovedEstimateLine {
   key: string;
   customerName: string | null;
+  customerId: string | null;
   amountCents: number | null;
   optionName: string | null;
 }
 
+// I4: HcpInvoice/HcpEstimate declare `customer?: { id: string, ... }` — the
+// nested first_name/last_name/company below are unverified against a live
+// payload (every existing test uses a hand-written fixture with them; if the
+// live shape really is `{id}` only, customerName() below always returns
+// null). Reading `id` here is what lets dispatch.ts fall back to a local
+// `customers` table lookup instead of every line silently reading "Unknown
+// customer" — the one piece of information the paid-invoice channel exists
+// to report.
 interface RawCustomer {
+  id?: string | null;
   first_name?: string | null;
   last_name?: string | null;
   company?: string | null;
@@ -70,6 +84,7 @@ export function detectPaidInvoices(invoices: unknown[]): PaidInvoiceLine[] {
     out.push({
       id: inv.id,
       customerName: customerName(inv.customer),
+      customerId: inv.customer?.id ?? null,
       // Live API: the invoice total field is `amount`, in cents.
       amountCents: inv.amount ?? null,
       invoiceNumber: inv.invoice_number ?? null,
@@ -106,6 +121,7 @@ export function detectApprovedEstimates(estimates: unknown[]): ApprovedEstimateL
       out.push({
         key: estimateOptionKey(est.id, opt.id),
         customerName: customerName(est.customer),
+        customerId: est.customer?.id ?? null,
         amountCents: opt.total_amount ?? null,
         optionName: opt.name ?? null,
       });

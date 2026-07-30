@@ -36,7 +36,11 @@ export async function postSlack(
     }
     return true;
   } catch (err) {
-    console.error("[slack] post threw:", err);
+    // Log only the message, never the raw error object. Some failure paths
+    // (e.g. a fetch/AbortSignal error) can embed the request, and the
+    // webhook URL itself is bearer-equivalent — anyone holding it can post to
+    // the channel — so it must never end up in plaintext logs.
+    console.error("[slack] post threw:", err instanceof Error ? err.message : String(err));
     return false;
   }
 }

@@ -74,4 +74,24 @@ describe("postSlack", () => {
     expect(await postSlack("https://hooks.slack.com/services/XXX", "hello")).toBe(false);
     expect(errorSpy).toHaveBeenCalled();
   });
+
+  // A webhook URL is bearer-equivalent: anyone holding it can post to the
+  // channel. Logging the raw error object risks it embedding the URL (e.g.
+  // via a fetch/AbortError's own message or cause chain) in plaintext logs.
+  // Only the string message may be logged.
+  it("logs only the error's message string, never the raw Error object", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("network down")));
+    await postSlack("https://hooks.slack.com/services/XXX", "hello");
+
+    expect(errorSpy).toHaveBeenCalledWith(expect.any(String), "network down");
+    const loggedArgs = errorSpy.mock.calls[0];
+    expect(loggedArgs.some((a: unknown) => a instanceof Error)).toBe(false);
+  });
+
+  it("logs a string even when the caught value is not an Error instance", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue("plain string rejection"));
+    await postSlack("https://hooks.slack.com/services/XXX", "hello");
+
+    expect(errorSpy).toHaveBeenCalledWith(expect.any(String), "plain string rejection");
+  });
 });

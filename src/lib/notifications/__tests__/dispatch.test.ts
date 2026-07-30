@@ -69,6 +69,49 @@ describe("notifyPaidInvoices", () => {
     expect(await notifyPaidInvoices(supabase, [{ id: "x", status: "open" }])).toBe(0);
     expect(claimMany).not.toHaveBeenCalled();
   });
+
+  // I4: HcpInvoice.customer is typed (and, per the live-payload uncertainty
+  // this finding raised, may in reality be) `{ id }` only — no nested name.
+  // Without a fallback, every line in this channel would read "Unknown
+  // customer", defeating the channel's whole purpose. detect.ts stays pure
+  // (no DB access), so the fallback — resolving the name from the
+  // already-synced local `customers` table by customer_id — lives here.
+  it("resolves a real customer name from the local customers table when the invoice carries only a customer id", async () => {
+    vi.mocked(claimMany).mockResolvedValue(["inv_9"]);
+    const inMock = vi.fn().mockResolvedValue({
+      data: [{ id: "cus_only_id", first_name: "Priya", last_name: "Nair", company: null }],
+      error: null,
+    });
+    const selectMock = vi.fn().mockReturnValue({ in: inMock });
+    const fromMock = vi.fn().mockReturnValue({ select: selectMock });
+    const localSupabase = { from: fromMock } as unknown as SupabaseClient;
+
+    const invoiceWithIdOnlyCustomer = {
+      id: "inv_9",
+      status: "paid",
+      amount: 5000,
+      invoice_number: "9001",
+      customer: { id: "cus_only_id" }, // no first_name/last_name/company
+    };
+
+    await notifyPaidInvoices(localSupabase, [invoiceWithIdOnlyCustomer]);
+
+    expect(fromMock).toHaveBeenCalledWith("customers");
+    expect(inMock).toHaveBeenCalledWith("id", ["cus_only_id"]);
+    const text = vi.mocked(postSlack).mock.calls[0][1];
+    expect(text).toContain("Priya Nair");
+    expect(text).not.toContain("Unknown customer");
+  });
+
+  it("does not query the customers table when every invoice already has a name", async () => {
+    vi.mocked(claimMany).mockResolvedValue(["inv_1"]);
+    const fromMock = vi.fn();
+    const localSupabase = { from: fromMock } as unknown as SupabaseClient;
+
+    await notifyPaidInvoices(localSupabase, [paid("inv_1")]);
+
+    expect(fromMock).not.toHaveBeenCalled();
+  });
 });
 
 const approved = (estimateId: string, optionId: string) => ({

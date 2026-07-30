@@ -124,8 +124,8 @@ describe("formatWeeklyLookahead", () => {
 describe("formatPaidInvoices", () => {
   it("lists each invoice with a dollar amount", () => {
     const out = formatPaidInvoices([
-      { id: "inv_1", customerName: "Mary Kolakowski", amountCents: 428000, invoiceNumber: "1042" },
-      { id: "inv_2", customerName: null, amountCents: null, invoiceNumber: null },
+      { id: "inv_1", customerName: "Mary Kolakowski", customerId: "cus_1", amountCents: 428000, invoiceNumber: "1042" },
+      { id: "inv_2", customerName: null, customerId: null, amountCents: null, invoiceNumber: null },
     ]);
     expect(out).toContain("2 invoices paid");
     expect(out).toContain("Mary Kolakowski");
@@ -137,11 +137,11 @@ describe("formatPaidInvoices", () => {
 
   it("uses the singular heading for one and plural for many", () => {
     const one = formatPaidInvoices([
-      { id: "a", customerName: "X", amountCents: 100, invoiceNumber: "1" },
+      { id: "a", customerName: "X", customerId: null, amountCents: 100, invoiceNumber: "1" },
     ]);
     const two = formatPaidInvoices([
-      { id: "a", customerName: "X", amountCents: 100, invoiceNumber: "1" },
-      { id: "b", customerName: "Y", amountCents: 200, invoiceNumber: "2" },
+      { id: "a", customerName: "X", customerId: null, amountCents: 100, invoiceNumber: "1" },
+      { id: "b", customerName: "Y", customerId: null, amountCents: 200, invoiceNumber: "2" },
     ]);
     expect(one).toContain("1 invoice paid");
     expect(two).toContain("2 invoices paid");
@@ -151,7 +151,7 @@ describe("formatPaidInvoices", () => {
 describe("formatApprovedEstimates", () => {
   it("lists each approved option", () => {
     const out = formatApprovedEstimates([
-      { key: "est_1:opt_b", customerName: "R. Hoffman", amountCents: 250000, optionName: "Better" },
+      { key: "est_1:opt_b", customerName: "R. Hoffman", customerId: "cus_1", amountCents: 250000, optionName: "Better" },
     ]);
     expect(out).toContain("estimate approved");
     expect(out).toContain("R. Hoffman");

@@ -26,7 +26,13 @@ describe("detectPaidInvoices", () => {
       { id: "inv_1", status: "paid", amount: 428000, invoice_number: "1042", customer },
     ]);
     expect(out).toEqual([
-      { id: "inv_1", customerName: "Mary Kolakowski", amountCents: 428000, invoiceNumber: "1042" },
+      {
+        id: "inv_1",
+        customerName: "Mary Kolakowski",
+        customerId: "cus_1",
+        amountCents: 428000,
+        invoiceNumber: "1042",
+      },
     ]);
   });
 
@@ -43,7 +49,19 @@ describe("detectPaidInvoices", () => {
   it("survives a record with no customer and no amount", () => {
     const out = detectPaidInvoices([{ id: "inv_2", status: "paid" }]);
     expect(out).toEqual([
-      { id: "inv_2", customerName: null, amountCents: null, invoiceNumber: null },
+      { id: "inv_2", customerName: null, customerId: null, amountCents: null, invoiceNumber: null },
+    ]);
+  });
+
+  it("carries the customer id alongside the name, for a caller to fall back on", () => {
+    // I4: the live customer sub-shape may be `{ id }` only, with no nested
+    // name. detect.ts stays pure (no DB access), but must still surface the
+    // id so dispatch.ts can resolve a name from the local customers table.
+    const out = detectPaidInvoices([
+      { id: "inv_10", status: "paid", customer: { id: "cus_only_id" } },
+    ]);
+    expect(out).toEqual([
+      { id: "inv_10", customerName: null, customerId: "cus_only_id", amountCents: null, invoiceNumber: null },
     ]);
   });
 
@@ -60,7 +78,13 @@ describe("detectPaidInvoices", () => {
     ]);
     // Malformed statuses fail the match gracefully; valid invoice is detected.
     expect(out).toEqual([
-      { id: "inv_5", customerName: "Mary Kolakowski", amountCents: null, invoiceNumber: null },
+      {
+        id: "inv_5",
+        customerName: "Mary Kolakowski",
+        customerId: "cus_1",
+        amountCents: null,
+        invoiceNumber: null,
+      },
     ]);
   });
 });
@@ -80,7 +104,13 @@ describe("detectApprovedEstimates", () => {
       },
     ]);
     expect(out).toEqual([
-      { key: "est_1:opt_b", customerName: "R. Hoffman", amountCents: 250000, optionName: "Better" },
+      {
+        key: "est_1:opt_b",
+        customerName: "R. Hoffman",
+        customerId: "cus_1",
+        amountCents: 250000,
+        optionName: "Better",
+      },
     ]);
   });
 
@@ -137,7 +167,7 @@ describe("detectApprovedEstimates", () => {
       { id: "est_8", customer, options: [{ id: "o1", approval_status: "approved", total_amount: 300 }] }, // valid
     ]);
     expect(out).toEqual([
-      { key: "est_8:o1", customerName: "R. Hoffman", amountCents: 300, optionName: null },
+      { key: "est_8:o1", customerName: "R. Hoffman", customerId: "cus_1", amountCents: 300, optionName: null },
     ]);
   });
 
@@ -155,7 +185,7 @@ describe("detectApprovedEstimates", () => {
       },
     ]);
     expect(out).toEqual([
-      { key: "est_9:o3", customerName: "R. Hoffman", amountCents: null, optionName: null },
+      { key: "est_9:o3", customerName: "R. Hoffman", customerId: "cus_1", amountCents: null, optionName: null },
     ]);
   });
 });
