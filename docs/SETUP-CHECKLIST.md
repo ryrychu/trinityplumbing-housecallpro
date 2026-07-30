@@ -91,9 +91,18 @@ lost, but you want to know which is happening.
 ## 7. Stand up the scheduler
 
 Something must call `GET /api/cron/sync` every ~15 minutes with the header
-`Authorization: Bearer <CRON_SECRET>`. Pick **one** path.
+`Authorization: Bearer <CRON_SECRET>`.
 
-### Path A — GitHub Actions (free, available now)
+**Vercel Pro is active as of 2026-07-31, so Path B is the chosen route.**
+`vercel.json` now carries `*/15 * * * *` and Vercel itself is the scheduler.
+Path A is kept below only as the fallback if the Vercel cron does not fire.
+
+- [ ] Deploy, then confirm in Vercel → Settings → Cron Jobs that the 15-minute
+      schedule was accepted and is listed
+- [ ] Watch for two or three consecutive invocations in the function logs
+- [ ] Only then remove the GitHub Actions workflow (see the appendix)
+
+### Path A — GitHub Actions (fallback; not needed on Pro)
 
 The workflow is already committed at `.github/workflows/cron-sync.yml`.
 
@@ -160,25 +169,12 @@ Two reasons this is worth it beyond convenience:
 `/api/cron/sync` invocation roughly 20+ hours after the previous one, and see
 whether it completed or timed out.
 
-### The change
+### The change — APPLIED 2026-07-31
 
-Replace the contents of `vercel.json`:
+`vercel.json` now reads `"schedule": "*/15 * * * *"`. Remaining steps:
 
-```json
-{
-  "crons": [
-    {
-      "path": "/api/cron/sync",
-      "schedule": "*/15 * * * *"
-    }
-  ]
-}
-```
-
-Then:
-
-- [ ] Subscribe to Vercel Pro
-- [ ] Apply the `vercel.json` change above and deploy
+- [x] Subscribe to Vercel Pro
+- [x] Apply the `vercel.json` change and deploy
 - [ ] Confirm in Vercel → Settings → Cron Jobs that the 15-minute schedule was
       accepted (Hobby would reject it)
 - [ ] Watch one 20-hour invoice reconcile complete without timing out
@@ -200,13 +196,13 @@ many times over and the specific hour stops mattering.
 
 ## Known gotchas
 
-- **GitHub disables scheduled workflows after 60 days of repo inactivity.** No
-  commits for 60 days and the scheduler silently stops, taking invoice alerts and
-  digests with it, with no notification. The digest's `last sync` footer is the
-  canary. This gotcha disappears on Vercel Pro.
-- **Scheduled runs are best-effort.** GitHub delays them 5–30+ minutes under
-  load and can drop a tick. The app is built for this: any run in the
-  06:00–12:00 window sends that day's digest. A 6:20 arrival is normal.
+- ~~**GitHub disables scheduled workflows after 60 days of repo inactivity.**~~
+  No longer applies — Vercel Pro's own cron is the scheduler as of 2026-07-31.
+  It would return if you ever fell back to the Actions workflow.
+- **Scheduled runs are still best-effort**, on Vercel as on GitHub — a tick can
+  be late. The app is built for this: any run in the 06:00–12:00 Eastern window
+  sends that day's digest, so a 6:20 arrival is normal, and at `*/15` the window
+  gets ~24 chances.
 - **Canceled jobs are excluded** from both the dashboard's today-schedule and
   the digest, as of the change on 2026-07-30. This deliberately altered live
   dashboard behavior.
