@@ -1,0 +1,92 @@
+name: Sync Housecall Pro
+
+# Pings the app's sync endpoint every ~15 minutes.
+#
+# Why this exists: Vercel's Hobby plan caps cron at one invocation per day, and
+# `vercel.json`'s `0 11 * * *` is only a safety net. This workflow is what makes
+# paid-invoice alerts near-real-time and what delivers the 6 a.m. weekday digest
+# on time.
+#
+# The endpoint is idempotent — it is safe to call more often than necessary, and
+# safe for two runs to overlap. Duplicate Slack posts are prevented by the
+# `notifications_sent` ledger, not by this schedule.
+
+on:
+  schedule:
+    # Every 15 minutes. GitHub queues these on a best-effort basis and delays of
+    # 5-30+ minutes are normal under load; a run can be dropped entirely. The
+    # app is built for that: any run between 06:00 and 12:00 America/New_York
+    # sends that day's digest, so a missed 06:00 tick self-heals on a later one.
+    - cron: "*/15 * * * *"
+
+  # Lets you run it by hand from the Actions tab. Use this to test the wiring
+  # instead of waiting for a scheduled tick.
+  workflow_dispatch:
+
+# Serialize runs. A slow run (the ~70s invoice reconcile, or a first geocode
+# backfill) must not have three more stacking on top of it.
+concurrency:
+  group: cron-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Trigger /api/cron/sync
+        env:
+          APP_URL: ${{ secrets.APP_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${APP_URL:-}" ]; then
+            echo "::error::Repository secret APP_URL is not set."
+            exit 1
+          fi
+          if [ -z "${CRON_SECRET:-}" ]; then
+            echo "::error::Repository secret CRON_SECRET is not set."
+            exit 1
+          fi
+
+          # --max-time 310 matches the route's `maxDuration = 300`.
+          # --retry covers transient network/5xx, not auth failures.
+          # The secret is passed via a header from an env var, so it never
+          # appears in the command line or the logs.
+          code=$(curl \
+            --silent --show-error \
+            --max-time 310 \
+            --retry 2 --retry-delay 15 --retry-all-errors \
+            --header "Authorization: Bearer ${CRON_SECRET}" \
+            --output response.json \
+            --write-out '%{http_code}' \
+            "${APP_URL%/}/api/cron/sync") || true
+
+          echo "HTTP ${code}"
+
+          # The response body carries no secrets — just ok/syncedAt/per-resource
+          # counts — so printing it makes the Actions log a useful audit trail.
+          if [ -f response.json ]; then
+            cat response.json
+            echo
+          fi
+
+          case "${code}" in
+            200)
+              echo "::notice::Sync OK"
+              ;;
+            401)
+              echo "::error::401 Unauthorized — CRON_SECRET here does not match the one in Vercel."
+              exit 1
+              ;;
+            "")
+              echo "::error::No response — check that APP_URL is correct and the deployment is live."
+              exit 1
+              ;;
+            *)
+              echo "::error::Sync returned HTTP ${code}. See the response body above."
+              exit 1
+              ;;
+          esac
