@@ -12,15 +12,18 @@ name: Sync Housecall Pro
 # `notifications_sent` ledger, not by this schedule.
 
 on:
-  schedule:
-    # Every 15 minutes. GitHub queues these on a best-effort basis and delays of
-    # 5-30+ minutes are normal under load; a run can be dropped entirely. The
-    # app is built for that: any run between 06:00 and 12:00 America/New_York
-    # sends that day's digest, so a missed 06:00 tick self-heals on a later one.
-    - cron: "*/15 * * * *"
+  # SCHEDULE DISABLED 2026-07-31 — Vercel Pro's own cron (`*/15 * * * *` in
+  # vercel.json) is the scheduler now, so this workflow is a manual fallback
+  # only. It is kept, not deleted, so it can be re-armed in one line if the
+  # Vercel cron ever needs to be taken out of service.
+  #
+  # Re-arm by uncommenting the two lines below AND adding the repository
+  # secrets APP_URL and CRON_SECRET (without them every run fails).
+  #
+  # schedule:
+  #   - cron: "*/15 * * * *"
 
-  # Lets you run it by hand from the Actions tab. Use this to test the wiring
-  # instead of waiting for a scheduled tick.
+  # Run by hand from the Actions tab.
   workflow_dispatch:
 
 # Serialize runs. A slow run (the ~70s invoice reconcile, or a first geocode
