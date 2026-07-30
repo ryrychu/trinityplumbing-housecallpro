@@ -26,10 +26,21 @@ const APPROVED_STATUSES = new Set(["approved", "pro approved"]);
 // underscored form made jobsInProgress silently report 0.
 const JOB_IN_PROGRESS = "in progress";
 
-// Canceled jobs must never inflate booked/scheduled revenue. These are the live
-// canceled work_status values (go-live Step 2 census); "complete rated",
+// Canceled jobs must never inflate booked/scheduled revenue, and (Task 14)
+// must not appear in the schedule a dispatcher reads either. These are the
+// live canceled work_status values (go-live Step 2 census); "complete rated",
 // "complete unrated", "scheduled", and "in progress" all still count as booked.
 const CANCELED_JOB_STATUSES = new Set(["pro canceled", "user canceled"]);
+
+// The ONE predicate for "is this job canceled" -- used by revenue sums,
+// todaySchedule, and getWeekAheadSchedule alike. A null/unknown work_status is
+// NOT cancellation (dropping it would silently hide real work), and the match
+// is case-insensitive since HCP's casing isn't guaranteed. Both schedule
+// surfaces MUST call this same function, not duplicate the `.has(...)` check,
+// or the dashboard and the Slack digest can silently drift out of sync.
+function isCanceledJob(j: { work_status: string | null }): boolean {
+  return CANCELED_JOB_STATUSES.has((j.work_status ?? "").toLowerCase());
+}
 
 // Live HCP invoice statuses over all 2,854 synced invoices:
 //   paid 2217 | canceled 570 | voided 42 | open 25
@@ -212,7 +223,12 @@ export async function getDashboardSnapshot(now: Date = new Date()): Promise<Dash
 
   const todayJobs = jobs.filter((j) => inWindow(j.scheduled_start, today));
 
+  // technicianWorkload (below) intentionally reads the UNFILTERED todayJobs --
+  // a canceled job still occupied a technician's calendar slot, and workload
+  // is out of scope for Task 14. Only the schedule list dispatchers read gets
+  // canceled jobs filtered out, via the shared isCanceledJob predicate.
   const todaySchedule = todayJobs
+    .filter((j) => !isCanceledJob(j))
     .slice()
     .sort((a, b) => (a.scheduled_start ?? "").localeCompare(b.scheduled_start ?? ""))
     .map((j) => buildScheduleRow(j, custById, techById, fullName));
@@ -234,12 +250,11 @@ export async function getDashboardSnapshot(now: Date = new Date()): Promise<Dash
     scheduledHours: Math.round((v.ms / 3_600_000) * 10) / 10,
   }));
 
-  const isCanceled = (j: JobRow) => CANCELED_JOB_STATUSES.has((j.work_status ?? "").toLowerCase());
   const bookedThisWeek = jobs
-    .filter((j) => inWindow(j.scheduled_start, thisWeek) && !isCanceled(j))
+    .filter((j) => inWindow(j.scheduled_start, thisWeek) && !isCanceledJob(j))
     .reduce((s, j) => s + (j.total_amount_cents ?? 0), 0);
   const scheduledNextWeek = jobs
-    .filter((j) => inWindow(j.scheduled_start, nextWeek) && !isCanceled(j))
+    .filter((j) => inWindow(j.scheduled_start, nextWeek) && !isCanceledJob(j))
     .reduce((s, j) => s + (j.total_amount_cents ?? 0), 0);
 
   const upcomingEstimates = estimates.filter(
@@ -269,11 +284,11 @@ export async function getDashboardSnapshot(now: Date = new Date()): Promise<Dash
 // Monday-Sunday of the local week containing `now`, grouped by local day.
 // Every day is present even when empty, so the digest can say "No jobs".
 //
-// Deliberately does NOT filter out canceled jobs: getDashboardSnapshot's
-// todaySchedule doesn't either (only its revenue sums do). Filtering here
-// would let a job the live dashboard still shows silently vanish from the
-// Slack digest for the same day -- exactly the drift buildScheduleRow exists
-// to prevent.
+// Filters out canceled jobs via the same isCanceledJob predicate
+// getDashboardSnapshot's todaySchedule uses (Task 14). Both surfaces MUST
+// filter identically, or a dispatcher could see a job on the live dashboard
+// that silently disagrees with the Slack digest for the same day -- exactly
+// the drift buildScheduleRow exists to prevent.
 export async function getWeekAheadSchedule(
   now: Date = new Date()
 ): Promise<Array<{ dateKey: string; rows: TodayScheduleRow[] }>> {
@@ -298,7 +313,13 @@ export async function getWeekAheadSchedule(
     r ? [r.first_name, r.last_name].filter(Boolean).join(" ") || null : null;
 
   const inWeek = jobs
-    .filter((j) => !!j.scheduled_start && j.scheduled_start >= week.startIso && j.scheduled_start < week.endIso)
+    .filter(
+      (j) =>
+        !!j.scheduled_start &&
+        j.scheduled_start >= week.startIso &&
+        j.scheduled_start < week.endIso &&
+        !isCanceledJob(j)
+    )
     .slice()
     .sort((a, b) => (a.scheduled_start ?? "").localeCompare(b.scheduled_start ?? ""));
 

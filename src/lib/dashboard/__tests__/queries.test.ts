@@ -350,6 +350,154 @@ describe("getDashboardSnapshot", () => {
     expect(entry.jobCount).toBe(1);
     expect(entry.scheduledHours).toBe(2); // 09:00 -> 11:00
   });
+
+  // Task 14: canceled jobs must not appear in the schedule dispatchers read,
+  // but technicianWorkload must keep counting them -- it reads the unfiltered
+  // todayJobs array, not the filtered schedule. All jobs below are scheduled
+  // on "today" (07-22, day window 04:00Z-07-22 -> 04:00Z-07-23 in EDT).
+  describe("canceled-job filtering (today's schedule)", () => {
+    beforeEach(() => {
+      fromMock.mockImplementation((table: string) => {
+        if (table === "jobs") {
+          return makeQueryBuilder({
+            data: [
+              {
+                id: "j_scheduled",
+                work_status: "scheduled",
+                is_emergency: false,
+                is_commercial: false,
+                total_amount_cents: 1000,
+                scheduled_start: "2026-07-22T08:00:00.000Z",
+                scheduled_end: "2026-07-22T09:00:00.000Z",
+                technician_id: "t1",
+                service_address_lat: null,
+                service_address_lng: null,
+                raw: {},
+              },
+              {
+                id: "j_in_progress",
+                work_status: "in progress",
+                is_emergency: false,
+                is_commercial: false,
+                total_amount_cents: 1000,
+                scheduled_start: "2026-07-22T09:00:00.000Z",
+                scheduled_end: "2026-07-22T10:00:00.000Z",
+                technician_id: "t1",
+                service_address_lat: null,
+                service_address_lng: null,
+                raw: {},
+              },
+              {
+                id: "j_complete_rated",
+                work_status: "complete rated",
+                is_emergency: false,
+                is_commercial: false,
+                total_amount_cents: 1000,
+                scheduled_start: "2026-07-22T10:00:00.000Z",
+                scheduled_end: "2026-07-22T11:00:00.000Z",
+                technician_id: "t2",
+                service_address_lat: null,
+                service_address_lng: null,
+                raw: {},
+              },
+              {
+                id: "j_complete_unrated",
+                work_status: "complete unrated",
+                is_emergency: false,
+                is_commercial: false,
+                total_amount_cents: 1000,
+                scheduled_start: "2026-07-22T11:00:00.000Z",
+                scheduled_end: "2026-07-22T12:00:00.000Z",
+                technician_id: "t2",
+                service_address_lat: null,
+                service_address_lng: null,
+                raw: {},
+              },
+              // Unknown/null status is NOT cancellation -- must stay included.
+              {
+                id: "j_null_status",
+                work_status: null,
+                is_emergency: false,
+                is_commercial: false,
+                total_amount_cents: 1000,
+                scheduled_start: "2026-07-22T12:00:00.000Z",
+                scheduled_end: "2026-07-22T13:00:00.000Z",
+                technician_id: "t1",
+                service_address_lat: null,
+                service_address_lng: null,
+                raw: {},
+              },
+              {
+                id: "j_pro_canceled",
+                work_status: "pro canceled",
+                is_emergency: false,
+                is_commercial: false,
+                total_amount_cents: 5000,
+                scheduled_start: "2026-07-22T13:00:00.000Z",
+                scheduled_end: "2026-07-22T14:00:00.000Z",
+                technician_id: "t1",
+                service_address_lat: null,
+                service_address_lng: null,
+                raw: {},
+              },
+              {
+                id: "j_user_canceled",
+                work_status: "user canceled",
+                is_emergency: false,
+                is_commercial: false,
+                total_amount_cents: 5000,
+                scheduled_start: "2026-07-22T14:00:00.000Z",
+                scheduled_end: "2026-07-22T15:00:00.000Z",
+                technician_id: "t2",
+                service_address_lat: null,
+                service_address_lng: null,
+                raw: {},
+              },
+              // Case-insensitivity: mixed-case must still be excluded.
+              {
+                id: "j_pro_canceled_mixed_case",
+                work_status: "Pro Canceled",
+                is_emergency: false,
+                is_commercial: false,
+                total_amount_cents: 5000,
+                scheduled_start: "2026-07-22T15:00:00.000Z",
+                scheduled_end: "2026-07-22T16:00:00.000Z",
+                technician_id: "t1",
+                service_address_lat: null,
+                service_address_lng: null,
+                raw: {},
+              },
+            ],
+            error: null,
+          });
+        }
+        return makeQueryBuilder({ data: [], error: null });
+      });
+    });
+
+    it("excludes canceled jobs from today's schedule while including null-status jobs", async () => {
+      const snap = await getDashboardSnapshot(NOW);
+      expect(snap.todaySchedule.map((r) => r.id)).toEqual([
+        "j_scheduled",
+        "j_in_progress",
+        "j_complete_rated",
+        "j_complete_unrated",
+        "j_null_status",
+      ]);
+    });
+
+    it("keeps technicianWorkload counting canceled jobs -- it reads the unfiltered todayJobs array", async () => {
+      const snap = await getDashboardSnapshot(NOW);
+      // 8 jobs today total, split t1 (5: scheduled, in_progress, null_status,
+      // pro_canceled, pro_canceled_mixed_case) and t2 (3: complete_rated,
+      // complete_unrated, user_canceled). Workload must count ALL of them,
+      // including the 3 canceled jobs the schedule dropped.
+      const byTech = new Map(snap.technicianWorkload.map((w) => [w.technicianId, w.jobCount]));
+      expect(byTech.get("t1")).toBe(5);
+      expect(byTech.get("t2")).toBe(3);
+      expect(snap.technicianWorkload.reduce((s, w) => s + w.jobCount, 0)).toBe(8);
+    });
+  });
 });
 
 describe("getWeekAheadSchedule", () => {
@@ -446,23 +594,63 @@ describe("getWeekAheadSchedule", () => {
     }
   });
 
-  // Consistency guard: getDashboardSnapshot's todaySchedule does NOT filter out
-  // canceled jobs (only revenue sums do). The week-ahead digest must match that
-  // behavior exactly, or a dispatcher could see a job on the live dashboard that
-  // silently vanished from the Slack digest for the same day.
-  it("includes canceled jobs, matching getDashboardSnapshot's todaySchedule behavior", async () => {
+  // Task 14 (owner decision, 2026-07-30): canceled jobs must be filtered from
+  // the digest, matching getDashboardSnapshot's todaySchedule. This reverses
+  // the prior "must match by including canceled jobs" behavior -- that parity
+  // requirement now cuts the other way: BOTH surfaces exclude cancellations,
+  // via the same isCanceledJob predicate, so they cannot drift apart.
+  it("excludes canceled jobs (case-insensitively) but includes null-status jobs, matching getDashboardSnapshot's todaySchedule", async () => {
     fromMock.mockImplementation((table: string) => {
       if (table === "jobs") {
         return makeQueryBuilder({
           data: [
             {
-              id: "job_canceled",
-              work_status: "user canceled",
+              id: "job_scheduled",
+              work_status: "scheduled",
               is_emergency: false,
               is_commercial: false,
               total_amount_cents: 5000,
               scheduled_start: "2026-07-27T12:00:00.000Z", // Mon 08:00 EDT
               scheduled_end: "2026-07-27T13:00:00.000Z",
+              technician_id: null,
+              service_address_lat: null,
+              service_address_lng: null,
+              raw: {},
+            },
+            {
+              id: "job_null_status",
+              work_status: null,
+              is_emergency: false,
+              is_commercial: false,
+              total_amount_cents: 5000,
+              scheduled_start: "2026-07-27T13:00:00.000Z",
+              scheduled_end: "2026-07-27T14:00:00.000Z",
+              technician_id: null,
+              service_address_lat: null,
+              service_address_lng: null,
+              raw: {},
+            },
+            {
+              id: "job_user_canceled",
+              work_status: "user canceled",
+              is_emergency: false,
+              is_commercial: false,
+              total_amount_cents: 5000,
+              scheduled_start: "2026-07-27T14:00:00.000Z",
+              scheduled_end: "2026-07-27T15:00:00.000Z",
+              technician_id: null,
+              service_address_lat: null,
+              service_address_lng: null,
+              raw: {},
+            },
+            {
+              id: "job_pro_canceled_mixed_case",
+              work_status: "Pro Canceled",
+              is_emergency: false,
+              is_commercial: false,
+              total_amount_cents: 5000,
+              scheduled_start: "2026-07-27T15:00:00.000Z",
+              scheduled_end: "2026-07-27T16:00:00.000Z",
               technician_id: null,
               service_address_lat: null,
               service_address_lng: null,
@@ -476,7 +664,7 @@ describe("getWeekAheadSchedule", () => {
     });
 
     const days = await getWeekAheadSchedule(new Date("2026-07-27T10:00:00Z"));
-    expect(days[0].rows.map((r) => r.id)).toEqual(["job_canceled"]);
+    expect(days[0].rows.map((r) => r.id)).toEqual(["job_scheduled", "job_null_status"]);
   });
 
   // DST regression: 2026-11-01 is the fall-back Sunday (clocks EDT -> EST at
