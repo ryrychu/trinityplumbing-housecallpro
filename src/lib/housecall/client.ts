@@ -91,4 +91,50 @@ export class HousecallClient {
   listLeads(page = 1) {
     return this.request<HcpLead>("/leads", "leads", page, true);
   }
+
+  // Targeted paid-invoice poll (spec: "Targeted invoice polling"). The generic
+  // incremental path is useless for invoices — they carry no `updated_at`, so
+  // the cursor never advances and every run re-pages all ~2.9k invoices (58
+  // calls, ~70s), which is why the full reconcile is gated to once per 20h.
+  // Filtering server-side on status + paid_at makes this ONE call per run, so
+  // 15-minute latency is cheaper than the 20-hour reconcile, not costlier.
+  //
+  // Bypasses the shared request() helper: that method hardcodes
+  // sort_by=updated_at, which invoices have nothing to sort by.
+  //
+  // `status[]=paid`, not `status=paid`: the live API returns 422 "must be an
+  // array" for the bare form (probe, 2026-07-29). Unencoded brackets, matching
+  // the `expand[]` convention in request() above.
+  //
+  // sort_direction=asc is REQUIRED, not incidental (I5 fix). The caller
+  // (route.ts) only ever fetches page 1 of this call and advances its
+  // watermark to the max paid_at it sees there. Sorted descending, page 1 is
+  // the 50 NEWEST paid invoices — any invoice paid after the old watermark
+  // but outside that newest-50 window would never be fetched, yet the
+  // watermark would still jump past it, permanently skipping it. Sorted
+  // ascending, page 1 is the 50 OLDEST unprocessed invoices, so the watermark
+  // can only ever advance to a paid_at that was actually fetched and passed
+  // to notifyPaidInvoices; a backlog bigger than one page is caught up over
+  // successive 15-minute runs instead of silently dropped.
+  async listPaidInvoicesSince(
+    paidAtMin: string | null,
+    page = 1
+  ): Promise<{ items: HcpInvoice[]; page: number; totalPages: number }> {
+    const since = paidAtMin ? `&paid_at_min=${encodeURIComponent(paidAtMin)}` : "";
+    const res = await fetch(
+      `${BASE_URL}/invoices?page=${page}&page_size=50&status[]=paid&sort_by=paid_at&sort_direction=asc${since}`,
+      { headers: { Authorization: `Bearer ${this.apiKey}`, Accept: "application/json" } }
+    );
+
+    if (!res.ok) {
+      throw new Error(`Housecall Pro API error ${res.status} on /invoices (paid): ${await res.text()}`);
+    }
+
+    const json = await res.json();
+    return {
+      items: (json.invoices ?? []) as HcpInvoice[],
+      page: json.page ?? page,
+      totalPages: json.total_pages ?? page,
+    };
+  }
 }

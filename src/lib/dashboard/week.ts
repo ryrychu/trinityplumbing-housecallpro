@@ -36,8 +36,18 @@ function localMidnightUtc(y: number, m0: number, d: number): Date {
   return new Date(guess - off);
 }
 
-// Local calendar Y/M/D + weekday (0=Sun..6=Sat) for an instant.
-function localCal(instant: Date): { y: number; m0: number; d: number; dow: number } {
+// Local calendar parts + weekday (0=Sun..6=Sat) + wall-clock time for an
+// instant, in TZ. Exported because the Slack digest scheduler needs the same
+// DST-correct arithmetic — duplicating Intl logic there would let the two
+// drift apart.
+export function localParts(instant: Date): {
+  y: number;
+  m0: number;
+  d: number;
+  dow: number;
+  hour: number;
+  minute: number;
+} {
   const off = tzOffsetMs(instant);
   const local = new Date(instant.getTime() + off);
   return {
@@ -45,8 +55,12 @@ function localCal(instant: Date): { y: number; m0: number; d: number; dow: numbe
     m0: local.getUTCMonth(),
     d: local.getUTCDate(),
     dow: local.getUTCDay(),
+    hour: local.getUTCHours(),
+    minute: local.getUTCMinutes(),
   };
 }
+
+const localCal = localParts;
 
 // Add `days` calendar days to y/m0/d, normalized.
 function addDays(y: number, m0: number, d: number, days: number): { y: number; m0: number; d: number } {

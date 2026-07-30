@@ -154,6 +154,35 @@ Geocoding after the uncapped local backfill: 92/1497 customers and 201/3038 jobs
 still lack coordinates — 63 are definitive Census no-matches, the rest lack a
 street or city/zip. That floor is expected, not a budget problem.
 
+## Invoice filter probe (2026-07-29)
+
+`scripts/probe-invoice-filters.mjs` hit the live `GET /invoices` endpoint to
+check whether `status=paid`, `paid_at_min`, and `sort_by=paid_at` (all
+documented in `housecall.v1.yaml`) actually work, so a paid-invoice poll can
+use one targeted call instead of paging all ~2.9k invoices. **All three
+filters work on the live account:**
+
+- **`status` filters correctly, sent as `status[]=paid`** (array form —
+  `housecall.v1.yaml` types `status` as an array and the live API enforces it
+  literally; a bare `status=paid` 422s with `{"errors":{"status":"must be an
+  array"}}`). With `status[]=paid`, every returned item has `status: "paid"`
+  (2,234 of ~2,900 total invoices came back as paid; baseline `total_pages`
+  58 → 45 with the filter applied). Same unencoded-bracket convention already
+  used for `expand[]` in `src/lib/housecall/client.ts`.
+- **`paid_at_min` filters correctly**: `status[]=paid&paid_at_min=<30-days-ago
+  ISO timestamp>` returned only invoices paid within that window (26 items,
+  0 older than the cutoff).
+- **`sort_by=paid_at&sort_direction=desc` sorts correctly**: 50 items came back
+  with `paid_at` populated in strictly descending order.
+- **`paid_at` is present on the invoice payload** — it's one of the top-level
+  fields (`id, status, invoice_number, amount, ..., paid_at, sent_at, ...`),
+  populated for paid invoices.
+
+**Conclusion for Task 8:** build `listPaidInvoicesSince` using
+`status[]=paid`, `paid_at_min=<cursor>`, `sort_by=paid_at`,
+`sort_direction=desc` — this lets the cron detect newly-paid invoices with a
+single API call instead of the current 58-call full pass.
+
 ## Housekeeping
 
 - Add an assertion test that pins each mapper's output keys to the migration's

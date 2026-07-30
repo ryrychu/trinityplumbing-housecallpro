@@ -111,4 +111,46 @@ describe("HousecallClient", () => {
       expect.anything()
     );
   });
+
+  describe("listPaidInvoicesSince", () => {
+    // ASCENDING is load-bearing, not incidental (I5 finding). The route only
+    // ever fetches page 1 and advances the watermark to the max paid_at seen
+    // in that page. Sorted DESCENDING, page 1 is the 50 NEWEST paid invoices —
+    // any invoice paid after the old watermark but outside those 50 newest
+    // would be skipped, and the watermark would jump past it forever (it is
+    // never re-queried). Sorted ASCENDING, page 1 is the 50 OLDEST
+    // unprocessed invoices, so the watermark can only advance to a point that
+    // was actually fetched and passed to notifyPaidInvoices; a backlog larger
+    // than one page is simply caught up over several 15-minute runs instead
+    // of silently dropped.
+    it("requests only paid invoices at or after the watermark, oldest first", async () => {
+      global.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ invoices: [{ id: "inv_1" }], page: 1, total_pages: 1 }),
+      });
+
+      const client = new HousecallClient();
+      const result = await client.listPaidInvoicesSince("2026-07-29T00:00:00Z");
+
+      expect(result.items).toEqual([{ id: "inv_1" }]);
+      const url = vi.mocked(global.fetch).mock.calls[0][0] as string;
+      expect(url).toContain("/invoices?");
+      // Array form, unencoded brackets. Bare `status=paid` returns 422
+      // "must be an array" on the live API (probe, 2026-07-29).
+      expect(url).toContain("status[]=paid");
+      expect(url).toContain("paid_at_min=2026-07-29T00%3A00%3A00Z");
+      expect(url).toContain("sort_by=paid_at");
+      expect(url).toContain("sort_direction=asc");
+    });
+
+    it("omits paid_at_min entirely on a null watermark", async () => {
+      global.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ invoices: [], page: 1, total_pages: 1 }),
+      });
+
+      await new HousecallClient().listPaidInvoicesSince(null);
+      expect(vi.mocked(global.fetch).mock.calls[0][0]).not.toContain("paid_at_min");
+    });
+  });
 });

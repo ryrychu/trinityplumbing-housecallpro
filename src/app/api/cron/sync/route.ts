@@ -6,6 +6,17 @@ import { buildGeocodeTargets } from "@/lib/sync/geocodeSpecs";
 import { enrichRowsWithGeocode, type GeocodeBudget } from "@/lib/geo/geocode";
 import { syncResourceIncremental, type IncrementalResult } from "@/lib/sync/incremental";
 import { type RehostBudget } from "@/lib/sync/attachments";
+import { notifyPaidInvoices, notifyApprovedEstimates } from "@/lib/notifications/dispatch";
+import { claim } from "@/lib/notifications/dedupe";
+import {
+  isDailyDigestDue,
+  isWeeklyLookaheadDue,
+  localDateKey,
+  mondayDateKey,
+} from "@/lib/notifications/schedule";
+import { getDashboardSnapshot, getWeekAheadSchedule } from "@/lib/dashboard/queries";
+import { formatDailyDigest, formatWeeklyLookahead } from "@/lib/slack/format";
+import { postSlack, slackAlertsEnabled } from "@/lib/slack/client";
 
 // A steady-state incremental run costs ~2s (each resource stops after one page);
 // the daily invoice reconcile below costs ~70s. 300s leaves generous headroom.
@@ -121,10 +132,27 @@ export async function GET(req: Request) {
   // sharing the geocode budget so a first backfill can't blow the timeout.
   await syncAllPages((p) => hcp.listEmployees(p), "technicians", mapEmployee, budget);
 
+  // I2: the cron is the promised safety net for a missed estimate-approval
+  // webhook (retries exhausted, deploy window, rotated secret, a signature
+  // mismatch returning 401 — HCP never retries those). Collecting exactly the
+  // records THIS run's incremental sync touched (not a fresh query) keeps
+  // detection O(changes), per the design's "detection reads only the records
+  // sync just touched" rule.
+  const touchedEstimates: unknown[] = [];
+
   const results: IncrementalResult[] = [
     await syncResourceIncremental(supabase, "customers", (p) => hcp.listCustomers(p), mapCustomer, budget, cursors.get("customers") ?? null, rehostBudget),
     await syncResourceIncremental(supabase, "jobs", (p) => hcp.listJobs(p), mapJob, budget, cursors.get("jobs") ?? null, rehostBudget),
-    await syncResourceIncremental(supabase, "estimates", (p) => hcp.listEstimates(p), mapEstimate, budget, cursors.get("estimates") ?? null),
+    await syncResourceIncremental(
+      supabase,
+      "estimates",
+      (p) => hcp.listEstimates(p),
+      mapEstimate,
+      budget,
+      cursors.get("estimates") ?? null,
+      undefined,
+      (items) => touchedEstimates.push(...items)
+    ),
     await syncResourceIncremental(supabase, "leads", (p) => hcp.listLeads(p), mapLead, budget, cursors.get("leads") ?? null),
   ];
 
@@ -134,6 +162,70 @@ export async function GET(req: Request) {
     results.push(
       await syncResourceIncremental(supabase, "invoices", (p) => hcp.listInvoices(p), mapInvoice, budget, null)
     );
+  }
+
+  // Targeted paid-invoice poll — ONE API call per run, unlike the 58-call full
+  // reconcile above, which is why it can run every 15 minutes. The watermark
+  // lives in sync_cursors under a dedicated resource key.
+  //
+  // notifications_sent (via claimMany) is the correctness guarantee against
+  // DUPLICATE notifications. It is NOT what protects against a LOST one — the
+  // watermark is. If this block fetched or advanced the watermark while
+  // alerts are off, or after a claim/DB error, invoices in that window would
+  // be skipped past and never queried again: nothing would have claimed or
+  // posted them, yet the cursor would say they were handled. So:
+  //
+  //   1. The kill switch gates the ENTIRE block — fetch, notify, AND
+  //      watermark advance — not just the Slack post. The rollout runbook
+  //      deploys with alerts off for a watch period of hours to days
+  //      (docs/SLACK-ROLLOUT.md Step 3); this is not a hypothetical window.
+  //   2. claimMany (src/lib/notifications/dedupe.ts) THROWS on a DB error
+  //      instead of swallowing it. That throw propagates through
+  //      notifyPaidInvoices into the catch below, which skips `results.push`
+  //      for `invoices_paid` entirely — so cursorUpserts never includes it,
+  //      sync_cursors keeps its prior value, and the next run retries these
+  //      same invoices instead of silently treating them as handled.
+  if (slackAlertsEnabled()) {
+    const paidWatermark = cursors.get("invoices_paid") ?? null;
+    let newPaidWatermark = paidWatermark;
+    try {
+      const paidPage = await hcp.listPaidInvoicesSince(paidWatermark);
+      await notifyPaidInvoices(supabase, paidPage.items);
+      for (const inv of paidPage.items) {
+        if (inv.paid_at && (!newPaidWatermark || inv.paid_at > newPaidWatermark)) {
+          newPaidWatermark = inv.paid_at;
+        }
+      }
+      results.push({
+        resource: "invoices_paid",
+        newCursor: newPaidWatermark,
+        upserted: 0,
+        pagesFetched: 1,
+      });
+    } catch (err) {
+      // A fetch/claim/notification failure must never fail the sync the
+      // dashboard depends on — but see the comment above: it must also never
+      // reach the results.push above, or the watermark advances on a run that
+      // claimed and posted nothing.
+      console.error("[cron] paid-invoice notification pass failed:", err);
+    }
+  }
+
+  // I2 safety net: estimate approvals are delivered near-instantly by the
+  // webhook path (src/app/api/webhooks/housecall/route.ts). This re-checks
+  // only the estimate records this run's incremental sync just touched, so a
+  // webhook delivery HCP never retries (signature mismatch, rotated secret,
+  // deploy window, retries exhausted) still gets picked up here within one
+  // poll interval. The shared claim ledger (notifications_sent) makes the
+  // overlap with the webhook path free — whichever path claims first posts,
+  // the other is a no-op.
+  if (slackAlertsEnabled()) {
+    try {
+      await notifyApprovedEstimates(supabase, touchedEstimates);
+    } catch (err) {
+      // Same guarantee as every other notification pass: never fail the sync.
+      console.error("[cron] estimate-approval notification pass failed:", err);
+    }
   }
 
   // Persist cursors for every resource that ran. Resources with no usable
@@ -147,6 +239,47 @@ export async function GET(req: Request) {
   }));
   if (cursorUpserts.length > 0) {
     await supabase.from("sync_cursors").upsert(cursorUpserts);
+  }
+
+  // Digest timing is decided here rather than by the cron schedule: cron cannot
+  // express "6am Eastern", only a UTC hour that is wrong for half the year.
+  // Any run inside the local morning window sends it, so a missed 6:00 ping
+  // self-heals on the next one; claim() guarantees exactly one per day.
+  if (slackAlertsEnabled()) {
+    const now = new Date();
+
+    // Split from the daily digest below into its own try/catch: sharing one
+    // try meant a throw from getWeekAheadSchedule AFTER claim('weekly_lookahead')
+    // already succeeded would skip the daily branch too AND permanently lose
+    // that week's look-ahead (the claim is already recorded, so a retry finds
+    // it pre-claimed and posts nothing). The daily digest is only delayed by
+    // a throw, never lost, since tomorrow re-claims a fresh date key — but
+    // that only holds if a weekly failure can't take it down too.
+    try {
+      if (isWeeklyLookaheadDue(now) && (await claim(supabase, "weekly_lookahead", mondayDateKey(now)))) {
+        const days = await getWeekAheadSchedule(now);
+        await postSlack(process.env.SLACK_WEBHOOK_SCHEDULE, formatWeeklyLookahead(now, days));
+      }
+    } catch (err) {
+      // A Slack/digest problem must never fail the sync the dashboard depends on.
+      console.error("[cron] weekly look-ahead pass failed:", err);
+    }
+
+    try {
+      if (isDailyDigestDue(now) && (await claim(supabase, "daily_digest", localDateKey(now)))) {
+        const snapshot = await getDashboardSnapshot(now);
+        // Sync age surfaces a stalled external scheduler in the message that is
+        // already read every morning.
+        const minutesAgo = Math.round((now.getTime() - Date.parse(syncedAt)) / 60_000);
+        await postSlack(
+          process.env.SLACK_WEBHOOK_SCHEDULE,
+          formatDailyDigest(now, snapshot.todaySchedule, Number.isFinite(minutesAgo) ? minutesAgo : null)
+        );
+      }
+    } catch (err) {
+      // A Slack/digest problem must never fail the sync the dashboard depends on.
+      console.error("[cron] daily digest pass failed:", err);
+    }
   }
 
   return NextResponse.json(

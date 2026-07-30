@@ -155,6 +155,58 @@ describe("syncResourceIncremental", () => {
     vi.unstubAllGlobals();
   });
 
+  // I2: the cron route needs to know exactly which raw records this run
+  // touched, to feed estimates into the approved-estimate safety-net
+  // notifier without a second query. Additive/optional so no existing caller
+  // (customers, jobs, leads) needs to change.
+  it("calls onTouched with the raw fresh records, once per page, only after a successful upsert", async () => {
+    const fetchPage = pager([
+      [{ id: "j1", updated_at: "2026-07-23T00:00:00Z" }, { id: "j2", updated_at: "2026-07-22T00:00:00Z" }],
+      [{ id: "j3", updated_at: "2026-07-21T00:00:00Z" }],
+    ]);
+    const onTouched = vi.fn();
+
+    await syncResourceIncremental(supabase, "jobs", fetchPage, identityMapper, { remaining: 0 }, null, undefined, onTouched);
+
+    expect(onTouched).toHaveBeenCalledTimes(2);
+    expect(onTouched.mock.calls[0][0]).toEqual([
+      { id: "j1", updated_at: "2026-07-23T00:00:00Z" },
+      { id: "j2", updated_at: "2026-07-22T00:00:00Z" },
+    ]);
+    expect(onTouched.mock.calls[1][0]).toEqual([{ id: "j3", updated_at: "2026-07-21T00:00:00Z" }]);
+  });
+
+  it("never calls onTouched when a page has nothing fresh (already older than the cursor)", async () => {
+    const fetchPage = pager([[{ id: "j1", updated_at: "2026-07-01T00:00:00Z" }]]);
+    const onTouched = vi.fn();
+
+    await syncResourceIncremental(
+      supabase,
+      "jobs",
+      fetchPage,
+      identityMapper,
+      { remaining: 0 },
+      "2026-07-20T00:00:00Z",
+      undefined,
+      onTouched
+    );
+
+    expect(onTouched).not.toHaveBeenCalled();
+  });
+
+  it("does not call onTouched when the upsert fails", async () => {
+    const failingUpsert = vi.fn().mockResolvedValue({ error: { message: "db down" } });
+    const localSupabase = { from: vi.fn(() => ({ upsert: failingUpsert })) } as unknown as SupabaseClient;
+    const fetchPage = pager([[{ id: "j1", updated_at: "2026-07-23T00:00:00Z" }]]);
+    const onTouched = vi.fn();
+
+    await expect(
+      syncResourceIncremental(localSupabase, "jobs", fetchPage, identityMapper, { remaining: 0 }, null, undefined, onTouched)
+    ).rejects.toThrow();
+
+    expect(onTouched).not.toHaveBeenCalled();
+  });
+
   it("does nothing to upsert when the first record is already older than the cursor", async () => {
     const fetchPage = pager([[{ id: "j1", updated_at: "2026-07-01T00:00:00Z" }]]);
     const cursor = "2026-07-20T00:00:00Z";

@@ -22,7 +22,7 @@ vi.mock("@/lib/supabase/client", () => ({
   getSupabaseServerClient: () => ({ from: fromMock }),
 }));
 
-import { getDashboardSnapshot } from "../queries";
+import { getDashboardSnapshot, getWeekAheadSchedule } from "../queries";
 
 // Fixed clock for every test in this file: 2026-07-22 is a Wednesday, so
 // this-week = Mon 07-20..Mon 07-27, next-week = 07-27..08-03, today = 07-22.
@@ -349,5 +349,408 @@ describe("getDashboardSnapshot", () => {
     expect(entry.technicianName).toBe("Tom Tech");
     expect(entry.jobCount).toBe(1);
     expect(entry.scheduledHours).toBe(2); // 09:00 -> 11:00
+  });
+
+  // Task 14: canceled jobs must not appear in the schedule dispatchers read,
+  // but technicianWorkload must keep counting them -- it reads the unfiltered
+  // todayJobs array, not the filtered schedule. All jobs below are scheduled
+  // on "today" (07-22, day window 04:00Z-07-22 -> 04:00Z-07-23 in EDT).
+  describe("canceled-job filtering (today's schedule)", () => {
+    beforeEach(() => {
+      fromMock.mockImplementation((table: string) => {
+        if (table === "jobs") {
+          return makeQueryBuilder({
+            data: [
+              {
+                id: "j_scheduled",
+                work_status: "scheduled",
+                is_emergency: false,
+                is_commercial: false,
+                total_amount_cents: 1000,
+                scheduled_start: "2026-07-22T08:00:00.000Z",
+                scheduled_end: "2026-07-22T09:00:00.000Z",
+                technician_id: "t1",
+                service_address_lat: null,
+                service_address_lng: null,
+                raw: {},
+              },
+              {
+                id: "j_in_progress",
+                work_status: "in progress",
+                is_emergency: false,
+                is_commercial: false,
+                total_amount_cents: 1000,
+                scheduled_start: "2026-07-22T09:00:00.000Z",
+                scheduled_end: "2026-07-22T10:00:00.000Z",
+                technician_id: "t1",
+                service_address_lat: null,
+                service_address_lng: null,
+                raw: {},
+              },
+              {
+                id: "j_complete_rated",
+                work_status: "complete rated",
+                is_emergency: false,
+                is_commercial: false,
+                total_amount_cents: 1000,
+                scheduled_start: "2026-07-22T10:00:00.000Z",
+                scheduled_end: "2026-07-22T11:00:00.000Z",
+                technician_id: "t2",
+                service_address_lat: null,
+                service_address_lng: null,
+                raw: {},
+              },
+              {
+                id: "j_complete_unrated",
+                work_status: "complete unrated",
+                is_emergency: false,
+                is_commercial: false,
+                total_amount_cents: 1000,
+                scheduled_start: "2026-07-22T11:00:00.000Z",
+                scheduled_end: "2026-07-22T12:00:00.000Z",
+                technician_id: "t2",
+                service_address_lat: null,
+                service_address_lng: null,
+                raw: {},
+              },
+              // Unknown/null status is NOT cancellation -- must stay included.
+              {
+                id: "j_null_status",
+                work_status: null,
+                is_emergency: false,
+                is_commercial: false,
+                total_amount_cents: 1000,
+                scheduled_start: "2026-07-22T12:00:00.000Z",
+                scheduled_end: "2026-07-22T13:00:00.000Z",
+                technician_id: "t1",
+                service_address_lat: null,
+                service_address_lng: null,
+                raw: {},
+              },
+              {
+                id: "j_pro_canceled",
+                work_status: "pro canceled",
+                is_emergency: false,
+                is_commercial: false,
+                total_amount_cents: 5000,
+                scheduled_start: "2026-07-22T13:00:00.000Z",
+                scheduled_end: "2026-07-22T14:00:00.000Z",
+                technician_id: "t1",
+                service_address_lat: null,
+                service_address_lng: null,
+                raw: {},
+              },
+              {
+                id: "j_user_canceled",
+                work_status: "user canceled",
+                is_emergency: false,
+                is_commercial: false,
+                total_amount_cents: 5000,
+                scheduled_start: "2026-07-22T14:00:00.000Z",
+                scheduled_end: "2026-07-22T15:00:00.000Z",
+                technician_id: "t2",
+                service_address_lat: null,
+                service_address_lng: null,
+                raw: {},
+              },
+              // Case-insensitivity: mixed-case must still be excluded.
+              {
+                id: "j_pro_canceled_mixed_case",
+                work_status: "Pro Canceled",
+                is_emergency: false,
+                is_commercial: false,
+                total_amount_cents: 5000,
+                scheduled_start: "2026-07-22T15:00:00.000Z",
+                scheduled_end: "2026-07-22T16:00:00.000Z",
+                technician_id: "t1",
+                service_address_lat: null,
+                service_address_lng: null,
+                raw: {},
+              },
+            ],
+            error: null,
+          });
+        }
+        return makeQueryBuilder({ data: [], error: null });
+      });
+    });
+
+    it("excludes canceled jobs from today's schedule while including null-status jobs", async () => {
+      const snap = await getDashboardSnapshot(NOW);
+      expect(snap.todaySchedule.map((r) => r.id)).toEqual([
+        "j_scheduled",
+        "j_in_progress",
+        "j_complete_rated",
+        "j_complete_unrated",
+        "j_null_status",
+      ]);
+    });
+
+    it("keeps technicianWorkload counting canceled jobs -- it reads the unfiltered todayJobs array", async () => {
+      const snap = await getDashboardSnapshot(NOW);
+      // 8 jobs today total, split t1 (5: scheduled, in_progress, null_status,
+      // pro_canceled, pro_canceled_mixed_case) and t2 (3: complete_rated,
+      // complete_unrated, user_canceled). Workload must count ALL of them,
+      // including the 3 canceled jobs the schedule dropped.
+      const byTech = new Map(snap.technicianWorkload.map((w) => [w.technicianId, w.jobCount]));
+      expect(byTech.get("t1")).toBe(5);
+      expect(byTech.get("t2")).toBe(3);
+      expect(snap.technicianWorkload.reduce((s, w) => s + w.jobCount, 0)).toBe(8);
+    });
+  });
+});
+
+describe("getWeekAheadSchedule", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("returns seven day buckets, Monday first, with jobs in their local day", async () => {
+    fromMock.mockImplementation((table: string) => {
+      if (table === "jobs") {
+        return makeQueryBuilder({
+          data: [
+            {
+              id: "job_1",
+              work_status: "scheduled",
+              is_emergency: false,
+              is_commercial: false,
+              total_amount_cents: 10000,
+              scheduled_start: "2026-07-27T12:00:00.000Z", // Mon 08:00 EDT
+              scheduled_end: "2026-07-27T13:00:00.000Z",
+              technician_id: "t1",
+              service_address_lat: null,
+              service_address_lng: null,
+              raw: { customer: { id: "c1" }, address: { city: "Troy" } },
+            },
+            {
+              id: "job_2",
+              work_status: "scheduled",
+              is_emergency: false,
+              is_commercial: false,
+              total_amount_cents: 10000,
+              scheduled_start: "2026-07-29T20:00:00.000Z", // Wed 16:00 EDT
+              scheduled_end: "2026-07-29T21:00:00.000Z",
+              technician_id: "t2",
+              service_address_lat: null,
+              service_address_lng: null,
+              raw: { customer: { id: "c2" }, address: { city: "Albany" } },
+            },
+          ],
+          error: null,
+        });
+      }
+      if (table === "customers") {
+        return makeQueryBuilder({
+          data: [
+            { id: "c1", first_name: "Alice", last_name: "Anderson", city: "Troy" },
+            { id: "c2", first_name: "Bob", last_name: "Baker", city: "Albany" },
+          ],
+          error: null,
+        });
+      }
+      if (table === "technicians") {
+        return makeQueryBuilder({
+          data: [
+            { id: "t1", first_name: "Tom", last_name: "Tech" },
+            { id: "t2", first_name: "Tina", last_name: "Trades" },
+          ],
+          error: null,
+        });
+      }
+      return makeQueryBuilder({ data: [], error: null });
+    });
+
+    const days = await getWeekAheadSchedule(new Date("2026-07-27T10:00:00Z"));
+
+    expect(days).toHaveLength(7);
+    expect(days[0].dateKey).toBe("2026-07-27");
+    expect(days[6].dateKey).toBe("2026-08-02");
+    expect(days[0].rows.map((r) => r.id)).toEqual(["job_1"]);
+    expect(days[2].rows.map((r) => r.id)).toEqual(["job_2"]);
+    expect(days[1].rows).toEqual([]);
+    // Rows share the exact shape buildScheduleRow produces for the dashboard.
+    expect(days[0].rows[0].customerName).toBe("Alice Anderson");
+    expect(days[0].rows[0].technicianName).toBe("Tom Tech");
+  });
+
+  it("returns seven empty-but-present days when there are no jobs at all", async () => {
+    fromMock.mockImplementation(() => makeQueryBuilder({ data: [], error: null }));
+
+    const days = await getWeekAheadSchedule(new Date("2026-07-27T10:00:00Z"));
+
+    expect(days).toHaveLength(7);
+    expect(days.map((d) => d.dateKey)).toEqual([
+      "2026-07-27",
+      "2026-07-28",
+      "2026-07-29",
+      "2026-07-30",
+      "2026-07-31",
+      "2026-08-01",
+      "2026-08-02",
+    ]);
+    for (const d of days) {
+      expect(d.rows).toEqual([]);
+    }
+  });
+
+  // Task 14 (owner decision, 2026-07-30): canceled jobs must be filtered from
+  // the digest, matching getDashboardSnapshot's todaySchedule. This reverses
+  // the prior "must match by including canceled jobs" behavior -- that parity
+  // requirement now cuts the other way: BOTH surfaces exclude cancellations,
+  // via the same isCanceledJob predicate, so they cannot drift apart.
+  it("excludes canceled jobs (case-insensitively) but includes null-status jobs, matching getDashboardSnapshot's todaySchedule", async () => {
+    fromMock.mockImplementation((table: string) => {
+      if (table === "jobs") {
+        return makeQueryBuilder({
+          data: [
+            {
+              id: "job_scheduled",
+              work_status: "scheduled",
+              is_emergency: false,
+              is_commercial: false,
+              total_amount_cents: 5000,
+              scheduled_start: "2026-07-27T12:00:00.000Z", // Mon 08:00 EDT
+              scheduled_end: "2026-07-27T13:00:00.000Z",
+              technician_id: null,
+              service_address_lat: null,
+              service_address_lng: null,
+              raw: {},
+            },
+            {
+              id: "job_null_status",
+              work_status: null,
+              is_emergency: false,
+              is_commercial: false,
+              total_amount_cents: 5000,
+              scheduled_start: "2026-07-27T13:00:00.000Z",
+              scheduled_end: "2026-07-27T14:00:00.000Z",
+              technician_id: null,
+              service_address_lat: null,
+              service_address_lng: null,
+              raw: {},
+            },
+            {
+              id: "job_user_canceled",
+              work_status: "user canceled",
+              is_emergency: false,
+              is_commercial: false,
+              total_amount_cents: 5000,
+              scheduled_start: "2026-07-27T14:00:00.000Z",
+              scheduled_end: "2026-07-27T15:00:00.000Z",
+              technician_id: null,
+              service_address_lat: null,
+              service_address_lng: null,
+              raw: {},
+            },
+            {
+              id: "job_pro_canceled_mixed_case",
+              work_status: "Pro Canceled",
+              is_emergency: false,
+              is_commercial: false,
+              total_amount_cents: 5000,
+              scheduled_start: "2026-07-27T15:00:00.000Z",
+              scheduled_end: "2026-07-27T16:00:00.000Z",
+              technician_id: null,
+              service_address_lat: null,
+              service_address_lng: null,
+              raw: {},
+            },
+          ],
+          error: null,
+        });
+      }
+      return makeQueryBuilder({ data: [], error: null });
+    });
+
+    const days = await getWeekAheadSchedule(new Date("2026-07-27T10:00:00Z"));
+    expect(days[0].rows.map((r) => r.id)).toEqual(["job_scheduled", "job_null_status"]);
+  });
+
+  // DST regression: 2026-11-01 is the fall-back Sunday (clocks EDT -> EST at
+  // 2am local), always the LAST day of a Monday-start week. A job scheduled
+  // just before local midnight on that Sunday must still land in Sunday's
+  // bucket (dateKey 2026-11-01), not spill into Monday 11-02.
+  it("buckets correctly across the fall-back DST transition (week of 2026-10-26)", async () => {
+    fromMock.mockImplementation((table: string) => {
+      if (table === "jobs") {
+        return makeQueryBuilder({
+          data: [
+            {
+              id: "job_fallback_sun",
+              work_status: "scheduled",
+              is_emergency: false,
+              is_commercial: false,
+              total_amount_cents: 1000,
+              // 2026-11-01T23:30:00 EST == 2026-11-02T04:30:00Z. Late Sunday
+              // night, well after the 2am transition, still calendar-day Sunday.
+              scheduled_start: "2026-11-02T04:30:00.000Z",
+              scheduled_end: "2026-11-02T05:00:00.000Z",
+              technician_id: null,
+              service_address_lat: null,
+              service_address_lng: null,
+              raw: {},
+            },
+          ],
+          error: null,
+        });
+      }
+      return makeQueryBuilder({ data: [], error: null });
+    });
+
+    const days = await getWeekAheadSchedule(new Date("2026-10-28T12:00:00Z")); // Wed in that week
+
+    expect(days.map((d) => d.dateKey)).toEqual([
+      "2026-10-26",
+      "2026-10-27",
+      "2026-10-28",
+      "2026-10-29",
+      "2026-10-30",
+      "2026-10-31",
+      "2026-11-01",
+    ]);
+    expect(days[6].rows.map((r) => r.id)).toEqual(["job_fallback_sun"]);
+  });
+
+  // DST regression: 2026-03-08 is the spring-forward Sunday (EST -> EDT at
+  // 2am local, a 23-hour day), again the last day of its Monday-start week.
+  it("buckets correctly across the spring-forward DST transition (week of 2026-03-02)", async () => {
+    fromMock.mockImplementation((table: string) => {
+      if (table === "jobs") {
+        return makeQueryBuilder({
+          data: [
+            {
+              id: "job_springfwd_sun",
+              work_status: "scheduled",
+              is_emergency: false,
+              is_commercial: false,
+              total_amount_cents: 1000,
+              // 2026-03-08T10:00:00 EDT (post-transition) == 2026-03-08T14:00:00Z.
+              scheduled_start: "2026-03-08T14:00:00.000Z",
+              scheduled_end: "2026-03-08T15:00:00.000Z",
+              technician_id: null,
+              service_address_lat: null,
+              service_address_lng: null,
+              raw: {},
+            },
+          ],
+          error: null,
+        });
+      }
+      return makeQueryBuilder({ data: [], error: null });
+    });
+
+    const days = await getWeekAheadSchedule(new Date("2026-03-04T12:00:00Z")); // Wed in that week
+
+    expect(days.map((d) => d.dateKey)).toEqual([
+      "2026-03-02",
+      "2026-03-03",
+      "2026-03-04",
+      "2026-03-05",
+      "2026-03-06",
+      "2026-03-07",
+      "2026-03-08",
+    ]);
+    expect(days[6].rows.map((r) => r.id)).toEqual(["job_springfwd_sun"]);
   });
 });
