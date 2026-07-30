@@ -1908,6 +1908,19 @@ import { postSlack, slackAlertsEnabled } from "@/lib/slack/client";
 
 After the `if (shouldReconcileInvoices) { ... }` block and before the cursor-persistence block, add the targeted paid-invoice pass (**path A only** — on path B, instead call `notifyPaidInvoices(supabase, reconciledInvoiceItems)` using the records the reconcile already fetched):
 
+**POST-REVIEW CORRECTION (whole-branch review finding C1, applied after this
+plan was originally written):** the version below is what this task's plan
+originally specified, and it is WRONG. `notifications_sent` (via `claim`/
+`claimMany`) guards against a DUPLICATE notification; it does nothing to
+guard against a LOST one — the watermark does, and the comment below's
+"a wrong watermark can only delay a notification, never duplicate one" has it
+backwards. The block must be gated on `slackAlertsEnabled()` in its entirety
+(fetch included, not just the post), and `results.push` for `invoices_paid`
+must only run when the fetch+notify sequence completes without throwing —
+otherwise a kill-switch-off deploy window, or a `claimMany` DB error, silently
+advances the watermark past invoices nothing ever claimed or posted. See
+`src/app/api/cron/sync/route.ts` for the corrected version actually shipped.
+
 ```typescript
   // Targeted paid-invoice poll — ONE API call per run, unlike the 58-call full
   // reconcile above, which is why it can run every 15 minutes. The watermark

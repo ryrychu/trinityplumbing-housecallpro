@@ -105,13 +105,24 @@ export class HousecallClient {
   // `status[]=paid`, not `status=paid`: the live API returns 422 "must be an
   // array" for the bare form (probe, 2026-07-29). Unencoded brackets, matching
   // the `expand[]` convention in request() above.
+  //
+  // sort_direction=asc is REQUIRED, not incidental (I5 fix). The caller
+  // (route.ts) only ever fetches page 1 of this call and advances its
+  // watermark to the max paid_at it sees there. Sorted descending, page 1 is
+  // the 50 NEWEST paid invoices — any invoice paid after the old watermark
+  // but outside that newest-50 window would never be fetched, yet the
+  // watermark would still jump past it, permanently skipping it. Sorted
+  // ascending, page 1 is the 50 OLDEST unprocessed invoices, so the watermark
+  // can only ever advance to a paid_at that was actually fetched and passed
+  // to notifyPaidInvoices; a backlog bigger than one page is caught up over
+  // successive 15-minute runs instead of silently dropped.
   async listPaidInvoicesSince(
     paidAtMin: string | null,
     page = 1
   ): Promise<{ items: HcpInvoice[]; page: number; totalPages: number }> {
     const since = paidAtMin ? `&paid_at_min=${encodeURIComponent(paidAtMin)}` : "";
     const res = await fetch(
-      `${BASE_URL}/invoices?page=${page}&page_size=50&status[]=paid&sort_by=paid_at&sort_direction=desc${since}`,
+      `${BASE_URL}/invoices?page=${page}&page_size=50&status[]=paid&sort_by=paid_at&sort_direction=asc${since}`,
       { headers: { Authorization: `Bearer ${this.apiKey}`, Accept: "application/json" } }
     );
 

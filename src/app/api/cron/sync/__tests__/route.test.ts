@@ -14,6 +14,7 @@ const {
   listPaidInvoicesSinceMock,
   claimMock,
   notifyPaidInvoicesMock,
+  notifyApprovedEstimatesMock,
   postSlackMock,
   slackAlertsEnabledMock,
   getDashboardSnapshotMock,
@@ -33,6 +34,7 @@ const {
     listPaidInvoicesSinceMock: vi.fn().mockResolvedValue({ items: [], page: 1, totalPages: 1 }),
     claimMock: vi.fn().mockResolvedValue(true),
     notifyPaidInvoicesMock: vi.fn().mockResolvedValue(0),
+    notifyApprovedEstimatesMock: vi.fn().mockResolvedValue(0),
     postSlackMock: vi.fn().mockResolvedValue(true),
     slackAlertsEnabledMock: vi.fn().mockReturnValue(true),
     getDashboardSnapshotMock: vi.fn().mockResolvedValue({ todaySchedule: [] }),
@@ -64,6 +66,7 @@ vi.mock("@/lib/notifications/dedupe", () => ({
 
 vi.mock("@/lib/notifications/dispatch", () => ({
   notifyPaidInvoices: notifyPaidInvoicesMock,
+  notifyApprovedEstimates: notifyApprovedEstimatesMock,
 }));
 
 vi.mock("@/lib/slack/client", () => ({
@@ -87,12 +90,14 @@ function authorizedRequest(): Request {
 describe("GET /api/cron/sync", () => {
   beforeEach(() => {
     process.env.CRON_SECRET = "test-cron-secret";
+    process.env.SLACK_WEBHOOK_SCHEDULE = "https://hooks.slack.com/services/SCHED";
     vi.clearAllMocks();
     vi.useFakeTimers();
     // Reset defaults explicitly every test: clearAllMocks() wipes call
     // history but not a previous test's non-Once mockResolvedValue override.
     claimMock.mockResolvedValue(true);
     notifyPaidInvoicesMock.mockResolvedValue(0);
+    notifyApprovedEstimatesMock.mockResolvedValue(0);
     postSlackMock.mockResolvedValue(true);
     slackAlertsEnabledMock.mockReturnValue(true);
     getDashboardSnapshotMock.mockResolvedValue({ todaySchedule: [] });
@@ -102,6 +107,7 @@ describe("GET /api/cron/sync", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    delete process.env.SLACK_WEBHOOK_SCHEDULE;
   });
 
   it("rejects requests without the correct cron secret", async () => {
@@ -199,16 +205,95 @@ describe("GET /api/cron/sync", () => {
 
       expect(res.status).toBe(200);
     });
+
+    // C1: the entire paid-invoice block (fetch AND watermark advance) must be
+    // gated on the kill switch, not just the Slack post. The rollout runbook
+    // explicitly deploys with alerts off for hours/days; if the fetch still
+    // ran and the watermark still advanced during that window, every invoice
+    // paid in it would be permanently skipped once alerts turn on.
+    it("does not fetch or advance the invoices_paid watermark when the kill switch is off", async () => {
+      slackAlertsEnabledMock.mockReturnValue(false);
+
+      const res = await GET(authorizedRequest());
+
+      expect(res.status).toBe(200);
+      expect(listPaidInvoicesSinceMock).not.toHaveBeenCalled();
+      const cursorCall = upsertMock.mock.calls.find(
+        ([rows]) => Array.isArray(rows) && rows.some((r: { resource: string }) => r.resource === "invoices_paid")
+      );
+      expect(cursorCall).toBeUndefined();
+    });
+
+    // C1: a claim/DB failure inside notifyPaidInvoices (claimMany now throws
+    // on a DB error instead of swallowing it) must propagate up into THIS
+    // pass's catch, which must never reach `results.push` for
+    // `invoices_paid`. Omitting it from `results` is what keeps the cursor
+    // at its old value in sync_cursors, so the next run retries the same
+    // invoices instead of skipping past them with nothing claimed or posted.
+    it("omits the invoices_paid cursor update entirely when notifyPaidInvoices throws (claim failure)", async () => {
+      listPaidInvoicesSinceMock.mockResolvedValue({
+        items: [{ id: "inv_1", paid_at: "2026-07-28T12:00:00Z" }],
+        page: 1,
+        totalPages: 1,
+      });
+      notifyPaidInvoicesMock.mockRejectedValue(new Error("db down"));
+
+      const res = await GET(authorizedRequest());
+
+      expect(res.status).toBe(200);
+      const cursorCall = upsertMock.mock.calls.find(
+        ([rows]) => Array.isArray(rows) && rows.some((r: { resource: string }) => r.resource === "invoices_paid")
+      );
+      expect(cursorCall).toBeUndefined();
+    });
+  });
+
+  describe("estimate-approval cron safety net", () => {
+    // I2: the cron must ALSO detect approved estimates, as a safety net for a
+    // missed webhook delivery (retries exhausted, deploy window, rotated
+    // secret, a signature mismatch returning 401). It must feed exactly the
+    // estimate records THIS run's incremental sync touched, per the "detect
+    // only what sync just touched" design rule.
+    it("feeds the estimates the incremental sync touched into notifyApprovedEstimates", async () => {
+      const res = await GET(authorizedRequest());
+
+      expect(res.status).toBe(200);
+      expect(notifyApprovedEstimatesMock).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.arrayContaining([expect.objectContaining({ id: "es1" })])
+      );
+    });
+
+    it("does not run the estimate-approval pass when the kill switch is off", async () => {
+      slackAlertsEnabledMock.mockReturnValue(false);
+
+      await GET(authorizedRequest());
+
+      expect(notifyApprovedEstimatesMock).not.toHaveBeenCalled();
+    });
+
+    it("does not fail the sync when the estimate-approval pass throws", async () => {
+      notifyApprovedEstimatesMock.mockRejectedValue(new Error("db down"));
+
+      const res = await GET(authorizedRequest());
+
+      expect(res.status).toBe(200);
+    });
   });
 
   describe("schedule digests", () => {
-    it("posts the daily digest once inside the morning window", async () => {
+    it("posts the daily digest once inside the morning window, to the schedule webhook", async () => {
       vi.setSystemTime(new Date("2026-07-29T10:00:00Z")); // Wed 06:00 EDT
 
       await GET(authorizedRequest());
 
       expect(claimMock).toHaveBeenCalledWith(expect.anything(), "daily_digest", "2026-07-29");
-      expect(postSlackMock.mock.calls.some(([, text]) => String(text).includes("Today —"))).toBe(true);
+      const dailyCall = postSlackMock.mock.calls.find(([, text]) => String(text).includes("Today —"));
+      expect(dailyCall).toBeDefined();
+      // Regression guard: a bug that sent schedule data to the wrong webhook
+      // (e.g. the invoices channel) would pass every existing assertion here
+      // if only the message text were checked.
+      expect(dailyCall?.[0]).toBe(process.env.SLACK_WEBHOOK_SCHEDULE);
     });
 
     it("does not post the digest when the day is already claimed", async () => {
@@ -228,7 +313,7 @@ describe("GET /api/cron/sync", () => {
       expect(claimMock).not.toHaveBeenCalledWith(expect.anything(), "daily_digest", expect.anything());
     });
 
-    it("posts the week-ahead before the daily digest on Monday", async () => {
+    it("posts the week-ahead before the daily digest on Monday, both to the schedule webhook", async () => {
       vi.setSystemTime(new Date("2026-07-27T10:00:00Z")); // Mon 06:00 EDT
 
       await GET(authorizedRequest());
@@ -240,6 +325,25 @@ describe("GET /api/cron/sync", () => {
       const dailyCallIndex = postSlackMock.mock.calls.findIndex(([, text]) => String(text).includes("Today —"));
       expect(weeklyCallIndex).toBeGreaterThanOrEqual(0);
       expect(dailyCallIndex).toBeGreaterThan(weeklyCallIndex);
+      expect(postSlackMock.mock.calls[weeklyCallIndex][0]).toBe(process.env.SLACK_WEBHOOK_SCHEDULE);
+      expect(postSlackMock.mock.calls[dailyCallIndex][0]).toBe(process.env.SLACK_WEBHOOK_SCHEDULE);
+    });
+
+    // Also fix (smaller): the weekly and daily passes must be independent.
+    // Before this fix they shared one try/catch, so a throw from
+    // getWeekAheadSchedule AFTER claim('weekly_lookahead', ...) already
+    // succeeded would skip the daily branch too AND permanently lose that
+    // week's look-ahead notification (the claim was already recorded, so a
+    // retry on the next run would find it pre-claimed and post nothing).
+    it("still posts the daily digest when the weekly look-ahead pass throws", async () => {
+      vi.setSystemTime(new Date("2026-07-27T10:00:00Z")); // Mon 06:00 EDT
+      getWeekAheadScheduleMock.mockRejectedValue(new Error("db down"));
+
+      const res = await GET(authorizedRequest());
+
+      expect(res.status).toBe(200);
+      expect(claimMock).toHaveBeenCalledWith(expect.anything(), "daily_digest", "2026-07-27");
+      expect(postSlackMock.mock.calls.some(([, text]) => String(text).includes("Today —"))).toBe(true);
     });
 
     // The kill switch must gate BEFORE claim(): claiming while alerts are off

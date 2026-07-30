@@ -15,8 +15,11 @@ export type NotificationKind =
   | "daily_digest"
   | "weekly_lookahead";
 
-// Batch, not per-row: the 20-hour full invoice reconcile re-touches all ~2,200
-// paid invoices, which would otherwise be 2,200 round trips.
+// Batch, not per-row: the targeted paid-invoice poll can return up to 50
+// invoices in a single run (page_size=50); claiming them one at a time would
+// be 50 round trips where one upsert suffices. (The 20-hour full invoice
+// reconcile does NOT feed claimMany at all — it only upserts the `invoices`
+// table, never `notifications_sent` — so it is not the batching motivation.)
 export async function claimMany(
   supabase: SupabaseClient,
   kind: NotificationKind,
@@ -34,10 +37,15 @@ export async function claimMany(
     .select("entity_id");
 
   if (error) {
-    // Claim nothing on error. Posting without a durable claim risks repeating
-    // the whole batch on the next run.
+    // THROW rather than return []. Returning [] here used to look safe ("just
+    // claim nothing"), but a caller that advances a cursor/watermark on any
+    // return value — claimed or not — would treat "the DB errored" the same
+    // as "nothing new to claim", and permanently skip past whatever was being
+    // claimed. Throwing forces the caller's own try/catch to decide what
+    // NOT to do (e.g. route.ts's paid-invoice pass omits its cursor push
+    // entirely when this throws, so the watermark stays put and retries).
     console.error(`[dedupe] claim failed for kind=${kind}:`, error);
-    return [];
+    throw new Error(`[dedupe] claim failed for kind=${kind}: ${error.message}`);
   }
 
   return ((data ?? []) as Array<{ entity_id: string }>).map((r) => r.entity_id);

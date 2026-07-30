@@ -80,8 +80,12 @@ export async function POST(req: Request) {
   }
 
   // Estimates are the one notification class HCP delivers by webhook, so this
-  // is the instant path. The cron re-checks the same records as a safety net;
-  // the shared claim ledger makes the overlap harmless rather than duplicative.
+  // is the instant path. /api/cron/sync's incremental estimate sync also
+  // feeds every estimate record IT touches into notifyApprovedEstimates, as a
+  // safety net for a webhook delivery HCP never retries (signature mismatch,
+  // rotated secret, deploy window, retries exhausted). The shared claim
+  // ledger (notifications_sent) makes the overlap harmless rather than
+  // duplicative: whichever path claims first posts, the other is a no-op.
   //
   // Notify only AFTER the sync succeeds (we are past the try/catch above,
   // which returns early on failure) — announcing an approval we failed to

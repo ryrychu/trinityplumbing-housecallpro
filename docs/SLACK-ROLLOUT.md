@@ -71,18 +71,39 @@ seed produces dozens of extra messages, not thousands.
 ## Step 3 — Deploy with alerts off
 
 Deploy normally, but **do not set `SLACK_ALERTS_ENABLED`** yet — leave it
-unset in Vercel. With it unset, `src/lib/slack/client.ts` reports
-`slackAlertsEnabled() === false` and every notification path becomes a no-op
-before it ever calls `claimMany`/`claim` — so nothing gets claimed and nothing
-posts, whether or not webhook URLs are configured.
+unset in Vercel. With it unset, `slackAlertsEnabled()` in
+`src/lib/slack/client.ts` returns `false`, and **every** notification pass in
+`/api/cron/sync` — the targeted paid-invoice poll, the estimate-approval
+safety net, and the schedule digests — checks that flag first and returns
+immediately when it's off. Concretely, with alerts off:
 
-Watch the Vercel function logs for `/api/cron/sync` over the next run or two.
-The paid-invoice and estimate-approval detectors run regardless of the kill
-switch's state (only the Slack post itself is gated), so if you temporarily
-add logging or check the response body, confirm the detector is finding zero
-or only a handful of genuinely new records — not hundreds. If it finds a
-large number here, that's the same signal as Step 2 failing: go back and
-recheck the seed before going further.
+- The paid-invoice poll never calls the Housecall Pro API for paid invoices,
+  never runs detection, never claims a row in `notifications_sent`, and never
+  advances the `invoices_paid` watermark in `sync_cursors`.
+- The estimate-approval cron safety net never runs detection or claims
+  anything either. The webhook path's own sync (writing the record to
+  Supabase) is unaffected by this flag and keeps running either way, but its
+  notification call goes through the exact same `slackAlertsEnabled()` gate
+  inside `notifyApprovedEstimates` — so estimate approvals are just as silent
+  as everything else while this flag is unset.
+- No `postSlack` call happens for any of the above.
+
+In other words, this is a **quiet no-op deploy**, not a dry run you can
+observe. There is no detector output to watch in the logs at this stage —
+because with alerts off, detection itself does not run, not just the Slack
+post. **Do not treat an empty log as confirmation the seed is good**; it
+confirms nothing here, because nothing ran.
+
+**The seed was already verified in Step 2, and that SQL count comparison is
+the only real verification point before going live** — there is no
+code-level "detect but don't post" dry-run mode to fall back on here. If you
+want extra confidence beyond Step 2's counts, re-run the two `select count(*)`
+queries again right before Step 5 (data may have changed between when you
+first checked and now) rather than looking for signal in this step's logs.
+
+This step exists to let you deploy the code path and confirm the app still
+runs normally (regular sync, dashboard, etc.) with the notifier wired in but
+inert — not to re-verify the seed.
 
 ---
 
@@ -175,8 +196,12 @@ roughly every 15 minutes. This is genuinely load-bearing, not a nice-to-have:
   polling route. If the external scheduler dies silently, paid-invoice
   alerts stop with it, invisibly.
 - Estimate approvals arrive by webhook and post independently of this
-  poller, so they keep working even if the scheduler goes down — only the
-  digest and the paid-invoice alerts depend on it.
+  poller, so the near-instant path keeps working even if the scheduler goes
+  down. This cron route also re-checks the estimate records its own
+  incremental sync just touched, as a safety net for a webhook delivery HCP
+  never retries (signature mismatch, rotated secret, deploy window) — that
+  safety net, unlike the instant webhook path, does depend on the scheduler
+  running.
 
 The `vercel.json` cron (`0 11 * * *`, once daily) stays in place as a safety
 net — it is not, and was never meant to be, the primary scheduler. It exists

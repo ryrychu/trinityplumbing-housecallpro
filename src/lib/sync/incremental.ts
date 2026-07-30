@@ -34,7 +34,15 @@ export async function syncResourceIncremental<T extends WithUpdatedAt>(
   mapper: (x: T) => Record<string, unknown>,
   budget: GeocodeBudget,
   cursor: string | null,
-  rehostBudget?: RehostBudget
+  rehostBudget?: RehostBudget,
+  // Additive, optional hook: called with exactly the raw (unmapped) records
+  // this run upserted successfully, once per page. Lets a caller (the cron
+  // route) react to "records this sync just touched" — e.g. feeding touched
+  // estimates into the approved-estimate notifier — without a second query,
+  // per the design's "detection reads only the records sync just touched"
+  // rule. Called AFTER a successful upsert, matching the webhook route's own
+  // rule of never notifying on a record that failed to persist.
+  onTouched?: (items: T[]) => void
 ): Promise<IncrementalResult> {
   let page = 1;
   let totalPages = 1;
@@ -72,6 +80,7 @@ export async function syncResourceIncremental<T extends WithUpdatedAt>(
         throw new Error(`Incremental upsert failed for ${resource} page ${page}: ${error.message}`);
       }
       upserted += rows.length;
+      onTouched?.(fresh);
 
       // Backfill attachments for the ~3000 already-synced records that never
       // went through the webhook path. Best-effort: attachments must never fail

@@ -243,8 +243,18 @@ scheduler. `housecall.v1.yaml` (lines 3341–3465) documents query parameters on
 So paid-invoice detection can ask for exactly what it needs:
 
 ```
-GET /invoices?status=paid&paid_at_min=<watermark>&sort_by=paid_at&sort_direction=desc&page_size=50
+GET /invoices?status=paid&paid_at_min=<watermark>&sort_by=paid_at&sort_direction=asc&page_size=50
 ```
+
+**`sort_direction=asc`, not `desc`.** The route fetches only page 1 per run
+and advances the watermark to the max `paid_at` it sees on that page.
+Descending order would make page 1 the 50 *newest* paid invoices, so any
+invoice paid after the old watermark but outside that newest-50 window would
+never be fetched, yet the watermark would still jump past it — permanently
+skipping it (whole-branch review finding I5). Ascending order makes page 1
+the 50 *oldest* unprocessed invoices, so the watermark can only ever advance
+to a point that was actually fetched; a backlog bigger than one page is
+caught up over successive runs instead of silently dropped.
 
 **One API call per run instead of 58**, and the result is already scoped to
 newly-paid invoices. This makes 15-minute latency *cheaper* than the current
@@ -258,8 +268,22 @@ probe script; the plan branches on its result.
 
 The watermark is stored in `sync_cursors` under resource `invoices_paid`
 (`last_updated_at` = max `paid_at` seen), reusing the existing table rather than
-adding another. `notifications_sent` remains the correctness guarantee; the
-watermark is only a fetch optimization.
+adding another.
+
+**The invariant, stated precisely:** `notifications_sent` (via `claim`/
+`claimMany`) is the correctness guarantee against a DUPLICATE notification.
+It is NOT what protects against a LOST one — the watermark is, and advancing
+it is conditional on the fetch, the claim, and the notify all having
+happened without error. A wrong watermark does not "only delay, never
+duplicate" a notification (an earlier draft of this doc and of
+`src/app/api/cron/sync/route.ts`'s own comment asserted exactly that, and it
+was backwards): advancing the watermark past invoices nothing ever claimed or
+posted — because the kill switch was off, because `claimMany` hit a DB error,
+or because the fetch itself failed — permanently skips them, since the
+watermark is never rewound. The fix (whole-branch review finding C1) is that
+the paid-invoice pass in `route.ts` only pushes a new watermark value when
+the entire fetch-notify sequence completes without throwing, and the kill
+switch gates the fetch itself, not just the eventual Slack post.
 
 **Fallback if the filters do not work:** keep the existing full reconcile but
 lower `INVOICE_RECONCILE_HOURS` to 1, accepting ~1,400 API calls/day for

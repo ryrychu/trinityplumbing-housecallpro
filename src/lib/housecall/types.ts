@@ -67,13 +67,32 @@ export interface HcpEstimate {
 // Confirmed against the live account (Task 0): invoices use `amount` (not
 // `total_amount`) and carry no top-level customer/job link — they associate
 // with a job via a shared `invoice_number`.
+//
+// `paid_at`: read by the paid-invoice watermark (src/app/api/cron/sync/route.ts)
+// to advance sync_cursors["invoices_paid"]. Declaring it here (instead of the
+// route casting `unknown`) means the compiler protects the one field the
+// watermark depends on.
+//
+// `customer`/`invoice_number`: detect.ts's customerName() reads nested
+// first_name/last_name/company off `customer`, but this type previously
+// declared only `{ id: string }` — the shape `mapInvoice` actually reads.
+// Declared as optional here because it is unverified against a live payload
+// (I4 finding); detect.ts treats it as best-effort and falls back to a local
+// `customers` table lookup by id when these fields are absent.
 export interface HcpInvoice {
   id: string;
   job_id?: string;
-  customer?: { id: string };
+  customer?: {
+    id: string;
+    first_name?: string | null;
+    last_name?: string | null;
+    company?: string | null;
+  };
   status?: string;
   amount?: number;
+  invoice_number?: string;
   due_at?: string;
+  paid_at?: string;
   updated_at?: string; // ISO; drives incremental cursor sync
 }
 

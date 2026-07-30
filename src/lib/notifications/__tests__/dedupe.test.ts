@@ -38,10 +38,15 @@ describe("claimMany", () => {
     expect(upsert.mock.calls[0][0]).toEqual([{ kind: "invoice_paid", entity_id: "inv_1" }]);
   });
 
-  it("claims nothing when the insert errors — never post on an unknown state", async () => {
+  // A DB error must THROW, not swallow-and-return-[]. The caller (route.ts's
+  // paid-invoice pass) relies on this: a throw lands in that pass's own
+  // catch, which skips pushing an `invoices_paid` cursor update entirely —
+  // preserving the watermark so the next run retries these same invoices
+  // instead of silently advancing past them with nothing claimed or posted.
+  it("throws when the insert errors — never post on an unknown state, never let the caller advance a watermark", async () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     const { client } = stubSupabase([], { message: "db down" });
-    expect(await claimMany(client, "invoice_paid", ["inv_1"])).toEqual([]);
+    await expect(claimMany(client, "invoice_paid", ["inv_1"])).rejects.toThrow(/db down/);
   });
 });
 
