@@ -31,9 +31,10 @@ function dayLabelFromKey(dateKey: string): string {
   return dayLabel(new Date(`${dateKey}T12:00:00Z`));
 }
 
-// "8:00a" — compact, so a 6-job list stays scannable on a phone.
+// "1:30 PM". Written in full rather than a compact "1:30p" — this is read on a
+// phone at 6am, and the extra three characters cost nothing at 5-6 jobs a day.
 function timeLabel(iso: string | null): string {
-  if (!iso) return "  --  ";
+  if (!iso) return "Time TBD";
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone: TZ,
     hour: "numeric",
@@ -41,20 +42,30 @@ function timeLabel(iso: string | null): string {
     hour12: true,
   }).formatToParts(new Date(iso));
   const get = (t: string) => parts.find((p) => p.type === t)?.value ?? "";
-  return `${get("hour")}:${get("minute")}${get("dayPeriod").toLowerCase().startsWith("a") ? "a" : "p"}`;
+  return `${get("hour")}:${get("minute")} ${get("dayPeriod").toUpperCase()}`;
 }
 
-function jobLines(row: TodayScheduleRow): string {
-  const geo = [row.zone, row.compass, row.miles != null ? `${row.miles} mi` : null,
-    row.driveMinutes != null ? `${row.driveMinutes} min` : null]
-    .filter((p) => p != null && p !== "")
-    .join(" / ");
+// One job as a bolded time/name line with indented detail bullets:
+//
+//   • *1:30 PM* — Devon Robinson
+//        ◦ 123 Main St, Averill Park
+//        ◦ Water Heater Repair
+//
+// Slack's incoming webhooks preserve leading spaces in `text`, so the indent is
+// literal rather than a real nested list (mrkdwn has no nesting).
+const INDENT = "     ◦ ";
 
-  return [
-    `${timeLabel(row.scheduledStart)}  ${row.customerName ?? "Unknown customer"}`,
-    `       ${geo}`,
-    `       Tech: ${row.technicianName ?? "Unassigned"}`,
-  ].join("\n");
+function jobLines(row: TodayScheduleRow): string {
+  const lines = [`• *${timeLabel(row.scheduledStart)}* — ${row.customerName ?? "Unknown customer"}`];
+
+  // The zone is the fallback location, not an addition: an ungeocoded job with
+  // no street still tells a dispatcher roughly where it is, but printing both
+  // "123 Main St, Albany" and "Albany Zone" is the noise this format removes.
+  const where = row.address ?? (row.zone && row.zone !== "Unknown" ? row.zone : null);
+  if (where) lines.push(`${INDENT}${where}`);
+  if (row.service) lines.push(`${INDENT}${row.service}`);
+
+  return lines.join("\n");
 }
 
 export function formatDailyDigest(

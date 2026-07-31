@@ -38,19 +38,25 @@ describe("formatDailyDigest", () => {
     compass: "SW",
     miles: 14,
     driveMinutes: 24,
+    address: "12 Elm St, Albany",
+    service: "Water Heater Repair",
   };
 
-  it("includes the date, job count, local time, customer, zone and tech", () => {
+  it("renders time, customer, address and service as an indented bullet block", () => {
     const out = formatDailyDigest(now, [row], 4);
     expect(out).toContain("Wed Jul 29");
     expect(out).toContain("1 job");
-    expect(out).toContain("8:00a");
-    expect(out).toContain("Mary Kolakowski");
-    expect(out).toContain("Albany Zone");
-    expect(out).toContain("SW");
-    expect(out).toContain("14 mi");
-    expect(out).toContain("24 min");
-    expect(out).toContain("Dan");
+    expect(out).toContain("• *8:00 AM* — Mary Kolakowski");
+    expect(out).toContain("     ◦ 12 Elm St, Albany");
+    expect(out).toContain("     ◦ Water Heater Repair");
+  });
+
+  it("drops the zone/miles/drive/tech clutter Dave does not read at 6am", () => {
+    const out = formatDailyDigest(now, [row], 4);
+    expect(out).not.toContain("Albany Zone");
+    expect(out).not.toContain("14 mi");
+    expect(out).not.toContain("24 min");
+    expect(out).not.toContain("Tech:");
   });
 
   it("shows sync age so a stalled external scheduler is visible", () => {
@@ -62,7 +68,12 @@ describe("formatDailyDigest", () => {
     expect(out).toContain("No jobs scheduled today");
   });
 
-  it("renders a job with no tech, no geocode and no customer without crashing", () => {
+  it("falls back to the zone when a job has no address", () => {
+    const out = formatDailyDigest(now, [{ ...row, id: "job_z", address: null }], 4);
+    expect(out).toContain("     ◦ Albany Zone");
+  });
+
+  it("renders a job with no tech, no geocode, no customer, no address and no service without crashing", () => {
     const bare = {
       id: "job_2",
       scheduledStart: null,
@@ -72,18 +83,16 @@ describe("formatDailyDigest", () => {
       compass: "",
       miles: null,
       driveMinutes: null,
+      address: null,
+      service: null,
     };
     const out = formatDailyDigest(now, [bare], null);
-    expect(out).toContain("Unknown");
+    expect(out).toContain("• *Time TBD* — Unknown customer");
+    // An unknown zone is a placeholder, not a location — better to show no
+    // detail line than a line that says nothing.
+    expect(out).not.toContain("◦");
     expect(out).not.toContain("undefined");
     expect(out).not.toContain("NaN");
-  });
-
-  it("renders zero miles and zero drive minutes rather than dropping them — a job in Averill Park itself is a real case", () => {
-    const zeroDistance = { ...row, id: "job_3", miles: 0, driveMinutes: 0 };
-    const out = formatDailyDigest(now, [zeroDistance], 4);
-    expect(out).toContain("0 mi");
-    expect(out).toContain("0 min");
   });
 
   it("shows zero minutes since last sync rather than falling back to 'unknown'", () => {
@@ -108,6 +117,8 @@ describe("formatWeeklyLookahead", () => {
             compass: "SW",
             miles: 10,
             driveMinutes: 18,
+            address: "9 Oak Ave, Troy",
+            service: "Drain Cleaning",
           },
         ],
       },
@@ -118,6 +129,9 @@ describe("formatWeeklyLookahead", () => {
     expect(out).toContain("A Customer");
     expect(out).toContain("Tue Jul 28");
     expect(out).toContain("No jobs");
+    // Same job block as the daily digest — one renderer, so the two can't drift.
+    expect(out).toContain("     ◦ 9 Oak Ave, Troy");
+    expect(out).toContain("     ◦ Drain Cleaning");
   });
 });
 

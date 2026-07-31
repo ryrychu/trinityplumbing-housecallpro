@@ -11,6 +11,8 @@ const job = {
   compass: "N",
   miles: 12,
   driveMinutes: 23,
+  address: "12 Elm St, Troy",
+  service: "Water Heater Repair",
 };
 
 describe("TodaySchedulePanel", () => {

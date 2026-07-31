@@ -54,7 +54,11 @@ function defaultJobs() {
       technician_id: "t1",
       service_address_lat: 42.7284,
       service_address_lng: -73.6918,
-      raw: { customer: { id: "c1" }, address: { city: "Troy" } },
+      raw: {
+        customer: { id: "c1" },
+        address: { street: "12 Elm St", city: "Troy" },
+        job_fields: { job_type: { name: "Water Heater Repair" } },
+      },
     },
     {
       id: "j2",
@@ -186,8 +190,8 @@ describe("getDashboardSnapshot", () => {
       if (table === "customers") {
         return makeQueryBuilder({
           data: [
-            { id: "c1", first_name: "Alice", last_name: "Anderson", city: "Troy" },
-            { id: "c2", first_name: "Bob", last_name: "Baker", city: "Albany" },
+            { id: "c1", first_name: "Alice", last_name: "Anderson", address_line1: "1 Customer Rd", city: "Troy" },
+            { id: "c2", first_name: "Bob", last_name: "Baker", address_line1: "2 Customer Rd", city: "Albany" },
           ],
           error: null,
         });
@@ -288,6 +292,89 @@ describe("getDashboardSnapshot", () => {
     // FIX 3: a job WITH coordinates exposes numeric distance + drive time.
     expect(entry.miles).toBeTypeOf("number");
     expect(entry.driveMinutes).toBeTypeOf("number");
+    // The Slack digest reads these two — both come out of the job's raw payload.
+    expect(entry.address).toBe("12 Elm St, Troy");
+    expect(entry.service).toBe("Water Heater Repair");
+  });
+
+  // The digest's two new lines both degrade rather than disappear: address falls
+  // back job street -> customer street -> town, service falls back job type ->
+  // description -> null.
+  describe("address and service resolution", () => {
+    const scheduleJob = (raw: unknown) => ({
+      id: "jx",
+      work_status: "scheduled",
+      is_emergency: false,
+      is_commercial: false,
+      total_amount_cents: 0,
+      scheduled_start: "2026-07-22T09:00:00.000Z",
+      scheduled_end: "2026-07-22T10:00:00.000Z",
+      technician_id: null,
+      service_address_lat: null,
+      service_address_lng: null,
+      raw,
+    });
+
+    async function entryFor(raw: unknown) {
+      fromMock.mockImplementation((table: string) => {
+        if (table === "jobs") return makeQueryBuilder({ data: [scheduleJob(raw)], error: null });
+        if (table === "customers") {
+          return makeQueryBuilder({
+            data: [
+              { id: "c1", first_name: "Alice", last_name: "Anderson", address_line1: "1 Customer Rd", city: "Troy" },
+            ],
+            error: null,
+          });
+        }
+        return makeQueryBuilder({ data: [], error: null });
+      });
+      const snap = await getDashboardSnapshot(NOW);
+      return snap.todaySchedule[0];
+    }
+
+    it("falls back to the customer's street when the job carries none", async () => {
+      const entry = await entryFor({ customer: { id: "c1" }, address: { city: "Troy" } });
+      expect(entry.address).toBe("1 Customer Rd, Troy");
+    });
+
+    it("shows the town alone when no street is known anywhere", async () => {
+      const entry = await entryFor({ customer: { id: "c_missing" }, address: { city: "Albany" } });
+      expect(entry.address).toBe("Albany");
+    });
+
+    it("returns null rather than an empty string when there is no address at all", async () => {
+      const entry = await entryFor({ customer: { id: "c_missing" } });
+      expect(entry.address).toBeNull();
+    });
+
+    it("falls back to the job description when no job type is set", async () => {
+      const entry = await entryFor({ customer: { id: "c1" }, description: "Kitchen sink backing up" });
+      expect(entry.service).toBe("Kitchen sink backing up");
+    });
+
+    it("keeps a long description to one truncated line — the digest must stay scannable", async () => {
+      const entry = await entryFor({
+        customer: { id: "c1" },
+        description: `${"Customer reports water pooling under the basement stairs".repeat(3)}\nsecond line`,
+      });
+      expect(entry.service).not.toContain("\n");
+      expect(entry.service!.length).toBeLessThanOrEqual(60);
+      expect(entry.service!.endsWith("…")).toBe(true);
+    });
+
+    it("prefers the structured job type over the free-text description", async () => {
+      const entry = await entryFor({
+        customer: { id: "c1" },
+        description: "long rambling note",
+        job_fields: { job_type: { name: "Drain Cleaning" } },
+      });
+      expect(entry.service).toBe("Drain Cleaning");
+    });
+
+    it("returns null when a job has neither job type nor description", async () => {
+      const entry = await entryFor({ customer: { id: "c1" } });
+      expect(entry.service).toBeNull();
+    });
   });
 
   // FIX 2: canceled jobs (j7, user canceled, this week) must not inflate revenue.
@@ -543,8 +630,8 @@ describe("getWeekAheadSchedule", () => {
       if (table === "customers") {
         return makeQueryBuilder({
           data: [
-            { id: "c1", first_name: "Alice", last_name: "Anderson", city: "Troy" },
-            { id: "c2", first_name: "Bob", last_name: "Baker", city: "Albany" },
+            { id: "c1", first_name: "Alice", last_name: "Anderson", address_line1: "1 Customer Rd", city: "Troy" },
+            { id: "c2", first_name: "Bob", last_name: "Baker", address_line1: "2 Customer Rd", city: "Albany" },
           ],
           error: null,
         });

@@ -72,7 +72,15 @@ interface JobRow {
   technician_id: string | null;
   service_address_lat: number | null;
   service_address_lng: number | null;
-  raw?: { customer?: { id?: string }; address?: { city?: string } };
+  // `raw` is the full HCP job payload (mapJob stores it verbatim), so street
+  // address, job type and description are already synced — no new columns and
+  // no re-sync are needed to render them.
+  raw?: {
+    customer?: { id?: string };
+    address?: { street?: string; street_line_2?: string; city?: string; state?: string; zip?: string };
+    description?: string;
+    job_fields?: { job_type?: { name?: string } };
+  };
 }
 
 interface EstimateRow {
@@ -84,6 +92,7 @@ interface CustomerRow {
   id: string;
   first_name: string | null;
   last_name: string | null;
+  address_line1: string | null;
   city: string | null;
 }
 
@@ -102,6 +111,12 @@ export interface TodayScheduleRow {
   compass: string;
   miles: number | null;
   driveMinutes: number | null;
+  // "123 Main St, Averill Park" — what a tech actually needs to drive to.
+  // Null when the job carries no street and the customer record has none either.
+  address: string | null;
+  // The HCP job type ("Water Heater Repair"), falling back to the job
+  // description. Null when the job carries neither.
+  service: string | null;
 }
 
 interface TechWorkloadRow {
@@ -154,6 +169,32 @@ async function fetchAllRows<T>(
   return out;
 }
 
+// "123 Main St, Averill Park" from whichever parts exist. The job's own address
+// wins over the customer record's: a customer can have several properties, and
+// the job is the one being driven to today.
+function scheduleAddress(j: JobRow, cust?: CustomerRow): string | null {
+  const street = j.raw?.address?.street?.trim() || cust?.address_line1?.trim() || null;
+  const town = j.raw?.address?.city?.trim() || cust?.city?.trim() || null;
+  return [street, town].filter(Boolean).join(", ") || null;
+}
+
+// HCP's structured job type is the clean label ("Drain Cleaning"); the free-text
+// description is the fallback for accounts/jobs that never set one. Descriptions
+// can run several sentences, so only the first line is kept and it is capped —
+// a wrapped paragraph would swamp the digest it is meant to make scannable.
+const SERVICE_MAX_CHARS = 60;
+
+function scheduleService(j: JobRow): string | null {
+  const jobType = j.raw?.job_fields?.job_type?.name?.trim();
+  if (jobType) return jobType;
+
+  const firstLine = (j.raw?.description ?? "").split("\n")[0].trim();
+  if (!firstLine) return null;
+  return firstLine.length > SERVICE_MAX_CHARS
+    ? `${firstLine.slice(0, SERVICE_MAX_CHARS - 1).trimEnd()}…`
+    : firstLine;
+}
+
 // Shared by the dashboard's todaySchedule and the Slack week-ahead digest.
 // Both MUST render from one implementation, or the two can silently drift.
 function buildScheduleRow(
@@ -192,6 +233,8 @@ function buildScheduleRow(
     compass: z.compass,
     miles,
     driveMinutes,
+    address: scheduleAddress(j, cust),
+    service: scheduleService(j),
   };
 }
 
@@ -209,7 +252,7 @@ export async function getDashboardSnapshot(now: Date = new Date()): Promise<Dash
     ),
     fetchAllRows<EstimateRow>(supabase, "estimates", "status, raw"),
     fetchAllRows<{ status: string | null }>(supabase, "invoices", "status"),
-    fetchAllRows<CustomerRow>(supabase, "customers", "id, first_name, last_name, city"),
+    fetchAllRows<CustomerRow>(supabase, "customers", "id, first_name, last_name, address_line1, city"),
     fetchAllRows<TechRow>(supabase, "technicians", "id, first_name, last_name"),
   ]);
 
@@ -303,7 +346,7 @@ export async function getWeekAheadSchedule(
       "jobs",
       "id, work_status, is_emergency, is_commercial, total_amount_cents, scheduled_start, scheduled_end, technician_id, service_address_lat, service_address_lng, raw"
     ),
-    fetchAllRows<CustomerRow>(supabase, "customers", "id, first_name, last_name, city"),
+    fetchAllRows<CustomerRow>(supabase, "customers", "id, first_name, last_name, address_line1, city"),
     fetchAllRows<TechRow>(supabase, "technicians", "id, first_name, last_name"),
   ]);
 
