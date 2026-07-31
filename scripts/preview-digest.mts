@@ -14,9 +14,41 @@
 // Reads SLACK_WEBHOOK_SCHEDULE from .env.local, or pass it as the last arg.
 import { readFileSync } from "node:fs";
 
-for (const line of readFileSync(".env.local", "utf8").split("\n")) {
+let envFile: string;
+try {
+  envFile = readFileSync(".env.local", "utf8");
+} catch {
+  console.error(
+    "No .env.local here. Run this from the repo root, with NEXT_PUBLIC_SUPABASE_URL,\n" +
+      "SUPABASE_SERVICE_ROLE_KEY and SLACK_WEBHOOK_SCHEDULE set in it."
+  );
+  process.exit(1);
+}
+
+for (const line of envFile.split("\n")) {
   const m = line.match(/^([A-Z0-9_]+)=(.*)$/);
-  if (m) process.env[m[1]] ??= m[2].trim();
+  if (!m) continue;
+  // `vercel env pull` writes values double-quoted; a hand-written .env.local
+  // usually does not. Strip one matching pair so both forms work — keeping the
+  // quotes turned the Supabase URL into an invalid URL and blew up deep inside
+  // supabase-js, a long way from the actual cause.
+  process.env[m[1]] ??= m[2].trim().replace(/^(["'])(.*)\1$/, "$2");
+}
+
+// Env vars marked "Sensitive" in Vercel are write-only: `vercel env pull` hands
+// back the literal string [SENSITIVE] instead of the value, and nothing can
+// recover the plaintext from Vercel. Caught here by name, because the resulting
+// failure otherwise surfaces as an unrelated-looking client error.
+const REQUIRED = ["NEXT_PUBLIC_SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY"];
+const unusable = REQUIRED.filter((k) => !process.env[k] || process.env[k] === "[SENSITIVE]");
+if (unusable.length > 0) {
+  console.error(
+    `Unusable in .env.local: ${unusable.join(", ")}\n\n` +
+      "If these read [SENSITIVE], they were pulled from Vercel, which stores them\n" +
+      "write-only — the values cannot be read back. Copy the real ones from the\n" +
+      "Supabase dashboard (Project Settings -> API) into .env.local by hand."
+  );
+  process.exit(1);
 }
 
 const { getDashboardSnapshot, getWeekAheadSchedule } = await import("@/lib/dashboard/queries");
