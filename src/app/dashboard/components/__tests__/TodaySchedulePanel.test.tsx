@@ -13,6 +13,8 @@ const job = {
   driveMinutes: 23,
   address: "12 Elm St, Troy",
   service: "Water Heater Repair",
+  customerPhone: "5185550142",
+  status: "Scheduled",
 };
 
 describe("TodaySchedulePanel", () => {

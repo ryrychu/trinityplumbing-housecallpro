@@ -40,23 +40,36 @@ describe("formatDailyDigest", () => {
     driveMinutes: 24,
     address: "12 Elm St, Albany",
     service: "Water Heater Repair",
+    customerPhone: "5185550142",
+    status: "Scheduled",
   };
 
-  it("renders time, customer, address and service as an indented bullet block", () => {
+  it("renders time, customer, phone, address, service, tech and status", () => {
     const out = formatDailyDigest(now, [row], 4);
     expect(out).toContain("Wed Jul 29");
     expect(out).toContain("1 job");
-    expect(out).toContain("• *8:00 AM* — Mary Kolakowski");
-    expect(out).toContain("     ◦ 12 Elm St, Albany");
-    expect(out).toContain("     ◦ Water Heater Repair");
+    expect(out).toContain("• *8:00 AM* — Mary Kolakowski  ·  📞 (518) 555-0142");
+    expect(out).toContain("     📍 12 Elm St, Albany");
+    expect(out).toContain("     🔧 Water Heater Repair");
+    expect(out).toContain("     👤 Dan  ·  Scheduled");
   });
 
-  it("drops the zone/miles/drive/tech clutter Dave does not read at 6am", () => {
+  it("drops the zone/miles/drive clutter Dave does not read at 6am", () => {
     const out = formatDailyDigest(now, [row], 4);
     expect(out).not.toContain("Albany Zone");
     expect(out).not.toContain("14 mi");
     expect(out).not.toContain("24 min");
-    expect(out).not.toContain("Tech:");
+  });
+
+  it("bolds an unassigned job — the one line that needs acting on before the day starts", () => {
+    const out = formatDailyDigest(now, [{ ...row, technicianName: null }], 4);
+    expect(out).toContain("     👤 *Unassigned*  ·  Scheduled");
+  });
+
+  it("keeps the assignment line when the status is unknown", () => {
+    const out = formatDailyDigest(now, [{ ...row, status: null }], 4);
+    expect(out).toContain("     👤 Dan");
+    expect(out).not.toContain("Dan  ·  ");
   });
 
   it("shows sync age so a stalled external scheduler is visible", () => {
@@ -70,7 +83,30 @@ describe("formatDailyDigest", () => {
 
   it("falls back to the zone when a job has no address", () => {
     const out = formatDailyDigest(now, [{ ...row, id: "job_z", address: null }], 4);
-    expect(out).toContain("     ◦ Albany Zone");
+    expect(out).toContain("     📍 Albany Zone");
+  });
+
+  describe("phone rendering", () => {
+    const withPhone = (customerPhone: string | null) =>
+      formatDailyDigest(now, [{ ...row, customerPhone }], 4);
+
+    it("formats a 10-digit number", () => {
+      expect(withPhone("5185550142")).toContain("📞 (518) 555-0142");
+    });
+
+    it("strips the US country code rather than rendering an 11-digit blob", () => {
+      expect(withPhone("15185550142")).toContain("📞 (518) 555-0142");
+    });
+
+    it("shows an unrecognized length as stored instead of mangling it", () => {
+      expect(withPhone("442071838750")).toContain("📞 442071838750");
+    });
+
+    it("omits the phone entirely when there is none", () => {
+      const out = withPhone(null);
+      expect(out).not.toContain("📞");
+      expect(out).toContain("• *8:00 AM* — Mary Kolakowski\n");
+    });
   });
 
   it("renders a job with no tech, no geocode, no customer, no address and no service without crashing", () => {
@@ -85,12 +121,18 @@ describe("formatDailyDigest", () => {
       driveMinutes: null,
       address: null,
       service: null,
+      customerPhone: null,
+      status: null,
     };
     const out = formatDailyDigest(now, [bare], null);
     expect(out).toContain("• *Time TBD* — Unknown customer");
     // An unknown zone is a placeholder, not a location — better to show no
-    // detail line than a line that says nothing.
-    expect(out).not.toContain("◦");
+    // location line than a line that says nothing.
+    expect(out).not.toContain("📍");
+    expect(out).not.toContain("🔧");
+    // ...but the assignment line still shows, because "nobody is going" is the
+    // one absence that must not read as silence.
+    expect(out).toContain("     👤 *Unassigned*");
     expect(out).not.toContain("undefined");
     expect(out).not.toContain("NaN");
   });
@@ -119,6 +161,8 @@ describe("formatWeeklyLookahead", () => {
             driveMinutes: 18,
             address: "9 Oak Ave, Troy",
             service: "Drain Cleaning",
+            customerPhone: "5185550199",
+            status: "Scheduled",
           },
         ],
       },
@@ -130,8 +174,9 @@ describe("formatWeeklyLookahead", () => {
     expect(out).toContain("Tue Jul 28");
     expect(out).toContain("No jobs");
     // Same job block as the daily digest — one renderer, so the two can't drift.
-    expect(out).toContain("     ◦ 9 Oak Ave, Troy");
-    expect(out).toContain("     ◦ Drain Cleaning");
+    expect(out).toContain("     📍 9 Oak Ave, Troy");
+    expect(out).toContain("     🔧 Drain Cleaning");
+    expect(out).toContain("     👤 Dan  ·  Scheduled");
   });
 });
 

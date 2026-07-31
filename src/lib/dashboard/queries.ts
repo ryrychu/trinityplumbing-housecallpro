@@ -76,10 +76,13 @@ interface JobRow {
   // address, job type and description are already synced — no new columns and
   // no re-sync are needed to render them.
   raw?: {
-    customer?: { id?: string };
+    customer?: { id?: string; mobile_number?: string; home_number?: string; work_number?: string };
     address?: { street?: string; street_line_2?: string; city?: string; state?: string; zip?: string };
     description?: string;
     job_fields?: { job_type?: { name?: string } };
+    // HCP has no "en route" work_status; the tech tapping "On my way" stamps
+    // work_timestamps.on_my_way_at instead. It is the ONLY source for that state.
+    work_timestamps?: { on_my_way_at?: string | null; started_at?: string | null; completed_at?: string | null };
   };
 }
 
@@ -92,6 +95,7 @@ interface CustomerRow {
   id: string;
   first_name: string | null;
   last_name: string | null;
+  phone: string | null;
   address_line1: string | null;
   city: string | null;
 }
@@ -117,6 +121,12 @@ export interface TodayScheduleRow {
   // The HCP job type ("Water Heater Repair"), falling back to the job
   // description. Null when the job carries neither.
   service: string | null;
+  // Digits only, as HCP stores them — formatting for display is the renderer's
+  // job, and the dashboard may want to build a tel: link from the raw digits.
+  customerPhone: string | null;
+  // Display label: "Scheduled" | "En Route" | "In Progress" | "Completed" |
+  // "Needs Scheduling" | "Canceled". Null when HCP sent an unrecognized status.
+  status: string | null;
 }
 
 interface TechWorkloadRow {
@@ -195,6 +205,36 @@ function scheduleService(j: JobRow): string | null {
     : firstLine;
 }
 
+// The customer record is the maintained number; the job's embedded customer
+// snapshot is the fallback for a job whose customer row hasn't synced yet.
+// Mobile first — it is the one a tech can text from the truck.
+function schedulePhone(j: JobRow, cust?: CustomerRow): string | null {
+  const c = j.raw?.customer;
+  const raw = cust?.phone || c?.mobile_number || c?.home_number || c?.work_number || null;
+  const digits = (raw ?? "").replace(/\D/g, "");
+  return digits || null;
+}
+
+// HCP's work_status has no "en route" — the enum is needs scheduling /
+// scheduled / in progress / complete rated / complete unrated / user canceled /
+// pro canceled. "On my way" only stamps work_timestamps.on_my_way_at, so a job
+// that is dispatched but not started still reads "scheduled" and must be
+// upgraded here or the digest can never show the state Dave asked for.
+function scheduleStatus(j: JobRow): string | null {
+  const status = (j.work_status ?? "").toLowerCase();
+  const ts = j.raw?.work_timestamps;
+
+  if (status.startsWith("complete")) return "Completed";
+  if (CANCELED_JOB_STATUSES.has(status)) return "Canceled";
+  if (status === "in progress") return "In Progress";
+  if (status === "scheduled") return ts?.on_my_way_at ? "En Route" : "Scheduled";
+  if (status === "needs scheduling") return "Needs Scheduling";
+  // An unknown status is left out rather than echoed raw: HCP lowercases its
+  // enum, so an unmapped value would render as "pro canceled"-style lowercase
+  // noise among title-cased labels.
+  return null;
+}
+
 // Shared by the dashboard's todaySchedule and the Slack week-ahead digest.
 // Both MUST render from one implementation, or the two can silently drift.
 function buildScheduleRow(
@@ -235,6 +275,8 @@ function buildScheduleRow(
     driveMinutes,
     address: scheduleAddress(j, cust),
     service: scheduleService(j),
+    customerPhone: schedulePhone(j, cust),
+    status: scheduleStatus(j),
   };
 }
 
@@ -252,7 +294,7 @@ export async function getDashboardSnapshot(now: Date = new Date()): Promise<Dash
     ),
     fetchAllRows<EstimateRow>(supabase, "estimates", "status, raw"),
     fetchAllRows<{ status: string | null }>(supabase, "invoices", "status"),
-    fetchAllRows<CustomerRow>(supabase, "customers", "id, first_name, last_name, address_line1, city"),
+    fetchAllRows<CustomerRow>(supabase, "customers", "id, first_name, last_name, phone, address_line1, city"),
     fetchAllRows<TechRow>(supabase, "technicians", "id, first_name, last_name"),
   ]);
 
@@ -346,7 +388,7 @@ export async function getWeekAheadSchedule(
       "jobs",
       "id, work_status, is_emergency, is_commercial, total_amount_cents, scheduled_start, scheduled_end, technician_id, service_address_lat, service_address_lng, raw"
     ),
-    fetchAllRows<CustomerRow>(supabase, "customers", "id, first_name, last_name, address_line1, city"),
+    fetchAllRows<CustomerRow>(supabase, "customers", "id, first_name, last_name, phone, address_line1, city"),
     fetchAllRows<TechRow>(supabase, "technicians", "id, first_name, last_name"),
   ]);
 

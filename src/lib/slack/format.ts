@@ -45,25 +45,53 @@ function timeLabel(iso: string | null): string {
   return `${get("hour")}:${get("minute")} ${get("dayPeriod").toUpperCase()}`;
 }
 
-// One job as a bolded time/name line with indented detail bullets:
+// "(518) 555-0142" from whatever HCP stored. Rendered as plain text, not a
+// tel: link — Slack's mobile clients already make a formatted number tappable,
+// and a link that failed to render would show its markup to everyone.
+function phoneLabel(digits: string | null): string | null {
+  if (!digits) return null;
+  const local = digits.length === 11 && digits.startsWith("1") ? digits.slice(1) : digits;
+  if (local.length !== 10) return digits; // international/extension — show as stored
+  return `(${local.slice(0, 3)}) ${local.slice(3, 6)}-${local.slice(6)}`;
+}
+
+// One job as a bolded time/name line with indented detail lines:
 //
-//   • *1:30 PM* — Devon Robinson
-//        ◦ 123 Main St, Averill Park
-//        ◦ Water Heater Repair
+//   • *1:30 PM* — Devon Robinson  ·  📞 (518) 555-0142
+//        📍 123 Main St, Averill Park
+//        🔧 Water Heater Repair
+//        👤 Dan  ·  En Route
+//
+// Each detail leads with its own icon so the eye can jump straight to the line
+// it wants — at four details a repeated "◦" turns the block back into a wall.
 //
 // Slack's incoming webhooks preserve leading spaces in `text`, so the indent is
 // literal rather than a real nested list (mrkdwn has no nesting).
-const INDENT = "     ◦ ";
+const INDENT = "     ";
 
 function jobLines(row: TodayScheduleRow): string {
-  const lines = [`• *${timeLabel(row.scheduledStart)}* — ${row.customerName ?? "Unknown customer"}`];
+  const phone = phoneLabel(row.customerPhone);
+  const lines = [
+    [
+      `• *${timeLabel(row.scheduledStart)}* — ${row.customerName ?? "Unknown customer"}`,
+      phone ? `📞 ${phone}` : null,
+    ]
+      .filter(Boolean)
+      .join("  ·  "),
+  ];
 
   // The zone is the fallback location, not an addition: an ungeocoded job with
   // no street still tells a dispatcher roughly where it is, but printing both
   // "123 Main St, Albany" and "Albany Zone" is the noise this format removes.
   const where = row.address ?? (row.zone && row.zone !== "Unknown" ? row.zone : null);
-  if (where) lines.push(`${INDENT}${where}`);
-  if (row.service) lines.push(`${INDENT}${row.service}`);
+  if (where) lines.push(`${INDENT}📍 ${where}`);
+  if (row.service) lines.push(`${INDENT}🔧 ${row.service}`);
+
+  // Always rendered, even with neither name nor status: "Unassigned" is the one
+  // line on a 6am schedule that needs someone to act before the day starts, and
+  // a missing line reads as "fine" rather than "nobody is going".
+  const assignment = [row.technicianName ?? "*Unassigned*", row.status].filter(Boolean).join("  ·  ");
+  lines.push(`${INDENT}👤 ${assignment}`);
 
   return lines.join("\n");
 }

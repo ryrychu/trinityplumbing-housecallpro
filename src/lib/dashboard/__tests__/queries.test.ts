@@ -190,8 +190,8 @@ describe("getDashboardSnapshot", () => {
       if (table === "customers") {
         return makeQueryBuilder({
           data: [
-            { id: "c1", first_name: "Alice", last_name: "Anderson", address_line1: "1 Customer Rd", city: "Troy" },
-            { id: "c2", first_name: "Bob", last_name: "Baker", address_line1: "2 Customer Rd", city: "Albany" },
+            { id: "c1", first_name: "Alice", last_name: "Anderson", phone: "5185550142", address_line1: "1 Customer Rd", city: "Troy" },
+            { id: "c2", first_name: "Bob", last_name: "Baker", phone: null, address_line1: "2 Customer Rd", city: "Albany" },
           ],
           error: null,
         });
@@ -292,9 +292,12 @@ describe("getDashboardSnapshot", () => {
     // FIX 3: a job WITH coordinates exposes numeric distance + drive time.
     expect(entry.miles).toBeTypeOf("number");
     expect(entry.driveMinutes).toBeTypeOf("number");
-    // The Slack digest reads these two — both come out of the job's raw payload.
+    // The Slack digest reads these — all come out of the job's raw payload or
+    // the customer record, with no new columns.
     expect(entry.address).toBe("12 Elm St, Troy");
     expect(entry.service).toBe("Water Heater Repair");
+    expect(entry.customerPhone).toBe("5185550142");
+    expect(entry.status).toBe("In Progress");
   });
 
   // The digest's two new lines both degrade rather than disappear: address falls
@@ -321,7 +324,14 @@ describe("getDashboardSnapshot", () => {
         if (table === "customers") {
           return makeQueryBuilder({
             data: [
-              { id: "c1", first_name: "Alice", last_name: "Anderson", address_line1: "1 Customer Rd", city: "Troy" },
+              {
+                id: "c1",
+                first_name: "Alice",
+                last_name: "Anderson",
+                phone: "5185550142",
+                address_line1: "1 Customer Rd",
+                city: "Troy",
+              },
             ],
             error: null,
           });
@@ -374,6 +384,82 @@ describe("getDashboardSnapshot", () => {
     it("returns null when a job has neither job type nor description", async () => {
       const entry = await entryFor({ customer: { id: "c1" } });
       expect(entry.service).toBeNull();
+    });
+
+    it("prefers the customer record's phone over the job's embedded snapshot", async () => {
+      const entry = await entryFor({ customer: { id: "c1", mobile_number: "5180000000" } });
+      expect(entry.customerPhone).toBe("5185550142");
+    });
+
+    it("falls back to the job's embedded customer number when the customer row is missing", async () => {
+      const entry = await entryFor({ customer: { id: "c_missing", mobile_number: "(518) 555-0199" } });
+      // Stored as digits — the renderer owns display formatting.
+      expect(entry.customerPhone).toBe("5185550199");
+    });
+
+    it("prefers mobile over home and work — it is the number a tech can text", async () => {
+      const entry = await entryFor({
+        customer: { id: "c_missing", mobile_number: "5181111111", home_number: "5182222222", work_number: "5183333333" },
+      });
+      expect(entry.customerPhone).toBe("5181111111");
+    });
+
+    it("returns null rather than an empty string when no number exists anywhere", async () => {
+      const entry = await entryFor({ customer: { id: "c_missing" } });
+      expect(entry.customerPhone).toBeNull();
+    });
+  });
+
+  // HCP's work_status enum has no "en route"; only work_timestamps.on_my_way_at
+  // distinguishes a dispatched job from one still sitting on the board.
+  describe("job status labels", () => {
+    const statusJob = (work_status: string | null, work_timestamps?: unknown) => ({
+      id: "js",
+      work_status,
+      is_emergency: false,
+      is_commercial: false,
+      total_amount_cents: 0,
+      scheduled_start: "2026-07-22T09:00:00.000Z",
+      scheduled_end: "2026-07-22T10:00:00.000Z",
+      technician_id: null,
+      service_address_lat: null,
+      service_address_lng: null,
+      raw: { customer: { id: "c1" }, work_timestamps },
+    });
+
+    async function statusFor(work_status: string | null, work_timestamps?: unknown) {
+      fromMock.mockImplementation((table: string) => {
+        if (table === "jobs") {
+          return makeQueryBuilder({ data: [statusJob(work_status, work_timestamps)], error: null });
+        }
+        return makeQueryBuilder({ data: [], error: null });
+      });
+      const snap = await getDashboardSnapshot(NOW);
+      return snap.todaySchedule[0]?.status ?? null;
+    }
+
+    it("titles the live HCP statuses", async () => {
+      expect(await statusFor("scheduled")).toBe("Scheduled");
+      expect(await statusFor("in progress")).toBe("In Progress");
+      expect(await statusFor("needs scheduling")).toBe("Needs Scheduling");
+    });
+
+    it("collapses both complete variants into one label — the rating is not dispatch news", async () => {
+      expect(await statusFor("complete rated")).toBe("Completed");
+      expect(await statusFor("complete unrated")).toBe("Completed");
+    });
+
+    it("upgrades a scheduled job to En Route once the tech taps On My Way", async () => {
+      expect(await statusFor("scheduled", { on_my_way_at: "2026-07-22T08:40:00.000Z" })).toBe("En Route");
+    });
+
+    it("stays Scheduled when on_my_way_at is null rather than merely absent", async () => {
+      expect(await statusFor("scheduled", { on_my_way_at: null, started_at: null })).toBe("Scheduled");
+    });
+
+    it("omits an unrecognized or missing status instead of echoing raw HCP casing", async () => {
+      expect(await statusFor("some new hcp status")).toBeNull();
+      expect(await statusFor(null)).toBeNull();
     });
   });
 
@@ -630,8 +716,8 @@ describe("getWeekAheadSchedule", () => {
       if (table === "customers") {
         return makeQueryBuilder({
           data: [
-            { id: "c1", first_name: "Alice", last_name: "Anderson", address_line1: "1 Customer Rd", city: "Troy" },
-            { id: "c2", first_name: "Bob", last_name: "Baker", address_line1: "2 Customer Rd", city: "Albany" },
+            { id: "c1", first_name: "Alice", last_name: "Anderson", phone: "5185550142", address_line1: "1 Customer Rd", city: "Troy" },
+            { id: "c2", first_name: "Bob", last_name: "Baker", phone: null, address_line1: "2 Customer Rd", city: "Albany" },
           ],
           error: null,
         });
