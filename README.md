@@ -101,8 +101,12 @@ Two behaviors worth understanding before touching this:
   before 06:00 Eastern in both DST regimes and can only ever run the sync,
   never produce a digest. Paid invoices have no Housecall Pro webhook and are
   only ever picked up by this polling route, so if the external scheduler dies
-  silently, paid-invoice alerts stop with it — that's why the daily digest
-  footer includes `last sync: N min ago`, as a tripwire. Estimate approvals,
+  silently, paid-invoice alerts stop with it. Nothing in Slack reports that
+  any more — the digest used to carry a `last sync: N min ago` footer as a
+  tripwire, and it was removed as noise — so a stalled scheduler now shows up
+  as a *missing* 6 a.m. digest rather than a stale-looking one. That is still
+  a real signal, since the digest sends every day including weekends and
+  empty days, but it needs someone to notice an absence. Estimate approvals,
   by contrast, arrive by webhook and post almost instantly regardless of the
   poller's health.
 

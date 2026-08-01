@@ -65,7 +65,7 @@ const now = new Date();
 
 const text = weekly
   ? formatWeeklyLookahead(now, await getWeekAheadSchedule(now))
-  : formatDailyDigest(now, (await getDashboardSnapshot(now)).todaySchedule, 0);
+  : formatDailyDigest(now, (await getDashboardSnapshot(now)).todaySchedule);
 
 console.log("\n" + "-".repeat(60));
 console.log(text);

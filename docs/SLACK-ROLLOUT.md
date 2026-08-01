@@ -166,9 +166,10 @@ can confirm right now if you have a live one to trigger.
 
 Once you do land a run inside the window (whether by hand or via the
 `0 11 * * *` `vercel.json` cron — see the README for why that specific UTC
-hour was chosen), confirm the digest arrives in the schedule channel and
-check its `last sync: N min ago` footer; a large number there is your first
-sign the external scheduler (Step 6) isn't running yet or has stalled.
+hour was chosen), confirm the digest arrives in the schedule channel. The
+digest carries no sync-age footer, so to check the scheduler itself go to
+Vercel → Logs and filter on `requestPath:/api/cron/sync`; runs should appear
+every 15 minutes.
 
 ---
 

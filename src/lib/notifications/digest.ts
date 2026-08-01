@@ -20,14 +20,10 @@ export const DIGEST_LABELS: Record<DigestKind, string> = {
   week: "Week ahead",
 };
 
-export async function renderDigest(
-  kind: DigestKind,
-  now: Date,
-  lastSyncMinutesAgo: number | null
-): Promise<string> {
+export async function renderDigest(kind: DigestKind, now: Date): Promise<string> {
   if (kind === "week") {
     return formatWeeklyLookahead(now, await getWeekAheadSchedule(now));
   }
   const snapshot = await getDashboardSnapshot(now);
-  return formatDailyDigest(now, snapshot.todaySchedule, lastSyncMinutesAgo);
+  return formatDailyDigest(now, snapshot.todaySchedule);
 }

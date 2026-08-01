@@ -72,11 +72,7 @@ export async function POST(req: Request) {
 
   let text: string;
   try {
-    // The scheduled digest reports how stale its data is; a hand-triggered one
-    // has no meaningful equivalent (the sync runs on its own every 15 min, not
-    // as part of this request), so it renders the footer as unknown rather
-    // than claiming a freshness it did not verify.
-    text = await renderDigest(action, new Date(), null);
+    text = await renderDigest(action, new Date());
   } catch (err) {
     return NextResponse.json(
       { error: `Could not build the message: ${err instanceof Error ? err.message : String(err)}` },

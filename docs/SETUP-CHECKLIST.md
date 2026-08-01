@@ -148,8 +148,10 @@ curl -H "Authorization: Bearer <CRON_SECRET>" https://<your-domain>/api/cron/syn
       channel (near-instantly via webhook, or within ~15 min via the cron pass)
 - [ ] Confirm the next 6 a.m. digest arrives on its own (any day — the digest
       runs weekends too, and posts even when nothing is scheduled)
-- [ ] Confirm the digest footer's `last sync: N min ago` reads a few minutes,
-      not hours — that line is your scheduler canary
+- [ ] Confirm `/api/cron/sync` is still running on schedule (Vercel → Logs,
+      filter `requestPath:/api/cron/sync`). The digest no longer reports sync
+      age, so a stalled scheduler shows up only as a digest that never
+      arrives
 
 ---
 

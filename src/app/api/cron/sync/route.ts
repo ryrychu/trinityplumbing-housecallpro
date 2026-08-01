@@ -14,8 +14,6 @@ import {
   localDateKey,
   mondayDateKey,
 } from "@/lib/notifications/schedule";
-import { getDashboardSnapshot, getWeekAheadSchedule } from "@/lib/dashboard/queries";
-import { formatDailyDigest, formatWeeklyLookahead } from "@/lib/slack/format";
 import { renderDigest, isDigestKind } from "@/lib/notifications/digest";
 import { postSlack, slackAlertsEnabled } from "@/lib/slack/client";
 
@@ -278,8 +276,7 @@ export async function GET(req: Request) {
       forced = "skipped: SLACK_ALERTS_ENABLED is not 'true'";
     } else {
       try {
-        const now = new Date();
-        const text = await renderDigest(force, now, 0);
+        const text = await renderDigest(force, new Date());
         forced = (await postSlack(process.env.SLACK_WEBHOOK_SCHEDULE, text))
           ? "posted"
           : "post failed — see function logs";
@@ -310,8 +307,7 @@ export async function GET(req: Request) {
     // that only holds if a weekly failure can't take it down too.
     try {
       if (isWeeklyLookaheadDue(now) && (await claim(supabase, "weekly_lookahead", mondayDateKey(now)))) {
-        const days = await getWeekAheadSchedule(now);
-        await postSlack(process.env.SLACK_WEBHOOK_SCHEDULE, formatWeeklyLookahead(now, days));
+        await postSlack(process.env.SLACK_WEBHOOK_SCHEDULE, await renderDigest("week", now));
       }
     } catch (err) {
       // A Slack/digest problem must never fail the sync the dashboard depends on.
@@ -320,14 +316,7 @@ export async function GET(req: Request) {
 
     try {
       if (isDailyDigestDue(now) && (await claim(supabase, "daily_digest", localDateKey(now)))) {
-        const snapshot = await getDashboardSnapshot(now);
-        // Sync age surfaces a stalled external scheduler in the message that is
-        // already read every morning.
-        const minutesAgo = Math.round((now.getTime() - Date.parse(syncedAt)) / 60_000);
-        await postSlack(
-          process.env.SLACK_WEBHOOK_SCHEDULE,
-          formatDailyDigest(now, snapshot.todaySchedule, Number.isFinite(minutesAgo) ? minutesAgo : null)
-        );
+        await postSlack(process.env.SLACK_WEBHOOK_SCHEDULE, await renderDigest("digest", now));
       }
     } catch (err) {
       // A Slack/digest problem must never fail the sync the dashboard depends on.

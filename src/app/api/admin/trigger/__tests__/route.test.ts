@@ -93,7 +93,7 @@ describe("POST /api/admin/trigger", () => {
       const res = await POST(request({ action: "week", token: TOKEN }));
       const body = await res.json();
 
-      expect(renderDigestMock).toHaveBeenCalledWith("week", expect.any(Date), null);
+      expect(renderDigestMock).toHaveBeenCalledWith("week", expect.any(Date));
       expect(body.text).toBe("*Today — Sat Aug 1* — 1 job");
     });
   });

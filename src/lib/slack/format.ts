@@ -96,18 +96,10 @@ function jobLines(row: TodayScheduleRow): string {
   return lines.join("\n");
 }
 
-export function formatDailyDigest(
-  now: Date,
-  rows: TodayScheduleRow[],
-  lastSyncMinutesAgo: number | null
-): string {
+export function formatDailyDigest(now: Date, rows: TodayScheduleRow[]): string {
   const header = `*Today — ${dayLabel(now)}* — ${rows.length} ${rows.length === 1 ? "job" : "jobs"}`;
   const body = rows.length === 0 ? "No jobs scheduled today." : rows.map(jobLines).join("\n\n");
-  // Sync age makes a stalled external scheduler visible in a message that is
-  // already read every morning, instead of being noticed a week later.
-  const footer =
-    lastSyncMinutesAgo == null ? "_last sync: unknown_" : `_last sync: ${lastSyncMinutesAgo} min ago_`;
-  return [header, "", body, "", footer].join("\n");
+  return [header, "", body].join("\n");
 }
 
 export function formatWeeklyLookahead(

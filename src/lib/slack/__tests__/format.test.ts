@@ -45,7 +45,7 @@ describe("formatDailyDigest", () => {
   };
 
   it("renders time, customer, phone, address, service, tech and status", () => {
-    const out = formatDailyDigest(now, [row], 4);
+    const out = formatDailyDigest(now, [row]);
     expect(out).toContain("Wed Jul 29");
     expect(out).toContain("1 job");
     expect(out).toContain("• *8:00 AM* — Mary Kolakowski  ·  📞 (518) 555-0142");
@@ -55,40 +55,42 @@ describe("formatDailyDigest", () => {
   });
 
   it("drops the zone/miles/drive clutter Dave does not read at 6am", () => {
-    const out = formatDailyDigest(now, [row], 4);
+    const out = formatDailyDigest(now, [row]);
     expect(out).not.toContain("Albany Zone");
     expect(out).not.toContain("14 mi");
     expect(out).not.toContain("24 min");
   });
 
   it("bolds an unassigned job — the one line that needs acting on before the day starts", () => {
-    const out = formatDailyDigest(now, [{ ...row, technicianName: null }], 4);
+    const out = formatDailyDigest(now, [{ ...row, technicianName: null }]);
     expect(out).toContain("     👤 *Unassigned*  ·  Scheduled");
   });
 
   it("keeps the assignment line when the status is unknown", () => {
-    const out = formatDailyDigest(now, [{ ...row, status: null }], 4);
+    const out = formatDailyDigest(now, [{ ...row, status: null }]);
     expect(out).toContain("     👤 Dan");
     expect(out).not.toContain("Dan  ·  ");
   });
 
-  it("shows sync age so a stalled external scheduler is visible", () => {
-    expect(formatDailyDigest(now, [row], 4)).toContain("last sync: 4 min ago");
+  it("ends on the last job, with no sync-age footer", () => {
+    const out = formatDailyDigest(now, [row]);
+    expect(out).not.toContain("last sync");
+    expect(out.endsWith("\n")).toBe(false);
   });
 
   it("still posts on an empty day — silence would be ambiguous", () => {
-    const out = formatDailyDigest(now, [], 2);
+    const out = formatDailyDigest(now, []);
     expect(out).toContain("No jobs scheduled today");
   });
 
   it("falls back to the zone when a job has no address", () => {
-    const out = formatDailyDigest(now, [{ ...row, id: "job_z", address: null }], 4);
+    const out = formatDailyDigest(now, [{ ...row, id: "job_z", address: null }]);
     expect(out).toContain("     📍 Albany Zone");
   });
 
   describe("phone rendering", () => {
     const withPhone = (customerPhone: string | null) =>
-      formatDailyDigest(now, [{ ...row, customerPhone }], 4);
+      formatDailyDigest(now, [{ ...row, customerPhone }]);
 
     it("formats a 10-digit number", () => {
       expect(withPhone("5185550142")).toContain("📞 (518) 555-0142");
@@ -124,7 +126,7 @@ describe("formatDailyDigest", () => {
       customerPhone: null,
       status: null,
     };
-    const out = formatDailyDigest(now, [bare], null);
+    const out = formatDailyDigest(now, [bare]);
     expect(out).toContain("• *Time TBD* — Unknown customer");
     // An unknown zone is a placeholder, not a location — better to show no
     // location line than a line that says nothing.
@@ -137,10 +139,8 @@ describe("formatDailyDigest", () => {
     expect(out).not.toContain("NaN");
   });
 
-  it("shows zero minutes since last sync rather than falling back to 'unknown'", () => {
-    const out = formatDailyDigest(now, [row], 0);
-    expect(out).toContain("last sync: 0 min ago");
-    expect(out).not.toContain("last sync: unknown");
+  it("has no footer on an empty day either", () => {
+    expect(formatDailyDigest(now, [])).not.toContain("last sync");
   });
 });
 
