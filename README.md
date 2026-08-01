@@ -28,6 +28,11 @@ npm run build                # production build / typecheck / lint
 - `SLACK_WEBHOOK_SCHEDULE` — Slack incoming webhook for the job-schedule channel
   (6:00 a.m. daily digest + Monday week-ahead), read in
   `src/app/api/cron/sync/route.ts`.
+- `ADMIN_TRIGGER_TOKEN` — password for the `/admin` page, which posts a
+  schedule digest to Slack on demand. Unlike every other secret here you must
+  be able to read this one back in order to type it in, so keep a copy when you
+  set it. The app has no other authentication, so this is the only thing
+  stopping a stranger who finds the URL from posting to Slack.
 - `SLACK_WEBHOOK_INVOICES` — Slack incoming webhook for the paid-invoice
   channel, read in `src/lib/notifications/dispatch.ts`.
 - `SLACK_WEBHOOK_ESTIMATES` — Slack incoming webhook for the approved-estimate

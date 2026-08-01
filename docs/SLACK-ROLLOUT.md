@@ -158,8 +158,9 @@ doing this rollout at 3pm — the call still syncs normally and returns
 expected behavior, not a failure; don't take an empty schedule channel at
 3pm as a sign anything is broken. If you want to see a digest post
 immediately as a smoke test, run the curl command again between 6:00 a.m.
-and 12:00 p.m. Eastern on a weekday (Monday if you also want to see the
-week-ahead message). Paid-invoice and approved-estimate alerts, by contrast,
+and 12:00 p.m. Eastern on any day (Monday if you also want to see the
+week-ahead message) — or use the `/admin` page described below, which sends
+one at any hour. Paid-invoice and approved-estimate alerts, by contrast,
 post any time there's genuinely new data, regardless of the hour — those you
 can confirm right now if you have a live one to trigger.
 
@@ -212,6 +213,66 @@ specifically because it's the only hour that lands inside the 06:00–12:00
 not just a silent sync. It guarantees the sync (and a real chance at the
 digest) runs at least once even if the external scheduler is down, but on
 Hobby it cannot deliver 15-minute paid-invoice timeliness on its own.
+
+---
+
+## Sending a digest by hand — the `/admin` page
+
+The schedule digests only send between 06:00 and 12:00 Eastern. Outside that
+window there is no supported way to make one appear — and there is no way to
+do it from a laptop either, because every secret in this project is a Vercel
+**Sensitive** environment variable. Sensitive values are write-only: `vercel
+env pull` returns the literal string `[SENSITIVE]`, and neither the dashboard
+nor the CLI will ever hand back the real value. That makes
+`scripts/preview-digest.mts` useless against production, and Vercel has no
+"run this cron now" button either.
+
+`/admin` closes that gap. It has a **Preview** button (renders the message,
+sends nothing) and a **Send to Slack** button for each digest.
+
+Set the token first. Generate one — 256 bits, `base64url` so no `+`, `/` or
+`=` survives to be mangled by a shell or an `.env` line:
+
+```bash
+node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"
+```
+
+Then paste it in, and **keep a copy**: `vercel env add` marks values Sensitive
+by default, and this is the one variable you have to be able to read back in
+order to type it into the page. Lose it and the only fix is removing the
+variable and adding a new one.
+
+```bash
+vercel env add ADMIN_TRIGGER_TOKEN
+```
+
+Then redeploy and open `https://<your-domain>/admin`.
+
+**Understand what this page is before you deploy it.** This app has no
+authentication of any kind — `/dashboard` is already public to anyone who
+knows the URL, customer names, addresses and phone numbers included. That
+token is therefore the *only* thing standing between a stranger and your
+Slack channels. Use a long random string, not a word. If you'd rather close
+the hole properly, Vercel's Deployment Protection puts the whole site behind
+your team's login; it needs a bypass configured for the Housecall Pro webhook
+path, which is why it isn't turned on here by default.
+
+Two behaviors worth knowing:
+
+- **Preview is the default.** The API only posts when explicitly asked, so a
+  malformed request can't surprise a channel.
+- **Sending by hand never consumes the day's digest.** The page deliberately
+  skips the `claim()` ledger, so using it at 5 a.m. does not suppress the real
+  6 a.m. digest. The trade-off is that sending inside the window can produce
+  two messages.
+
+The same thing is available without a browser, using `CRON_SECRET` — useful
+from a script, if you happen to know that value:
+
+```bash
+curl -H "Authorization: Bearer <CRON_SECRET>" \
+  "https://<your-domain>/api/cron/sync?force=digest"   # or force=week
+```
 
 ---
 

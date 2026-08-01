@@ -16,6 +16,7 @@ import {
 } from "@/lib/notifications/schedule";
 import { getDashboardSnapshot, getWeekAheadSchedule } from "@/lib/dashboard/queries";
 import { formatDailyDigest, formatWeeklyLookahead } from "@/lib/slack/format";
+import { renderDigest, isDigestKind } from "@/lib/notifications/digest";
 import { postSlack, slackAlertsEnabled } from "@/lib/slack/client";
 
 // A steady-state incremental run costs ~2s (each resource stops after one page);
@@ -90,6 +91,18 @@ export async function GET(req: Request) {
 
   if (!process.env.CRON_SECRET || authHeader !== expected) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  // Manual digest trigger — see the forced-digest block near the bottom for
+  // why this exists. Validated here rather than treated as a truthy flag so a
+  // typo (`?force=daily`) fails loudly instead of silently sending the wrong
+  // digest to a real channel.
+  const force = new URL(req.url).searchParams.get("force");
+  if (force !== null && !isDigestKind(force)) {
+    return NextResponse.json(
+      { error: `Unknown force value '${force}' — use 'digest' or 'week'` },
+      { status: 400 }
+    );
   }
 
   const supabase = getSupabaseServerClient();
@@ -241,11 +254,51 @@ export async function GET(req: Request) {
     await supabase.from("sync_cursors").upsert(cursorUpserts);
   }
 
+  // A manual digest trigger, for the hours the morning window below
+  // deliberately excludes. There is no other way to post a production digest on
+  // demand: every secret in this project is a Vercel Sensitive env var, which
+  // is write-only — `vercel env pull` returns the literal string [SENSITIVE],
+  // so scripts/preview-digest.mts cannot reach production Supabase or Slack
+  // from a laptop, and no dashboard button re-runs a cron job. This is the
+  // same query and the same formatter, running inside the deployment that
+  // already holds the real credentials.
+  //
+  //   curl -H "Authorization: Bearer $CRON_SECRET" \
+  //     "https://<domain>/api/cron/sync?force=digest"     # or force=week
+  //
+  // Like the preview script, it bypasses claim() and records nothing, so a
+  // forced digest never consumes the day's claim and can never suppress the
+  // genuine 6am one. The trade-off is that forcing inside the window can
+  // produce two messages — the right bias for something a human triggered on
+  // purpose, where a silent no-op reads as a broken endpoint.
+  let forced: string | null = null;
+
+  if (force) {
+    if (!slackAlertsEnabled()) {
+      forced = "skipped: SLACK_ALERTS_ENABLED is not 'true'";
+    } else {
+      try {
+        const now = new Date();
+        const text = await renderDigest(force, now, 0);
+        forced = (await postSlack(process.env.SLACK_WEBHOOK_SCHEDULE, text))
+          ? "posted"
+          : "post failed — see function logs";
+      } catch (err) {
+        // Surfaced in the response, not merely logged. Nobody triggers this by
+        // hand and then goes reading function logs to find out whether the
+        // Slack message they are waiting for is coming.
+        forced = `failed: ${err instanceof Error ? err.message : String(err)}`;
+        console.error("[cron] forced digest failed:", err);
+      }
+    }
+  }
+
   // Digest timing is decided here rather than by the cron schedule: cron cannot
   // express "6am Eastern", only a UTC hour that is wrong for half the year.
   // Any run inside the local morning window sends it, so a missed 6:00 ping
   // self-heals on the next one; claim() guarantees exactly one per day.
-  if (slackAlertsEnabled()) {
+  // Skipped entirely on a forced run, which has already posted above.
+  if (!force && slackAlertsEnabled()) {
     const now = new Date();
 
     // Split from the daily digest below into its own try/catch: sharing one
@@ -286,6 +339,7 @@ export async function GET(req: Request) {
     {
       ok: true,
       syncedAt,
+      ...(forced ? { forcedDigest: forced } : {}),
       geocodeBudgetRemaining: budget.remaining,
       invoicesReconciled: shouldReconcileInvoices,
       resources: Object.fromEntries(results.map((r) => [r.resource, { upserted: r.upserted, pages: r.pagesFetched }])),

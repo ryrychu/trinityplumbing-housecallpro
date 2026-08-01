@@ -367,4 +367,94 @@ describe("GET /api/cron/sync", () => {
       expect(res.status).toBe(200);
     });
   });
+
+  // The only way to post a production digest on demand: every secret is a
+  // Vercel Sensitive env var, so the local preview script cannot reach
+  // production, and no dashboard button re-runs a cron job.
+  describe("?force= manual digest", () => {
+    function forcedRequest(value: string): Request {
+      return new Request(`https://example.com/api/cron/sync?force=${value}`, {
+        headers: { Authorization: "Bearer test-cron-secret" },
+      });
+    }
+
+    it("posts the daily digest outside the morning window", async () => {
+      vi.setSystemTime(new Date("2026-08-01T23:50:00Z")); // Sat 7:50pm EDT
+
+      const res = await GET(forcedRequest("digest"));
+
+      expect(res.status).toBe(200);
+      expect(await res.json()).toMatchObject({ forcedDigest: "posted" });
+      expect(postSlackMock.mock.calls.some(([, t]) => String(t).includes("Today —"))).toBe(true);
+    });
+
+    it("posts the week-ahead with force=week", async () => {
+      vi.setSystemTime(new Date("2026-08-01T23:50:00Z"));
+
+      await GET(forcedRequest("week"));
+
+      expect(getWeekAheadScheduleMock).toHaveBeenCalled();
+      expect(postSlackMock.mock.calls.some(([, t]) => String(t).includes("Week ahead"))).toBe(true);
+    });
+
+    // Consuming the claim would make a 5am forced digest silently suppress the
+    // real 6am one — the exact failure this escape hatch exists to fix.
+    it("never consumes the day's claim", async () => {
+      vi.setSystemTime(new Date("2026-08-01T23:50:00Z"));
+
+      await GET(forcedRequest("digest"));
+
+      expect(claimMock).not.toHaveBeenCalled();
+    });
+
+    // Forcing already posted; letting the window path run too would double-post.
+    it("skips the scheduled digest path on a forced run", async () => {
+      vi.setSystemTime(new Date("2026-07-29T10:00:00Z")); // inside the window
+
+      await GET(forcedRequest("digest"));
+
+      expect(claimMock).not.toHaveBeenCalled();
+      expect(postSlackMock.mock.calls.filter(([, t]) => String(t).includes("Today —"))).toHaveLength(1);
+    });
+
+    it("rejects an unknown force value instead of sending the wrong digest", async () => {
+      const res = await GET(forcedRequest("daily"));
+
+      expect(res.status).toBe(400);
+      expect(postSlackMock).not.toHaveBeenCalled();
+    });
+
+    // A forced run reports what happened: the caller is a human waiting on a
+    // Slack message, not a scheduler that only cares about ok:true.
+    it("reports the kill switch rather than silently posting nothing", async () => {
+      slackAlertsEnabledMock.mockReturnValue(false);
+
+      const res = await GET(forcedRequest("digest"));
+
+      expect(await res.json()).toMatchObject({
+        forcedDigest: expect.stringContaining("SLACK_ALERTS_ENABLED"),
+      });
+      expect(postSlackMock).not.toHaveBeenCalled();
+    });
+
+    it("reports a failed post without failing the sync", async () => {
+      vi.setSystemTime(new Date("2026-08-01T23:50:00Z"));
+      getDashboardSnapshotMock.mockRejectedValue(new Error("supabase unreachable"));
+
+      const res = await GET(forcedRequest("digest"));
+
+      expect(res.status).toBe(200);
+      expect(await res.json()).toMatchObject({
+        forcedDigest: expect.stringContaining("supabase unreachable"),
+      });
+    });
+
+    it("omits forcedDigest entirely on a normal scheduled run", async () => {
+      vi.setSystemTime(new Date("2026-08-01T23:50:00Z"));
+
+      const res = await GET(authorizedRequest());
+
+      expect(await res.json()).not.toHaveProperty("forcedDigest");
+    });
+  });
 });
