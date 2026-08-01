@@ -146,7 +146,8 @@ curl -H "Authorization: Bearer <CRON_SECRET>" https://<your-domain>/api/cron/syn
       channel within ~15 minutes
 - [ ] Approve one test estimate option; confirm it appears in the estimates
       channel (near-instantly via webhook, or within ~15 min via the cron pass)
-- [ ] Confirm the next weekday 6 a.m. digest arrives on its own
+- [ ] Confirm the next 6 a.m. digest arrives on its own (any day — the digest
+      runs weekends too, and posts even when nothing is scheduled)
 - [ ] Confirm the digest footer's `last sync: N min ago` reads a few minutes,
       not hours — that line is your scheduler canary
 

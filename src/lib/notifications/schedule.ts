@@ -35,9 +35,12 @@ function inMorningWindow(now: Date): boolean {
   return hour >= DIGEST_HOUR && hour < DIGEST_CUTOFF_HOUR;
 }
 
+// Every day, weekends included. Trinity books Saturday and Sunday work, and a
+// weekend job that nobody was pinged about is exactly the failure this digest
+// exists to prevent — the Monday look-ahead is five days stale by then. Empty
+// days still send: "No jobs scheduled today" is a confirmation the digest ran,
+// and silence is indistinguishable from a broken scheduler.
 export function isDailyDigestDue(now: Date): boolean {
-  const { dow } = localParts(now);
-  if (dow === 0 || dow === 6) return false; // weekends
   return inMorningWindow(now);
 }
 

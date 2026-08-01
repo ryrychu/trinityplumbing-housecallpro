@@ -51,9 +51,16 @@ describe("isDailyDigestDue", () => {
     expect(isDailyDigestDue(new Date("2026-07-29T16:00:00Z"))).toBe(false);
   });
 
-  it("is false on Saturday and Sunday", () => {
-    expect(isDailyDigestDue(new Date("2026-08-01T10:00:00Z"))).toBe(false);
-    expect(isDailyDigestDue(new Date("2026-08-02T10:00:00Z"))).toBe(false);
+  it("is true on Saturday and Sunday — weekend jobs get a digest too", () => {
+    // Regression: these were gated off, so a Saturday job went unannounced and
+    // the only weekend coverage was a Monday look-ahead five days old.
+    expect(isDailyDigestDue(new Date("2026-08-01T10:00:00Z"))).toBe(true);
+    expect(isDailyDigestDue(new Date("2026-08-02T10:00:00Z"))).toBe(true);
+  });
+
+  it("still respects the morning window on a weekend", () => {
+    expect(isDailyDigestDue(new Date("2026-08-01T09:59:00Z"))).toBe(false); // 05:59 EDT
+    expect(isDailyDigestDue(new Date("2026-08-01T16:00:00Z"))).toBe(false); // 12:00 EDT
   });
 
   it("is true on the DST spring-forward Monday", () => {

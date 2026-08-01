@@ -26,7 +26,7 @@ npm run build                # production build / typecheck / lint
 - `SUPABASE_SERVICE_ROLE_KEY` — service role key (server-only, never exposed to the client).
 - `CRON_SECRET` — shared secret for authorizing the `/api/cron/sync` polling route.
 - `SLACK_WEBHOOK_SCHEDULE` — Slack incoming webhook for the job-schedule channel
-  (6:00 a.m. weekday digest + Monday week-ahead), read in
+  (6:00 a.m. daily digest + Monday week-ahead), read in
   `src/app/api/cron/sync/route.ts`.
 - `SLACK_WEBHOOK_INVOICES` — Slack incoming webhook for the paid-invoice
   channel, read in `src/lib/notifications/dispatch.ts`.
@@ -64,7 +64,7 @@ update `src/app/api/webhooks/housecall/route.ts` if it differs.
 ## Slack notifications
 
 Three notification types post to Slack, all gated behind `SLACK_ALERTS_ENABLED`:
-a 6:00 a.m. weekday schedule digest, a Monday week-ahead digest, and near-real-time
+a 6:00 a.m. daily schedule digest, a Monday week-ahead digest, and near-real-time
 alerts for paid invoices and approved estimates. **Do not enable this without
 first reading [`docs/SLACK-ROLLOUT.md`](docs/SLACK-ROLLOUT.md)** — the live
 database already holds thousands of paid invoices and approved estimates, and
@@ -75,10 +75,12 @@ Two behaviors worth understanding before touching this:
 
 - **Digest timing is decided in code, not by the cron schedule.** Every run of
   `GET /api/cron/sync` evaluates the current time in `America/New_York`
-  (`src/lib/notifications/schedule.ts`) and sends that day's digest if it's a
-  weekday between 06:00 and 12:00 local time and one hasn't been sent yet
+  (`src/lib/notifications/schedule.ts`) and sends that day's digest if the
+  local time is between 06:00 and 12:00 and one hasn't been sent yet
   (`claim()` in `src/lib/notifications/dedupe.ts` guarantees exactly one per
-  day). Cron expressions can't express "6am Eastern" — only a fixed UTC hour,
+  day). This runs every day, weekends included — Trinity books Saturday and
+  Sunday work — and an empty day still posts "No jobs scheduled today" so
+  silence always means the scheduler is broken, never that the day was quiet. Cron expressions can't express "6am Eastern" — only a fixed UTC hour,
   which is wrong for half the year across DST — so the window check runs on
   every invocation instead. A missed 6:00 run self-heals on the next one,
   right up until the 12:00 cutoff.
