@@ -15,6 +15,8 @@ const job = {
   service: "Water Heater Repair",
   customerPhone: "5185550142",
   status: "Scheduled",
+  lat: 42.73,
+  lng: -73.69,
 };
 
 describe("TodaySchedulePanel", () => {

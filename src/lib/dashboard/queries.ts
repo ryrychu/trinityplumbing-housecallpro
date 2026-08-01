@@ -127,6 +127,11 @@ export interface TodayScheduleRow {
   // Display label: "Scheduled" | "En Route" | "In Progress" | "Completed" |
   // "Needs Scheduling" | "Canceled". Null when HCP sent an unrecognized status.
   status: string | null;
+  // Job coordinates, when geocoding resolved them. Carried so callers can
+  // measure this job against an arbitrary point (the nearby-work lookup) rather
+  // than only against Averill Park, which is all `miles` records.
+  lat: number | null;
+  lng: number | null;
 }
 
 interface TechWorkloadRow {
@@ -277,6 +282,8 @@ function buildScheduleRow(
     service: scheduleService(j),
     customerPhone: schedulePhone(j, cust),
     status: scheduleStatus(j),
+    lat: j.service_address_lat,
+    lng: j.service_address_lng,
   };
 }
 
@@ -377,8 +384,20 @@ export async function getDashboardSnapshot(now: Date = new Date()): Promise<Dash
 export async function getWeekAheadSchedule(
   now: Date = new Date()
 ): Promise<Array<{ dateKey: string; rows: TodayScheduleRow[] }>> {
+  return getScheduleDays(new Date(weekRange(now, "this").startIso), 7);
+}
+
+// `dayCount` consecutive local days starting from the calendar day containing
+// `startAnchor`, each bucket present even when empty. Generalized out of
+// getWeekAheadSchedule so the nearby-work lookup can ask for a 14-day horizon
+// from today without duplicating the DST-safe bucketing or the canceled-job
+// filter — a second implementation of either is exactly how the dashboard and
+// the Slack digest would start disagreeing about the same day.
+export async function getScheduleDays(
+  startAnchor: Date,
+  dayCount: number
+): Promise<Array<{ dateKey: string; rows: TodayScheduleRow[] }>> {
   const supabase = getSupabaseServerClient();
-  const week = weekRange(now, "this");
 
   // Never select("*"): PostgREST caps responses at 1000 rows and truncates
   // silently. fetchAllRows pages; the column list stays explicit.
@@ -397,30 +416,18 @@ export async function getWeekAheadSchedule(
   const fullName = (r?: { first_name: string | null; last_name: string | null }) =>
     r ? [r.first_name, r.last_name].filter(Boolean).join(" ") || null : null;
 
-  const inWeek = jobs
-    .filter(
-      (j) =>
-        !!j.scheduled_start &&
-        j.scheduled_start >= week.startIso &&
-        j.scheduled_start < week.endIso &&
-        !isCanceledJob(j)
-    )
-    .slice()
-    .sort((a, b) => (a.scheduled_start ?? "").localeCompare(b.scheduled_start ?? ""));
-
-  // Build the seven local day buckets from the week's Monday. NOT built by
-  // adding i * 86_400_000ms to Monday's UTC instant: a week containing a DST
-  // transition has a 23- or 25-hour day, so fixed 24h-multiples off a single
-  // UTC instant can drift off local midnight for days after the transition.
-  // Instead we advance the *calendar* date (y, m0, d + i) and anchor each day
-  // at 16:00 UTC -- noon-ish Eastern under either offset (-04:00 or -05:00),
-  // never within hours of a DST boundary -- so it always resolves to the
-  // correct calendar day before handing off to dayRange for that day's true
-  // local midnight-to-midnight boundaries.
-  const monday = localParts(new Date(week.startIso));
+  // Build the local day buckets from the anchor's calendar date. NOT built by
+  // adding i * 86_400_000ms to a single UTC instant: a span containing a DST
+  // transition has a 23- or 25-hour day, so fixed 24h-multiples can drift off
+  // local midnight for every day after the transition. Instead we advance the
+  // *calendar* date (y, m0, d + i) and anchor each day at 16:00 UTC -- noon-ish
+  // Eastern under either offset (-04:00 or -05:00), never within hours of a DST
+  // boundary -- so it always resolves to the correct calendar day before handing
+  // off to dayRange for that day's true local midnight-to-midnight boundaries.
+  const start = localParts(startAnchor);
   const buckets: Array<{ dateKey: string; rows: TodayScheduleRow[]; startIso: string; endIso: string }> = [];
-  for (let i = 0; i < 7; i += 1) {
-    const noonAnchor = new Date(Date.UTC(monday.y, monday.m0, monday.d + i, 16, 0, 0));
+  for (let i = 0; i < dayCount; i += 1) {
+    const noonAnchor = new Date(Date.UTC(start.y, start.m0, start.d + i, 16, 0, 0));
     const range = dayRange(noonAnchor);
     buckets.push({
       dateKey: localDateKeyOf(noonAnchor),
@@ -429,8 +436,23 @@ export async function getWeekAheadSchedule(
       endIso: range.endIso,
     });
   }
+  if (buckets.length === 0) return [];
 
-  for (const j of inWeek) {
+  const spanStart = buckets[0].startIso;
+  const spanEnd = buckets[buckets.length - 1].endIso;
+
+  const inSpan = jobs
+    .filter(
+      (j) =>
+        !!j.scheduled_start &&
+        j.scheduled_start >= spanStart &&
+        j.scheduled_start < spanEnd &&
+        !isCanceledJob(j)
+    )
+    .slice()
+    .sort((a, b) => (a.scheduled_start ?? "").localeCompare(b.scheduled_start ?? ""));
+
+  for (const j of inSpan) {
     const iso = j.scheduled_start as string;
     const bucket = buckets.find((b) => iso >= b.startIso && iso < b.endIso);
     if (bucket) bucket.rows.push(buildScheduleRow(j, custById, techById, fullName));

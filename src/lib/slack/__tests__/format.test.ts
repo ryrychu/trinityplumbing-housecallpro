@@ -42,6 +42,8 @@ describe("formatDailyDigest", () => {
     service: "Water Heater Repair",
     customerPhone: "5185550142",
     status: "Scheduled",
+    lat: 42.65,
+    lng: -73.75,
   };
 
   it("renders time, customer, phone, address, service, tech and status", () => {
@@ -125,6 +127,8 @@ describe("formatDailyDigest", () => {
       service: null,
       customerPhone: null,
       status: null,
+      lat: null,
+      lng: null,
     };
     const out = formatDailyDigest(now, [bare]);
     expect(out).toContain("• *Time TBD* — Unknown customer");
@@ -163,6 +167,8 @@ describe("formatWeeklyLookahead", () => {
             service: "Drain Cleaning",
             customerPhone: "5185550199",
             status: "Scheduled",
+            lat: 42.73,
+            lng: -73.69,
           },
         ],
       },

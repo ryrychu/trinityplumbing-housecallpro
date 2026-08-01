@@ -112,8 +112,30 @@ both need the dashboard's webhook docs. See the partial-payload item below.
   `src/lib/geo/zones.ts` and the `AVG_SPEED_MPH = 32` drive-time constant encode
   informal dispatch zones; tune against real job data. The North Route cap was
   raised to 50 mi during Phase 1 to include Glens Falls.
-- **Commercial / Navien priority recommendations.** Scheduling-recommendation
-  behavior (Phase 2 per the roadmap), dependent on live tagging conventions.
+- **DONE (2026-08-01) — nearby-work lookup.** The roadmap's *"Already working
+  in Delmar Tuesday afternoon"* now exists at `/dispatch`: type a town or
+  address, get the next 14 days ranked by whether work is already booked
+  nearby. `src/lib/dispatch/nearby.ts` + `resolveLocation.ts`.
+
+  **Why it is a lookup and not an optimizer.** The go-live status census sums
+  to exactly 3,038 across six statuses — **zero jobs sit in `needs
+  scheduling`**. Trinity schedules at the moment of booking, so there is no
+  queue of unscheduled work for a batch optimizer to arrange. Phase 2 as
+  written ("recommend best day, best technician") assumes a queue that does
+  not exist in this account; the useful shape is an answer for whoever is on
+  the phone. Revisit if HCP usage ever changes.
+
+  Town resolution averages the coordinates of past jobs in that town rather
+  than geocoding the name — the Census one-line endpoint is unreliable without
+  a street, and a static town→coords table would be another list to maintain.
+  A town with no history correctly resolves to nothing, which is itself the
+  answer to "are we already going there".
+
+- **Commercial / Navien priority recommendations.** Still open. The tagging
+  convention (above) now gives `is_commercial` a real signal, so a commercial-
+  priority weighting in the nearby lookup is newly buildable. Navien customers
+  have no flag yet — `customers.tags` already syncs, so a `navien` tag would
+  work the same way `commercial` now does.
 
 ## Go-live Step 2 findings (live data, 2026-07-24)
 
@@ -143,12 +165,27 @@ Four are fixed; one needs a business decision.
   bug. `getDashboardSnapshot` now pages with `.range()` and selects only the
   columns each metric needs. Jobs in progress went 19 → 91, pending invoices
   24 → 25, revenue booked $36,195.59 → $145,708.30.
-- **OPEN — `emergencyCalls` and `commercialJobs` have no data source.** Both
-  derive from job tag names, but only 22 of 3,038 jobs carry any tag, and none
-  are emergency/commercial (actual names: "HomeServe", "My Website", "H-27",
-  "Dylan spiff up sell", "3LD"). No code change can populate these. Options:
-  adopt a tagging convention in HCP, derive from job type / line items, or drop
-  the cards. Needs a decision from Trinity.
+- **RESOLVED BY PROCESS (2026-08-01) — `emergencyCalls` and `commercialJobs`
+  have no data source.** Both derive from job tag names, but only 22 of 3,038
+  jobs carried any tag and none were emergency/commercial (actual names:
+  "HomeServe", "My Website", "H-27", "Dylan spiff up sell", "3LD"). No code
+  change could populate them.
+
+  Trinity adopted a tagging convention instead: staff now tag `emergency` (any
+  after-hours, same-day or urgent call-out) and `commercial` (business,
+  property manager, or non-residential), applying both where both apply. Staff
+  were told capitalization does not matter and that the exact plain word is
+  what registers — `mapJob` lowercases and now also trims, and matches the
+  exact tag within the array, so a descriptive tag like "emergency call - no
+  heat" alongside the plain one is harmless. Regression tests pin all three
+  behaviors.
+
+  **Both cards count tagged jobs only, from the rollout date forward.** The
+  ~3,000 historical jobs stay unclassified; backfilling them would need manual
+  review. One option if that ever becomes worth doing: `customers.company` is
+  already synced and populated, so historical *commercial* work could be
+  retro-classified from a non-empty company name without anyone reading job
+  records. Emergency has no equivalent signal and would need real review.
 
 Geocoding after the uncapped local backfill: 92/1497 customers and 201/3038 jobs
 still lack coordinates — 63 are definitive Census no-matches, the rest lack a

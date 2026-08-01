@@ -10,19 +10,31 @@ function toRadians(deg: number): number {
   return (deg * Math.PI) / 180;
 }
 
-export function distanceFromAverillPark(lat: number, lng: number) {
-  const dLat = toRadians(lat - AVERILL_PARK_LAT);
-  const dLng = toRadians(lng - AVERILL_PARK_LNG);
+// Great-circle miles between any two points. Straight-line, not road distance —
+// good enough to answer "is this near that", which is all the nearby-work
+// lookup asks of it. A real routing distance would need a paid API and would
+// change the answer by a mile or two on a question whose threshold is already
+// a judgement call.
+export function milesBetween(aLat: number, aLng: number, bLat: number, bLng: number): number {
+  const dLat = toRadians(bLat - aLat);
+  const dLng = toRadians(bLng - aLng);
 
   const a =
     Math.sin(dLat / 2) ** 2 +
-    Math.cos(toRadians(AVERILL_PARK_LAT)) * Math.cos(toRadians(lat)) * Math.sin(dLng / 2) ** 2;
+    Math.cos(toRadians(aLat)) * Math.cos(toRadians(bLat)) * Math.sin(dLng / 2) ** 2;
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-  const miles = EARTH_RADIUS_MILES * c;
+  return EARTH_RADIUS_MILES * c;
+}
 
+export function driveMinutesForMiles(miles: number): number {
+  return Math.round((miles / AVG_SPEED_MPH) * 60);
+}
+
+export function distanceFromAverillPark(lat: number, lng: number) {
+  const miles = milesBetween(AVERILL_PARK_LAT, AVERILL_PARK_LNG, lat, lng);
   return {
     miles: Math.round(miles * 10) / 10,
-    driveMinutes: Math.round((miles / AVG_SPEED_MPH) * 60),
+    driveMinutes: driveMinutesForMiles(miles),
   };
 }
 

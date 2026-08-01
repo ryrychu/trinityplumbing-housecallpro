@@ -151,6 +151,30 @@ describe("mapJob tags/notes", () => {
     expect(row.tags).toEqual([]);
     expect(row.notes).toBeNull();
   });
+
+  // Trinity's staff were told the emergency/commercial tags are typed by hand
+  // and that capitalization does not matter. A trailing space is the same class
+  // of slip, and dropping the tag would undercount the dashboard with no
+  // visible cause.
+  it("trims stray whitespace so a hand-typed tag still registers", () => {
+    const row = mapJob({
+      id: "j3",
+      tags: [{ id: "t1", name: " Emergency " }, { id: "t2", name: "COMMERCIAL" }],
+    });
+    expect(row.tags).toEqual(["emergency", "commercial"]);
+    expect(row.is_emergency).toBe(true);
+    expect(row.is_commercial).toBe(true);
+  });
+
+  // A descriptive tag alongside the plain one must not interfere — exactly the
+  // arrangement staff were told to use when they want more detail.
+  it("still flags when a descriptive tag sits beside the plain one", () => {
+    const row = mapJob({
+      id: "j4",
+      tags: [{ id: "t1", name: "emergency" }, { id: "t2", name: "emergency call - no heat" }],
+    });
+    expect(row.is_emergency).toBe(true);
+  });
 });
 
 describe("mapLead", () => {

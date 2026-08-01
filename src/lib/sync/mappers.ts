@@ -16,7 +16,7 @@ export function mapCustomer(c: HcpCustomer) {
     zip: address?.zip ?? null,
     lat: address?.latitude ?? null,
     lng: address?.longitude ?? null,
-    tags: (c.tags ?? []).map((t) => (t.name ?? "").toLowerCase()),
+    tags: (c.tags ?? []).map((t) => (t.name ?? "").trim().toLowerCase()),
     notes: c.notes ?? null,
     raw: c,
     updated_at: new Date().toISOString(),
@@ -35,7 +35,12 @@ export function mapEmployee(e: { id: string; first_name?: string; last_name?: st
 }
 
 export function mapJob(j: HcpJob) {
-  const tagNames = (j.tags ?? []).map((t) => (t.name ?? "").toLowerCase());
+  // Trimmed as well as lowercased. The emergency/commercial convention is typed
+  // by hand into HCP by whoever books the job, and Trinity's staff were told
+  // capitalization does not matter — a trailing space is the same class of
+  // slip, and silently dropping the tag would make the dashboard undercount
+  // with no visible cause.
+  const tagNames = (j.tags ?? []).map((t) => (t.name ?? "").trim().toLowerCase());
   return {
     id: j.id,
     customer_id: j.customer?.id ?? null,
