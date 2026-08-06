@@ -17,6 +17,38 @@ npm test                     # Vitest
 npm run build                # production build / typecheck / lint
 ```
 
+## Mobile app (`/app`)
+
+An installable iPhone PWA at `/app/*`, alongside the existing `/dashboard`.
+Read-only in Phase 1 — it mirrors the same Supabase data the desktop
+dashboard reads, with a phone-sized layout and offline caching, but makes no
+writes of its own. Five tabs:
+
+- **Today** — the day's jobs, Eastern time.
+- **Schedule** — the same schedule, day-by-day.
+- **Customers** — search by name or phone, with job history.
+- **Money** — open estimates and pending/overdue invoices.
+- **Dispatch** — the "are we already going near there?" lookup, same
+  `/api/dispatch/nearby` route the desktop `/dispatch` page uses.
+
+Auth is Supabase Auth, gated by `src/middleware.ts` on every `/app/*` page
+and `/api/app/*` route: signed-out browser requests are redirected to
+`/app/login`, signed-out API requests get a 401. There is no public
+sign-up — accounts are created by hand in the Supabase dashboard (see the
+runbook below). Behind that gate, `/api/app/*` routes read with
+`getSupabaseServerClient()` (`src/lib/supabase/client.ts`), which holds the
+`SUPABASE_SERVICE_ROLE_KEY` — a server-only env var that never reaches the
+browser. The middleware's sign-in check is what stands between a visitor and
+the data; there is no Postgres row-level security on top of it.
+
+**Before anyone installs this on a phone, read
+[`docs/MOBILE-INSTALL.md`](docs/MOBILE-INSTALL.md).** It covers creating
+accounts (and the dashboard setting that must be flipped before deploy, not
+after), installing from Safari, and a verification checklist including an
+offline-mode sequence that has to be run in a specific order to mean
+anything. The original spec is
+[`docs/superpowers/plans/2026-08-06-mobile-pwa-phase-1.md`](docs/superpowers/plans/2026-08-06-mobile-pwa-phase-1.md).
+
 ## Environment variables (set in Vercel → Project → Settings → Environment Variables)
 
 - `HOUSECALL_API_KEY` — Bearer token for the Housecall Pro public API.

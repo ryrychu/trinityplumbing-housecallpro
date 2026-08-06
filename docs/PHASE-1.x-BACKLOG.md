@@ -19,11 +19,17 @@ Findings, most important first:
    `customers.lat/lng` and `jobs.service_address_lat/lng` during sync). `mapJob`
    already reads `job.address` (a real field) — only the coordinates are missing.
 
-2. **Dashboard `openEstimates` will read 0 on real data.** Estimates expose
-   `work_status` (values like `"scheduled"`), not a `"open"` status. The metric
-   filters `status === "open"`. Redefine it against real HCP estimate lifecycle
-   values — likely `options[].approval_status` (pending/approved/declined) once
-   estimates have been acted on. `mapEstimate.status` now stores `work_status`.
+2. **RESOLVED — dashboard `openEstimates` will read 0 on real data.**
+   Estimates expose `work_status` (values like `"scheduled"`), not a
+   `"open"` status, and the metric used to filter `status === "open"`. Fixed
+   by `isOpenEstimate()` in `src/lib/dashboard/queries.ts`, which redefines
+   "open" against `raw.options[].approval_status`: an estimate is open if
+   its status isn't terminal and it has an option with no `approval_status`
+   set (i.e. nothing approved and nothing left pending review), and not open
+   if any option is already approved. The mobile app's Money tab
+   (`src/lib/mobile/money.ts`) imports and reuses this exact function rather
+   than re-deriving the definition, so the desktop dashboard and the mobile
+   app cannot drift apart on what "open" means.
 
 3. **Scale: prioritize incremental polling.** 1,497 customers / 3,090 jobs /
    2,866 invoices / 933 estimates / 6 employees. A full all-pages resync every

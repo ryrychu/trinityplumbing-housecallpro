@@ -1,0 +1,147 @@
+# Mobile App Install Runbook
+
+The mobile app is done and merged. It does not work yet — three things below
+require a human to act by hand, in the order given, before anyone puts this
+on a phone. Read the whole document before starting.
+
+---
+
+## Step 1 — Create the accounts (this blocks everything else)
+
+There is no public sign-up page. That is not the same as it being
+impossible to create an account: the anon key is public by design (it ships
+in the browser bundle), and until you flip the switch below, anyone who
+finds the URL can call Supabase's sign-up endpoint directly and register
+themselves. From there they'd be signed in like any other user, looking at
+1,497 customers' names, addresses and phone numbers. Do these two steps
+together, not one and then "later":
+
+1. **Supabase Dashboard → Authentication → Users → Add user.** Create one
+   account per person who needs the app, with **Auto Confirm** turned on
+   (otherwise the account sits unconfirmed and can't sign in until someone
+   clicks an email link that may never arrive, since this flow doesn't send
+   one).
+2. **Supabase Dashboard → Authentication → Providers → Email → disable
+   "Enable sign ups."** This is the actual gate. Do it in the same sitting
+   you create the first account — don't leave sign-ups open "just for now."
+
+Nothing about the app's code enforces this. It is entirely a dashboard
+setting, and it is the one prerequisite that turns "deployed" into "safe to
+deploy."
+
+---
+
+## Step 2 — Install on an iPhone
+
+**Must be done in Safari.** Chrome on iOS cannot install a home-screen app —
+it's a platform restriction, not a bug in this build — so "Add to Home
+Screen" either doesn't appear or doesn't produce a real app in Chrome.
+
+1. Open `https://<your-domain>/app/today` in **Safari**.
+2. Tap the Share icon, then **Add to Home Screen**.
+3. Open the app from the home screen icon, not from Safari. It launches
+   standalone — no address bar, no Safari chrome.
+4. **Sign in again inside the installed app.** The home-screen app has its
+   own storage, separate from Safari's. Being signed into Safari does not
+   carry over. This is expected and only needs to happen once per device.
+
+**There are no push notifications yet.** That's Phase 2. Nothing in this
+build will alert anyone to anything — the app has to be opened to show
+current data.
+
+---
+
+## Verification checklist
+
+Do these in order on the device you just installed to (or in a desktop
+browser first if you want a dry run before touching the phone — the offline
+sequence in particular is easier to drive from a laptop with DevTools).
+
+| # | Step | Expected result |
+|---|------|------------------|
+| 1 | While signed out, load `/app/today` | Redirects to `/app/login`. |
+| 2 | Sign in | Lands on Today, showing the correct date in **Eastern time** (not the device's local time zone if it differs, not UTC). |
+| 3 | Tap each of the five tabs — Today, Schedule, Customers, Money, Dispatch | Each loads and shows a freshness stamp (e.g. "Updated 2 min ago"). |
+| 4 | Open a job from Today | Shows status, address, booked amount, and invoice. |
+| 5 | On a job's detail screen, tap the phone number, then the address | Phone: prompts to call. Address: opens Maps. |
+| 6 | Search Customers by a known customer's name | Finds them. |
+| 7 | Search Customers by `(518) 555-0142` (with the punctuation, as a person would type it) | Finds the matching customer, punctuation and all. |
+| 8 | Run the **offline sequence** below | Previously-visited tabs render with "Offline — showing data from …"; a tab never opened while online shows "Not saved for offline use yet" instead of another tab's content. |
+
+### The offline sequence — do this exactly in this order
+
+This is the one check in the whole list that has actually caught a real bug,
+and the bug only shows up if you do the steps in this order.
+
+1. **Clear all site data for the domain first** (Safari: Settings → Safari →
+   Advanced → Website Data → find the domain → delete. Chrome DevTools:
+   Application → Storage → Clear site data). This forces a true first
+   install — you're about to test what a brand-new user sees.
+2. **Load `/app/today` while signed out.** It will redirect to
+   `/app/login` — that's expected, and it's the point: this is the moment
+   the app's offline cache gets built for the first time, and it happens
+   *before* anyone has signed in.
+3. Sign in.
+4. Tap through all five tabs once, online, so each one has a chance to load
+   real data.
+5. Turn on Airplane Mode (or DevTools → Network → Offline).
+6. Tap all five tabs again.
+
+**Why the order matters:** the very first thing the app does on install is
+save a copy of each of the five tab screens for offline use. If that first
+save happens while signed out — which is exactly what happens on a fresh
+install, because nobody is signed in yet — earlier testing caught the saved
+copy turning out to be the *login page*, filed under all five tabs' names
+instead of their real content. Sign in first, and that save never happens
+while signed out, so the bug never gets a chance to occur — which is why
+testing that way looks fine and proves nothing. The sequence above forces
+the save to happen at the same moment a real new user would trigger it. If
+step 6 ever shows a login screen instead of Today/Schedule/Customers/
+Money/Dispatch content on any tab, that bug is back — stop and report it
+before letting anyone else install.
+
+---
+
+## Known Phase 1 limits
+
+- **No push notifications.** Phase 2. The app only shows what's current when
+  someone opens it.
+- **No writes.** Nothing in the mobile app creates or changes data — no
+  notes, no approve/decline, no new customers. Read-only, same as the
+  desktop dashboard.
+- **No desktop layout.** This is a phone app. Nobody has built or tested a
+  tablet or desktop-width version of `/app/*`.
+- **`/api/dispatch/nearby` is not authenticated.** The sign-in requirement
+  covers every page under `/app/*` and every API route under `/api/app/*`,
+  but the nearby-work lookup the Dispatch tab calls lives at
+  `/api/dispatch/nearby`, outside both of those paths, and returns data to
+  anyone who requests it without signing in. This is the same posture the
+  existing desktop `/dispatch` page has always had — it was a deliberate,
+  known gap when that page shipped — but the mobile app now depends on the
+  same unauthenticated route, so it's worth knowing rather than assuming
+  the login screen protects it too.
+
+---
+
+## One more thing to check by hand, no rush
+
+The app icons on the home screen right now are placeholders — a flat dark
+tile with a gold square, generated by `scripts/generate-app-icons.mjs`.
+They're valid, functioning icons and the app installs fine with them, but
+they are not the Trinity logo. Swap in real artwork
+(`public/icons/icon-192.png`, `icon-512.png`, `icon-maskable-512.png`)
+before this goes on a client-facing or permanent device. Not a blocker for
+internal testing — just don't let it stay this way by accident.
+
+## One more thing to confirm with Supabase directly, no rush
+
+The customer phone search was built to handle two possible ways the phone
+number might be stored — as bare digits, or with the punctuation Housecall
+Pro sends (parentheses, dashes, spaces) — because nobody has been able to
+check which one it actually is: the `.env.local` in this repo holds
+placeholder credentials, not real ones, so there's no way to query the live
+database from here. Item 7 in the verification checklist above (searching
+`(518) 555-0142`) is the practical test of this, and it should pass either
+way — but if it doesn't, the next step is opening the `customers` table in
+Supabase directly and checking a few rows of the `phone` column, then
+reporting back what format is actually stored there.
