@@ -137,8 +137,8 @@ Two behaviors worth understanding before touching this:
   run happens every 15 minutes, some run always falls inside the 06:00–12:00
   `America/New_York` digest window regardless of DST, and a missed 6:00 digest
   self-heals on the next run. Paid invoices have no Housecall Pro webhook and are
-  only ever picked up by this polling route, so if the external scheduler dies
-  silently, paid-invoice alerts stop with it. Nothing in Slack reports that
+  only ever picked up by this polling route, so if the Vercel cron stops
+  firing, paid-invoice alerts stop with it. Nothing in Slack reports that
   any more — the digest used to carry a `last sync: N min ago` footer as a
   tripwire, and it was removed as noise — so a stalled scheduler now shows up
   as a *missing* 6 a.m. digest rather than a stale-looking one. That is still
