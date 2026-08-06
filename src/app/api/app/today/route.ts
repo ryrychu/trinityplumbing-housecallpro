@@ -18,7 +18,10 @@ export async function GET() {
         timeZone: BUSINESS_TIME_ZONE,
       }),
       jobsInProgress: snapshot.jobsInProgress,
-      emergencyCalls: snapshot.emergencyCalls,
+      // Today-scoped, not the all-time emergencyCalls field -- see the doc
+      // comment on DashboardSnapshot.emergencyCallsToday for why the two must
+      // not be conflated under a screen headed "Today".
+      emergencyCalls: snapshot.emergencyCallsToday,
       pendingInvoices: snapshot.pendingInvoices,
       jobs: snapshot.todaySchedule,
     });

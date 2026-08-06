@@ -213,6 +213,11 @@ describe("getDashboardSnapshot", () => {
     const snapshot = await getDashboardSnapshot(NOW);
     expect(snapshot.jobsInProgress).toBe(1);
     expect(snapshot.emergencyCalls).toBe(1);
+    // j2 is the only emergency-tagged job in this fixture, and it is
+    // scheduled 07-21 -- not "today" (07-22). The all-time and today-scoped
+    // counts diverging on the same fixture is exactly the point of the
+    // dedicated field: 1 all-time, 0 today.
+    expect(snapshot.emergencyCallsToday).toBe(0);
   });
 
   it("counts open estimates (awaiting a response, not won/canceled), pending invoices, and upcoming estimates", async () => {
@@ -669,6 +674,114 @@ describe("getDashboardSnapshot", () => {
       expect(byTech.get("t1")).toBe(5);
       expect(byTech.get("t2")).toBe(3);
       expect(snap.technicianWorkload.reduce((s, w) => s + w.jobCount, 0)).toBe(8);
+    });
+  });
+
+  // The mobile Today tab's "Emerg" card must count today's tagged emergencies
+  // only -- never the all-time emergencyCalls field, which is usually 0 or a
+  // lifetime total against the live account (only 22 of 3,038 jobs are tagged
+  // at all) and would misread as "no emergencies today" either way.
+  describe("emergencyCallsToday", () => {
+    it("counts a job scheduled today and tagged emergency", async () => {
+      fromMock.mockImplementation((table: string) => {
+        if (table === "jobs") {
+          return makeQueryBuilder({
+            data: [
+              {
+                id: "j_emerg_today",
+                work_status: "scheduled",
+                is_emergency: true,
+                is_commercial: false,
+                total_amount_cents: 0,
+                scheduled_start: "2026-07-22T09:00:00.000Z",
+                scheduled_end: "2026-07-22T10:00:00.000Z",
+                technician_id: null,
+                service_address_lat: null,
+                service_address_lng: null,
+                raw: {},
+              },
+            ],
+            error: null,
+          });
+        }
+        return makeQueryBuilder({ data: [], error: null });
+      });
+
+      const snap = await getDashboardSnapshot(NOW);
+      expect(snap.emergencyCallsToday).toBe(1);
+    });
+
+    it("excludes a today emergency job that was canceled -- same predicate todaySchedule uses", async () => {
+      fromMock.mockImplementation((table: string) => {
+        if (table === "jobs") {
+          return makeQueryBuilder({
+            data: [
+              {
+                id: "j_emerg_today_canceled",
+                // Live status, with the space: "pro canceled", not "pro_canceled".
+                work_status: "pro canceled",
+                is_emergency: true,
+                is_commercial: false,
+                total_amount_cents: 0,
+                scheduled_start: "2026-07-22T09:00:00.000Z",
+                scheduled_end: "2026-07-22T10:00:00.000Z",
+                technician_id: null,
+                service_address_lat: null,
+                service_address_lng: null,
+                raw: {},
+              },
+              {
+                id: "j_emerg_today_user_canceled",
+                work_status: "user canceled",
+                is_emergency: true,
+                is_commercial: false,
+                total_amount_cents: 0,
+                scheduled_start: "2026-07-22T11:00:00.000Z",
+                scheduled_end: "2026-07-22T12:00:00.000Z",
+                technician_id: null,
+                service_address_lat: null,
+                service_address_lng: null,
+                raw: {},
+              },
+            ],
+            error: null,
+          });
+        }
+        return makeQueryBuilder({ data: [], error: null });
+      });
+
+      const snap = await getDashboardSnapshot(NOW);
+      expect(snap.emergencyCallsToday).toBe(0);
+    });
+
+    it("excludes an emergency job scheduled on a different day than today", async () => {
+      fromMock.mockImplementation((table: string) => {
+        if (table === "jobs") {
+          return makeQueryBuilder({
+            data: [
+              {
+                id: "j_emerg_yesterday",
+                work_status: "in progress",
+                is_emergency: true,
+                is_commercial: false,
+                total_amount_cents: 0,
+                // 07-21, not "today" (07-22) relative to NOW.
+                scheduled_start: "2026-07-21T09:00:00.000Z",
+                scheduled_end: "2026-07-21T10:00:00.000Z",
+                technician_id: null,
+                service_address_lat: null,
+                service_address_lng: null,
+                raw: {},
+              },
+            ],
+            error: null,
+          });
+        }
+        return makeQueryBuilder({ data: [], error: null });
+      });
+
+      const snap = await getDashboardSnapshot(NOW);
+      expect(snap.emergencyCallsToday).toBe(0);
     });
   });
 });

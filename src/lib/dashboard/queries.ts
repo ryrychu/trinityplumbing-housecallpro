@@ -144,6 +144,13 @@ interface TechWorkloadRow {
 export interface DashboardSnapshot {
   jobsInProgress: number;
   emergencyCalls: number;
+  // Today's local-day window only, canceled jobs excluded -- the mobile Today
+  // tab's "Emerg" card. `emergencyCalls` above is all-time (desktop dashboard
+  // reads it and stays as-is); reusing it under a "Today" header would show a
+  // lifetime count, and since only 22 of 3,038 jobs carry any tag at all, that
+  // lifetime count is usually 0 -- indistinguishable from "no emergencies
+  // today" when it actually means "hardly anything is tagged yet".
+  emergencyCallsToday: number;
   commercialJobs: number;
   openEstimates: number;
   pendingInvoices: number;
@@ -325,6 +332,11 @@ export async function getDashboardSnapshot(now: Date = new Date()): Promise<Dash
     .sort((a, b) => (a.scheduled_start ?? "").localeCompare(b.scheduled_start ?? ""))
     .map((j) => buildScheduleRow(j, custById, techById, fullName));
 
+  // Same today-window + same cancel predicate todaySchedule uses, so this
+  // number can never drift from what a dispatcher sees on the schedule below
+  // it -- a canceled job is not something anyone needs to respond to today.
+  const emergencyCallsToday = todayJobs.filter((j) => !isCanceledJob(j) && j.is_emergency).length;
+
   const workloadMap = new Map<string, { jobCount: number; ms: number }>();
   for (const j of todayJobs) {
     const key = j.technician_id ?? "__unassigned";
@@ -362,6 +374,7 @@ export async function getDashboardSnapshot(now: Date = new Date()): Promise<Dash
     // them; it needs a tagging convention in HCP or a different signal. See
     // docs/PHASE-1.x-BACKLOG.md.
     emergencyCalls: jobs.filter((j) => j.is_emergency).length,
+    emergencyCallsToday,
     commercialJobs: jobs.filter((j) => j.is_commercial).length,
     openEstimates: estimates.filter(isOpenEstimate).length,
     pendingInvoices: invoices.filter((i) => i.status === INVOICE_PENDING).length,

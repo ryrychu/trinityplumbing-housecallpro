@@ -29,7 +29,12 @@ describe("GET /api/app/today", () => {
     vi.clearAllMocks();
     snapshotMock.mockResolvedValue({
       jobsInProgress: 3,
-      emergencyCalls: 1,
+      // Deliberately different from emergencyCallsToday below: emergencyCalls
+      // is the all-time count (47, across 3,038 jobs). If the route regresses
+      // to reading this field instead of the today-scoped one, the assertion
+      // on body.data.emergencyCalls below catches it (47 !== 1).
+      emergencyCalls: 47,
+      emergencyCallsToday: 1,
       commercialJobs: 0,
       openEstimates: 12,
       pendingInvoices: 25,
@@ -47,6 +52,9 @@ describe("GET /api/app/today", () => {
 
     expect(res.status).toBe(200);
     expect(body.data.jobsInProgress).toBe(3);
+    // Must be the today-scoped 1, not the all-time 47 -- see the mock comment
+    // above. A screen headed "Today" showing a lifetime count is exactly the
+    // bug this test guards against.
     expect(body.data.emergencyCalls).toBe(1);
     expect(body.data.pendingInvoices).toBe(25);
     expect(body.data.jobs).toHaveLength(2);
