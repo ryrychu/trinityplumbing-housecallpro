@@ -1,5 +1,6 @@
 import { getDashboardSnapshot } from "@/lib/dashboard/queries";
 import { appJson, appError } from "@/lib/mobile/envelope";
+import { requireUser } from "@/lib/mobile/session";
 
 export const dynamic = "force-dynamic";
 
@@ -8,6 +9,15 @@ export const dynamic = "force-dynamic";
 const BUSINESS_TIME_ZONE = "America/New_York";
 
 export async function GET() {
+  // Defence in depth, not belt-and-braces. Every /api/app/* handler reads
+  // through the service-role client and there is no RLS under any table, so
+  // before this line the ONLY thing standing between the open internet and
+  // 1,497 customers' addresses was one array literal in src/middleware.ts. A
+  // typo in that matcher, or a future route mounted somewhere it doesn't
+  // cover, would expose everything silently. Checking here turns the
+  // invariant into something each route's own tests can hold.
+  if (!(await requireUser())) return appError("Not signed in", 401);
+
   try {
     const snapshot = await getDashboardSnapshot();
     return appJson({

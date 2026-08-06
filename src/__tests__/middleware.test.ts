@@ -1,8 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { NextRequest } from "next/server";
 
-const { getUserMock, cookiesAdapterRef } = vi.hoisted(() => ({
+const { getUserMock, cookiesAdapterRef, clientArgsRef } = vi.hoisted(() => ({
   getUserMock: vi.fn(),
+  // The url and key middleware actually constructs the client with. Recorded
+  // because ignoring them is how a test passes while the browser-facing client
+  // is handed the service-role key.
+  clientArgsRef: { current: undefined as undefined | { url: string; key: string } },
   // Set by the mocked createServerClient on every call so tests can reach in
   // and invoke setAll() directly — simulating the token-refresh side effect
   // the real @supabase/ssr client performs from inside getUser().
@@ -15,10 +19,11 @@ const { getUserMock, cookiesAdapterRef } = vi.hoisted(() => ({
 
 vi.mock("@supabase/ssr", () => ({
   createServerClient: (
-    _url: string,
-    _key: string,
+    url: string,
+    key: string,
     config: { cookies: typeof cookiesAdapterRef.current }
   ) => {
+    clientArgsRef.current = { url, key };
     cookiesAdapterRef.current = config.cookies;
     return { auth: { getUser: getUserMock } };
   },
@@ -31,8 +36,27 @@ const req = (url: string) => new NextRequest(new Request(`https://ops.trinity.pl
 describe("middleware", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    clientArgsRef.current = undefined;
     process.env.NEXT_PUBLIC_SUPABASE_URL = "https://project.supabase.co";
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = "anon-key";
+    // Deliberately distinct and deliberately present: the assertion below is
+    // only meaningful if the wrong key is actually available to be picked up.
+    process.env.SUPABASE_SERVICE_ROLE_KEY = "service-role-key";
+  });
+
+  // Middleware's client is browser-facing -- it reads and writes the visitor's
+  // session cookie. Handing it the service-role key would hand a request-shaped
+  // path to a credential that bypasses every restriction in the database, and
+  // no other test here would notice: the mock previously ignored both key
+  // arguments entirely, so it passed identically either way.
+  it("builds the session client with the anon key, never the service-role key", async () => {
+    getUserMock.mockResolvedValue({ data: { user: null } });
+
+    await middleware(req("/app/today"));
+
+    expect(clientArgsRef.current?.key).toBe(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY);
+    expect(clientArgsRef.current?.key).not.toBe(process.env.SUPABASE_SERVICE_ROLE_KEY);
+    expect(clientArgsRef.current?.url).toBe(process.env.NEXT_PUBLIC_SUPABASE_URL);
   });
 
   describe("signed out", () => {

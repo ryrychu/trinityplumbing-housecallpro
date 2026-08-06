@@ -4,6 +4,13 @@ import type { TodayScheduleRow } from "@/lib/dashboard/queries";
 const { snapshotMock } = vi.hoisted(() => ({ snapshotMock: vi.fn() }));
 vi.mock("@/lib/dashboard/queries", () => ({ getDashboardSnapshot: snapshotMock }));
 
+// Signed in by default so the existing cases exercise the real handler. The
+// implementation survives vi.clearAllMocks() (which clears calls, not impls),
+// and the refusal case below overrides it per-test.
+const { requireUserMock } = vi.hoisted(() => ({
+  requireUserMock: vi.fn(async () => ({ id: "u1", email: "info@trinity.plumbing" })),
+}));
+vi.mock("@/lib/mobile/session", () => ({ requireUser: requireUserMock }));
 import { GET } from "../route";
 
 const row = (over: Partial<TodayScheduleRow> = {}): TodayScheduleRow => ({
@@ -74,5 +81,19 @@ describe("GET /api/app/today", () => {
     const res = await GET();
     expect(res.status).toBe(502);
     expect((await res.json()).error).toMatch(/supabase unreachable/);
+  });
+
+  // The six /api/app/* handlers read through the service-role client and no
+  // table has RLS, so before requireUser() the middleware matcher was the
+  // only thing refusing an anonymous caller. Asserting the query module was
+  // never reached is what makes this more than a status-code check: a 401
+  // returned after the data had already been fetched would still be a leak
+  // waiting on one more mistake.
+  it("refuses an unauthenticated request without touching the data", async () => {
+    requireUserMock.mockResolvedValueOnce(null);
+    const res = await GET();
+    expect(res.status).toBe(401);
+    expect((await res.json()).error).toMatch(/not signed in/i);
+    expect(snapshotMock).not.toHaveBeenCalled();
   });
 });
