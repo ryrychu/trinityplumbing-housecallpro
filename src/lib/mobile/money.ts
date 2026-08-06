@@ -1,5 +1,6 @@
 import { getSupabaseServerClient } from "@/lib/supabase/client";
 import { isOpenEstimate } from "@/lib/dashboard/queries";
+import { localDateKey } from "@/lib/notifications/schedule";
 
 export interface EstimateHit {
   id: string;
@@ -96,17 +97,37 @@ interface InvoiceRow {
 
 const DAY_MS = 86_400_000;
 
+// due_date is a pure YYYY-MM-DD calendar date (src/lib/sync/mappers.ts slices
+// HCP's due_at to 10 chars). Overdue must be counted in *calendar* days, not
+// by diffing raw instants: parsing due_date as T00:00:00Z and comparing
+// against `now`'s UTC milliseconds (the earlier version of this function)
+// puts the day boundary 4-5 hours off America/New_York midnight, so an
+// invoice could flip overdue up to a day early or late depending on the time
+// of day the request runs. Converting both sides to a UTC-midnight timestamp
+// of their calendar date ONLY -- never a wall-clock instant -- makes the diff
+// an exact whole number of days, so DST cannot enter the arithmetic at all.
+// Same rule dayRange/localParts (src/lib/dashboard/queries.ts, week.ts) apply
+// to job scheduling.
+function utcMidnightOfDateKey(dateKey: string): number | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateKey);
+  if (!m) return null;
+  return Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+}
+
 export async function listUnpaidInvoices(now: Date = new Date()): Promise<InvoiceHit[]> {
   const [rows, names] = await Promise.all([
     fetchAll<InvoiceRow>("invoices", "id, customer_id, status, amount_cents, due_date"),
     customerNames(),
   ]);
 
+  // localDateKey always returns a well-formed YYYY-MM-DD, so this is never null.
+  const todayUtcMs = utcMidnightOfDateKey(localDateKey(now))!;
+
   return rows
     .filter((i) => (i.status ?? "").toLowerCase() === INVOICE_UNPAID)
     .map((i) => {
-      const dueMs = i.due_date ? Date.parse(`${i.due_date}T00:00:00Z`) : NaN;
-      const days = Number.isNaN(dueMs) ? null : Math.floor((now.getTime() - dueMs) / DAY_MS);
+      const dueUtcMs = i.due_date ? utcMidnightOfDateKey(i.due_date) : null;
+      const days = dueUtcMs == null ? null : Math.round((todayUtcMs - dueUtcMs) / DAY_MS);
       return {
         id: i.id,
         customerName: i.customer_id ? names.get(i.customer_id) ?? null : null,
