@@ -48,10 +48,14 @@ or a button that cannot work.
   sub-resources: `PUT /jobs/{job_id}/schedule`, `PUT /jobs/{job_id}/dispatch`,
   `POST /jobs/{job_id}/notes`, `POST /jobs/{job_id}/tags`, and line items.
   **Therefore "mark this job in progress" cannot be written back to HCP.**
-- **`work_status` has no "on my way" state.** The enum
+- **`work_status` has no "on my way" state, but HCP still models one.** The enum
   (`housecall.v1.yaml:4823-4830`) is `needs scheduling, scheduled, in progress,
-  complete rated, complete unrated, user canceled, pro canceled`. There is no
-  en-route value to write even if a write endpoint existed.
+  complete rated, complete unrated, user canceled, pro canceled`. A technician
+  tapping "On my way" in the HCP app stamps `raw.work_timestamps.on_my_way_at`
+  instead, and `scheduleStatus()`
+  (`src/lib/dashboard/queries.ts:228-241`) **already derives an "En Route"
+  label from it.** So en-route is readable today; it is simply not writable,
+  and it does not live in `work_status`.
 - **Live job statuses use a space, not an underscore** — `"in progress"`, and
   completions are `"complete rated"` / `"complete unrated"`
   (`src/lib/dashboard/queries.ts`). Test fixtures once encoded invented values
@@ -172,8 +176,8 @@ Ship target: the owner installs it from Safari, signs in, and runs the day.
 
 ### 📋 Today — `GET /api/app/today`
 
-Day's jobs in time order, three counters (in progress, emergency, unpaid
-invoices), and an activity strip. Reuses `getDashboardSnapshot` and the
+Day's jobs in time order and three counters (in progress, emergency, unpaid
+invoices). Reuses `getDashboardSnapshot` and the
 `todaySchedule` row builder. Canceled jobs excluded (commit `116450c`).
 Display statuses map from live strings. The emergency and commercial counters
 are labelled to reflect that they count tagged jobs only.
@@ -195,8 +199,10 @@ offline. Two honesty requirements:
 - **No estimate link is shown**, because no key exists to join on. This is a
   constraint, not an omission.
 
-Phase 1 displays HCP's `work_status` read-only. No status control is drawn,
-because none can be built.
+Phase 1 displays status read-only, using `scheduleStatus()`'s existing labels —
+`Scheduled`, **`En Route`**, `In Progress`, `Completed`, `Needs Scheduling`,
+`Canceled`. No status *control* is drawn, because none can be built. En Route
+appears whenever the technician has tapped "On my way" inside HCP.
 
 ### 👤 Customers — `GET /api/app/customers?q=`
 
@@ -252,6 +258,12 @@ canceled jobs, jobs with an unexpired `job_acks` row, and users whose reminders
 are off or who are inside quiet hours. Each surviving job is claimed under
 `reminder:<job_id>`, so it sends exactly once regardless of how many runs match
 it.
+
+**A job is also suppressed when Housecall Pro already says someone is handling
+it** — `raw.work_timestamps.on_my_way_at` or `started_at` is stamped, or
+`scheduleStatus()` returns `En Route` / `In Progress`. If the technician tapped
+"On my way" in the HCP app, reminding the owner is noise. The ack is therefore a
+*second* source of the same signal, not the only one.
 
 Quiet hours evaluate in `America/New_York` exactly as
 `src/lib/notifications/schedule.ts` already does, defaulting to **21:00–06:00**.
@@ -314,7 +326,11 @@ Two properties of approval worth encoding in the UI:
 4. **Guard rails only where earned.** Declining an estimate is customer-visible
    and irreversible, so it confirms. Reversible actions get no friction.
 5. **6am digest + live alerts as push**, reusing the existing detect/dedupe
-   logic as a second delivery channel.
+   logic as a second delivery channel. The same detection also renders an
+   **activity strip** at the bottom of Today ("Invoice #4471 paid — 12 min
+   ago"). It ships in Phase 2 rather than Phase 1 because it is the push
+   pipeline's data, not the schedule's, and building it twice would be the
+   drift this codebase keeps guarding against.
 6. **App icon badge** = upcoming jobs not yet acknowledged.
 7. **Forgiving search** — phone formats normalized, partial addresses, recently
    viewed first.
