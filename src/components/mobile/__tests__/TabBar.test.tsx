@@ -28,4 +28,13 @@ describe("TabBar", () => {
     render(<TabBar />);
     expect(screen.getByRole("link", { name: /Today/ })).toHaveAttribute("aria-current", "page");
   });
+
+  // "/app/customers-archive".startsWith("/app/customers") is true, so a naive
+  // prefix check would light Customers for a route that isn't actually under
+  // it. Matching requires an exact hit or a "/" boundary right after the prefix.
+  it("does not light Customers for a sibling route sharing its prefix", () => {
+    pathnameMock.mockReturnValue("/app/customers-archive");
+    render(<TabBar />);
+    expect(screen.getByRole("link", { name: /Customers/ })).not.toHaveAttribute("aria-current");
+  });
 });

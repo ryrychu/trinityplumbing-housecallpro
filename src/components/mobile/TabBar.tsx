@@ -22,7 +22,11 @@ export function TabBar() {
       className="sticky bottom-0 z-10 flex border-t border-surface-divider bg-surface-raised pb-[env(safe-area-inset-bottom)]"
     >
       {TABS.map((tab) => {
-        const active = tab.owns.some((p) => pathname.startsWith(p));
+        // A plain startsWith(p) would light Customers for "/app/customers-archive"
+        // too — the prefix matches without a path boundary. Require an exact
+        // match or a "/" right after the prefix so sibling routes don't bleed
+        // into each other's tab.
+        const active = tab.owns.some((p) => p === pathname || pathname.startsWith(`${p}/`));
         return (
           <Link
             key={tab.href}
