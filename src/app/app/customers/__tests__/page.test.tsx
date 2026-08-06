@@ -15,11 +15,26 @@ function deferred<T>() {
 describe("CustomersPage", () => {
   beforeEach(() => {
     vi.useFakeTimers();
+    localStorage.clear();
   });
 
   afterEach(() => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
+    localStorage.clear();
+  });
+
+  // JSON.parse only throws on malformed JSON. A stored "null" parses cleanly,
+  // so the catch never fires -- and then recent.length threw during render,
+  // white-screening the entire tab. On a phone there is no recovery from that
+  // short of clearing site data, which is why a corrupt value has to degrade
+  // to an empty list rather than to a blank screen.
+  it("survives a recently-viewed value that parses but is not an array", () => {
+    localStorage.setItem("trinity.recentCustomers", "null");
+    vi.stubGlobal("fetch", vi.fn());
+
+    expect(() => render(<CustomersPage />)).not.toThrow();
+    expect(screen.getByText(/Search by name, phone or address/i)).toBeInTheDocument();
   });
 
   // Typing "sm" then "smith" before the first request returns fires two

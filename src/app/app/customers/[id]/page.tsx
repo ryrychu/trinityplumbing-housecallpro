@@ -44,7 +44,13 @@ export default function CustomerPage({ params }: { params: { id: string } }) {
     if (!data) return;
     try {
       const entry = { id: data.id, name: data.name, phone: data.phone, address: data.address };
-      const prior = JSON.parse(localStorage.getItem(RECENT_KEY) ?? "[]") as { id: string }[];
+      // Same shape check the read side does (../page.tsx): a stored "null"
+      // parses without throwing, and .filter on it would throw into the catch
+      // below -- harmless, but it would leave the bad value in place forever
+      // and the recently-viewed list permanently empty. Overwriting it here is
+      // what lets a corrupted key heal on the next customer opened.
+      const parsed = JSON.parse(localStorage.getItem(RECENT_KEY) ?? "[]");
+      const prior = (Array.isArray(parsed) ? parsed : []) as { id: string }[];
       const next = [entry, ...prior.filter((c) => c.id !== data.id)].slice(0, RECENT_MAX);
       localStorage.setItem(RECENT_KEY, JSON.stringify(next));
     } catch {}

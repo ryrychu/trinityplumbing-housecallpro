@@ -11,7 +11,13 @@ const RECENT_KEY = "trinity.recentCustomers";
 
 function readRecent(): CustomerHit[] {
   try {
-    return JSON.parse(localStorage.getItem(RECENT_KEY) ?? "[]");
+    const parsed = JSON.parse(localStorage.getItem(RECENT_KEY) ?? "[]");
+    // JSON.parse only throws on malformed JSON. A stored "null", "42" or
+    // '{"a":1}' parses cleanly, so catch never fires -- and then recent.length
+    // throws during render, white-screening the whole Customers tab. On a
+    // phone there is no way back from that short of clearing site data, so the
+    // shape is checked rather than assumed.
+    return Array.isArray(parsed) ? parsed : [];
   } catch {
     return [];
   }
