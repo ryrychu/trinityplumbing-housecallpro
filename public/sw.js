@@ -60,10 +60,38 @@ self.addEventListener("fetch", (event) => {
     event.respondWith(staleWhileRevalidate(request));
     return;
   }
+  // The shell HTML precached above is inert without its JavaScript. Without
+  // this branch every /_next/static/chunks/*.js fell through to the network,
+  // so offline the app depended entirely on the browser's HTTP cache to supply
+  // its own code -- uncontrolled storage that iOS evicts under pressure, with
+  // no signal to us when it does. It usually works, which is exactly why
+  // manual testing looks fine and why this had to be closed deliberately
+  // rather than observed.
+  //
+  // Cache-first is safe here specifically because these paths are
+  // content-hashed: a changed chunk is a different URL, never a stale hit at
+  // the same one. A deploy simply asks for URLs this cache has never seen.
+  if (url.pathname.startsWith("/_next/static/")) {
+    event.respondWith(cacheFirstImmutable(request));
+    return;
+  }
   if (url.pathname.startsWith("/app/")) {
     event.respondWith(networkFirstShell(request));
   }
 });
+
+async function cacheFirstImmutable(request) {
+  const cache = await caches.open(SHELL_CACHE);
+  const cached = await cache.match(request);
+  if (cached) return cached;
+
+  // Not caught: a miss here with no network is a genuinely unavailable asset,
+  // and letting it reject surfaces as a failed subresource load rather than a
+  // fabricated empty response the browser would try to execute as JavaScript.
+  const fresh = await fetch(request);
+  if (fresh.ok) cache.put(request, fresh.clone());
+  return fresh;
+}
 
 async function staleWhileRevalidate(request) {
   const cache = await caches.open(DATA_CACHE);
