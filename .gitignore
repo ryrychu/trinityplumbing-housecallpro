@@ -42,3 +42,6 @@ supabase/.temp/
 
 # Superpowers brainstorming companion (local mockups)
 .superpowers/
+
+# Claude Code worktrees (isolated checkouts, never committed)
+.claude/worktrees/
