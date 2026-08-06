@@ -51,7 +51,7 @@ interface EstimateOption {
   approval_status?: string | null;
 }
 
-function isOpenEstimate(e: {
+export function isOpenEstimate(e: {
   status: string | null;
   raw?: { options?: EstimateOption[]; scheduled_start?: string };
 }): boolean {
