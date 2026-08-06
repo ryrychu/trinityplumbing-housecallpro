@@ -232,7 +232,10 @@ function schedulePhone(j: JobRow, cust?: CustomerRow): string | null {
 // pro canceled. "On my way" only stamps work_timestamps.on_my_way_at, so a job
 // that is dispatched but not started still reads "scheduled" and must be
 // upgraded here or the digest can never show the state Dave asked for.
-function scheduleStatus(j: JobRow): string | null {
+export function scheduleStatus(j: {
+  work_status: string | null;
+  raw?: { work_timestamps?: { on_my_way_at?: string | null } };
+}): string | null {
   const status = (j.work_status ?? "").toLowerCase();
   const ts = j.raw?.work_timestamps;
 
