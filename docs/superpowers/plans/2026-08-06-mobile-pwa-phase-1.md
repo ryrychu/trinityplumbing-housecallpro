@@ -19,7 +19,7 @@ Every task's requirements implicitly include this section.
 - **Never `select("*")` and never an unbounded query.** PostgREST caps responses at 1000 rows and truncates silently — this already caused a real bug (19 jobs reported instead of 91). Use the existing `fetchAllRows` pattern or an explicit `.range()`.
 - **Live status strings, always.** Jobs: `"in progress"` (SPACE, not underscore), `"complete rated"`, `"complete unrated"`, `"scheduled"`, `"needs scheduling"`, `"pro canceled"`, `"user canceled"`. Invoices: `paid` / `canceled` / `voided` / `open` — there is **no** `pending`. Test fixtures MUST use these exact strings; a suite once passed green while production read zero because fixtures encoded invented values.
 - **Display status labels come from `scheduleStatus()`:** `Scheduled`, `En Route`, `In Progress`, `Completed`, `Needs Scheduling`, `Canceled`. `En Route` is derived from `raw.work_timestamps.on_my_way_at`.
-- **Reuse, don't reimplement.** `isOpenEstimate`, `buildScheduleRow`, `getScheduleDays`, `findNearbyWork` already exist and are load-bearing for the Slack digest. A second implementation of any of them is how the dashboard and the digest silently drift apart.
+- **Reuse, don't reimplement.** `isOpenEstimate`, `scheduleStatus`, `buildScheduleRow`, `getScheduleDays`, `findNearbyWork` already exist and are load-bearing for the Slack digest. A second implementation of any of them is how the dashboard and the digest silently drift apart. Where one of these is currently module-private, **widen it to `export` and import it** — never copy it. Tasks 7 and 9 each do this; the export is part of the task.
 - **Business timezone is `America/New_York`.** Use `localDateKey` / `dayRange` / `weekRange` from the existing modules; never format dates with the server's local zone.
 - **Every `/api/app/*` JSON response carries `generated_at`** (ISO 8601, server time).
 - **Dark + gold only.** `surface.*`, `ink.*`, `brand`, `danger`, `warn`, `success`, `info` from `tailwind.config.ts`. No new colors.
@@ -1763,6 +1763,7 @@ git commit -m "feat(app): Schedule tab — week strip, day drill-down, technicia
 
 **Files:**
 - Create: `src/lib/mobile/jobDetail.ts`, `src/app/api/app/jobs/[id]/route.ts`, `src/app/app/jobs/[id]/page.tsx`
+- Modify: `src/lib/dashboard/queries.ts` — export `scheduleStatus`, widening its parameter type
 - Test: `src/lib/mobile/__tests__/jobDetail.test.ts`
 
 **Interfaces:**
@@ -1912,11 +1913,26 @@ describe("getJobDetail", () => {
 Run: `npx vitest run src/lib/mobile/__tests__/jobDetail.test.ts`
 Expected: FAIL — cannot resolve `../jobDetail`
 
-- [ ] **Step 3: Write jobDetail.ts**
+- [ ] **Step 3: Export `scheduleStatus` from queries.ts**
+
+`scheduleStatus` is currently module-private. Copying it into `jobDetail.ts` would put the En Route rule in two files that can drift; the Slack digest and this screen must always agree. Widen its parameter to only what it reads, so `JobRow` still satisfies it and no caller changes:
+
+```ts
+// src/lib/dashboard/queries.ts — change the declaration only; the body is unchanged.
+export function scheduleStatus(j: {
+  work_status: string | null;
+  raw?: { work_timestamps?: { on_my_way_at?: string | null } };
+}): string | null {
+```
+
+Run `npm test` immediately after: the existing 304 tests must still pass, proving the widening changed no behavior.
+
+- [ ] **Step 4: Write jobDetail.ts**
 
 ```ts
 // src/lib/mobile/jobDetail.ts
 import { getSupabaseServerClient } from "@/lib/supabase/client";
+import { scheduleStatus } from "@/lib/dashboard/queries";
 
 export interface JobNote {
   content: string;
@@ -1938,22 +1954,6 @@ export interface JobDetail {
   amountCents: number | null;
   invoice: { id: string; status: string | null; amountCents: number | null } | null;
   notes: JobNote[];
-}
-
-const CANCELED = new Set(["pro canceled", "user canceled"]);
-
-// Mirrors scheduleStatus() in src/lib/dashboard/queries.ts, which is private to
-// that module. HCP's work_status has no en-route value — "On my way" only
-// stamps work_timestamps.on_my_way_at, so a dispatched job still reads
-// "scheduled" and must be upgraded here.
-function statusLabel(workStatus: string | null, ts?: { on_my_way_at?: string | null }): string | null {
-  const s = (workStatus ?? "").toLowerCase();
-  if (s.startsWith("complete")) return "Completed";
-  if (CANCELED.has(s)) return "Canceled";
-  if (s === "in progress") return "In Progress";
-  if (s === "scheduled") return ts?.on_my_way_at ? "En Route" : "Scheduled";
-  if (s === "needs scheduling") return "Needs Scheduling";
-  return null;
 }
 
 const fullName = (r?: { first_name?: string | null; last_name?: string | null } | null) =>
@@ -2028,7 +2028,8 @@ export async function getJobDetail(id: string): Promise<JobDetail | null> {
     address: [street, town].filter(Boolean).join(", ") || null,
     technicianName: fullName(technician),
     service: raw.job_fields?.job_type?.name?.trim() || raw.description?.split("\n")[0]?.trim() || null,
-    status: statusLabel(job.work_status, raw.work_timestamps),
+    // The shared implementation — same labels the dashboard and Slack digest use.
+    status: scheduleStatus({ work_status: job.work_status, raw }),
     amountCents: job.total_amount_cents,
     invoice: firstInvoice
       ? { id: firstInvoice.id, status: firstInvoice.status, amountCents: firstInvoice.amount_cents }
@@ -2042,12 +2043,12 @@ export async function getJobDetail(id: string): Promise<JobDetail | null> {
 }
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [ ] **Step 5: Run test to verify it passes**
 
 Run: `npx vitest run src/lib/mobile/__tests__/jobDetail.test.ts`
 Expected: PASS (6 tests)
 
-- [ ] **Step 5: Write the route**
+- [ ] **Step 6: Write the route**
 
 ```ts
 // src/app/api/app/jobs/[id]/route.ts
@@ -2070,7 +2071,7 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
 }
 ```
 
-- [ ] **Step 6: Write the job detail page**
+- [ ] **Step 7: Write the job detail page**
 
 ```tsx
 // src/app/app/jobs/[id]/page.tsx
@@ -2195,15 +2196,15 @@ export default function JobPage({ params }: { params: { id: string } }) {
 }
 ```
 
-- [ ] **Step 7: Run the suite and build**
+- [ ] **Step 8: Run the suite and build**
 
 Run: `npm test && npm run build`
-Expected: PASS
+Expected: PASS — including all 304 pre-existing tests, which prove the `scheduleStatus` export changed nothing.
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 9: Commit**
 
 ```bash
-git add src/lib/mobile/jobDetail.ts src/app/api/app/jobs src/app/app/jobs src/lib/mobile/__tests__/jobDetail.test.ts
+git add src/lib/dashboard/queries.ts src/lib/mobile/jobDetail.ts src/app/api/app/jobs src/app/app/jobs src/lib/mobile/__tests__/jobDetail.test.ts
 git commit -m "feat(app): job detail with En Route, linked invoice and notes"
 ```
 
@@ -2821,6 +2822,7 @@ git commit -m "feat(app): customer search with phone normalization, detail and h
 
 **Files:**
 - Create: `src/lib/mobile/money.ts`, `src/app/api/app/money/route.ts`, `src/app/app/money/page.tsx`
+- Modify: `src/lib/dashboard/queries.ts` — export `isOpenEstimate` (declaration only; body and parameter type unchanged)
 - Test: `src/lib/mobile/__tests__/money.test.ts`
 
 **Interfaces:**
@@ -2947,11 +2949,18 @@ describe("listUnpaidInvoices", () => {
 Run: `npx vitest run src/lib/mobile/__tests__/money.test.ts`
 Expected: FAIL — cannot resolve `../money`
 
-- [ ] **Step 3: Write money.ts**
+- [ ] **Step 3: Export `isOpenEstimate` from queries.ts**
+
+Add the `export` keyword to the existing `isOpenEstimate` declaration in `src/lib/dashboard/queries.ts`. Change nothing else — its parameter type is already structural (`{ status, raw? }`), so `EstimateRow` satisfies it as-is.
+
+Run `npm test` right after: the 304 existing tests must still pass, proving the export changed no behavior.
+
+- [ ] **Step 4: Write money.ts**
 
 ```ts
 // src/lib/mobile/money.ts
 import { getSupabaseServerClient } from "@/lib/supabase/client";
+import { isOpenEstimate } from "@/lib/dashboard/queries";
 
 export interface EstimateHit {
   id: string;
@@ -3007,29 +3016,12 @@ async function customerNames(): Promise<Map<string, string>> {
   );
 }
 
-// Duplicated deliberately from queries.ts, where it is module-private. The
-// value sets are the shipped definition of "open"; if they change there, they
-// must change here. Covered by tests on both sides.
-const TERMINAL_ESTIMATE_STATUSES = new Set([
-  "created job from estimate",
-  "user canceled",
-  "pro canceled",
-]);
-const APPROVED_STATUSES = new Set(["approved", "pro approved"]);
-
 interface EstimateRow {
   id: string;
   customer_id: string | null;
   status: string | null;
   amount_cents: number | null;
   raw?: { options?: { approval_status?: string | null }[] };
-}
-
-function isOpen(e: EstimateRow): boolean {
-  if (TERMINAL_ESTIMATE_STATUSES.has((e.status ?? "").toLowerCase())) return false;
-  const options = e.raw?.options ?? [];
-  if (options.some((o) => APPROVED_STATUSES.has((o.approval_status ?? "").toLowerCase()))) return false;
-  return options.some((o) => !o.approval_status);
 }
 
 export async function listOpenEstimates(): Promise<EstimateHit[]> {
@@ -3039,7 +3031,9 @@ export async function listOpenEstimates(): Promise<EstimateHit[]> {
   ]);
 
   return rows
-    .filter(isOpen)
+    // The shipped definition of "open", imported rather than copied — the
+    // dashboard, the Slack digest and this screen must always agree on it.
+    .filter(isOpenEstimate)
     .map((e) => ({
       id: e.id,
       customerName: e.customer_id ? names.get(e.customer_id) ?? null : null,
@@ -3087,12 +3081,12 @@ export async function listUnpaidInvoices(now: Date = new Date()): Promise<Invoic
 }
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [ ] **Step 5: Run test to verify it passes**
 
 Run: `npx vitest run src/lib/mobile/__tests__/money.test.ts`
 Expected: PASS (6 tests)
 
-- [ ] **Step 5: Write the route**
+- [ ] **Step 6: Write the route**
 
 ```ts
 // src/app/api/app/money/route.ts
@@ -3119,7 +3113,7 @@ export async function GET() {
 }
 ```
 
-- [ ] **Step 6: Write the Money page**
+- [ ] **Step 7: Write the Money page**
 
 ```tsx
 // src/app/app/money/page.tsx
@@ -3243,15 +3237,15 @@ export default function MoneyPage() {
 }
 ```
 
-- [ ] **Step 7: Run the suite and build**
+- [ ] **Step 8: Run the suite and build**
 
 Run: `npm test && npm run build`
-Expected: PASS
+Expected: PASS — including all pre-existing tests, which prove the `isOpenEstimate` export changed nothing.
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 9: Commit**
 
 ```bash
-git add src/lib/mobile/money.ts src/app/api/app/money src/app/app/money src/lib/mobile/__tests__/money.test.ts
+git add src/lib/dashboard/queries.ts src/lib/mobile/money.ts src/app/api/app/money src/app/app/money src/lib/mobile/__tests__/money.test.ts
 git commit -m "feat(app): Money tab — open estimates and unpaid invoices with overdue ageing"
 ```
 
