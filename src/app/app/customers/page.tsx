@@ -33,12 +33,21 @@ export default function CustomersPage() {
     }
     // 250ms is long enough that a typist does not fire a query per character,
     // short enough that it still feels instant.
+    //
+    // clearTimeout below only cancels a *pending* timer -- once the callback
+    // has fired the fetch is in flight and clearTimeout can't stop it. If a
+    // later keystroke starts a second request, the first one's response can
+    // still arrive after the second's and, without this flag, overwrite the
+    // correct results with results for a query no longer on screen. Same
+    // guard useAppData uses for the identical reason.
+    let cancelled = false;
     const timer = setTimeout(async () => {
       try {
         const res = await fetch(`/api/app/customers?q=${encodeURIComponent(term)}`, {
           credentials: "same-origin",
         });
         const body = await res.json();
+        if (cancelled) return;
         if (!res.ok) {
           setError(body.error ?? "Search failed.");
           return;
@@ -46,11 +55,14 @@ export default function CustomersPage() {
         setHits(body.data.hits);
         setError(null);
       } catch {
-        setError("Offline — search needs a connection.");
+        if (!cancelled) setError("Offline — search needs a connection.");
       }
     }, 250);
 
-    return () => clearTimeout(timer);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
   }, [query]);
 
   const list = hits ?? recent;

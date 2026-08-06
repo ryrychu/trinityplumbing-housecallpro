@@ -1,4 +1,5 @@
 import { getSupabaseServerClient } from "@/lib/supabase/client";
+import { isCanceledJob } from "@/lib/dashboard/queries";
 import { normalizePhone } from "./phone";
 
 export interface CustomerHit {
@@ -25,11 +26,20 @@ const DEFAULT_LIMIT = 25;
 
 // PostgREST's or() takes a comma-separated filter list, so a comma, parenthesis
 // or asterisk in user input would change the query's meaning rather than being
-// searched for. Strip them instead of escaping — none are meaningful in a name,
-// address or phone number.
+// searched for. `%` and `_` are ilike metacharacters (match-anything and
+// match-one), not punctuation anyone types in a name -- left in, a lone "%"
+// stays truthy after sanitizing and turns `first_name.ilike.%%%` into an
+// unfiltered scan, the exact "every row on a keystroke" outcome the blank-
+// query guard below exists to prevent. Strip them instead of escaping — none
+// are meaningful in a name, address or phone number.
 function sanitize(term: string): string {
-  return term.replace(/[,()*"\\]/g, " ").trim();
+  return term.replace(/[,()*"\\%_]/g, " ").trim();
 }
+
+// Below this many digits, the separator-tolerant phone pattern (a `%` between
+// every digit) is too permissive to be selective -- "5%1%8" alone would match
+// almost any string containing those three digits in order, anywhere.
+const PHONE_TOLERANT_MIN_DIGITS = 7;
 
 export async function searchCustomers(query: string, limit = DEFAULT_LIMIT): Promise<CustomerHit[]> {
   const term = sanitize(query);
@@ -41,6 +51,13 @@ export async function searchCustomers(query: string, limit = DEFAULT_LIMIT): Pro
   const textCols = ["first_name", "last_name", "company", "address_line1", "city"];
   const filters = textCols.map((c) => `${c}.ilike.%${term}%`);
   if (digits.length >= 3) filters.push(`phone.ilike.%${digits}%`);
+  // The stored phone column's format is not guaranteed to be bare digits
+  // (mapCustomer writes HCP's mobile_number verbatim, and slack/format.ts
+  // documents it may carry punctuation) -- this alternate pattern matches
+  // regardless of what separators, if any, sit between the digits on file.
+  if (digits.length >= PHONE_TOLERANT_MIN_DIGITS) {
+    filters.push(`phone.ilike.%${digits.split("").join("%")}%`);
+  }
 
   const { data, error } = await getSupabaseServerClient()
     .from("customers")
@@ -104,15 +121,17 @@ export async function getCustomerDetail(id: string): Promise<CustomerDetail | nu
     raw?: { job_fields?: { job_type?: { name?: string } }; description?: string };
   }>;
 
-  const CANCELED = new Set(["pro canceled", "user canceled"]);
-
   return {
     ...toHit(customer),
     company: customer.company,
     email: customer.email ?? null,
     // Canceled work never happened, so it must not inflate lifetime value.
+    // isCanceledJob is the one shared predicate (src/lib/dashboard/queries.ts)
+    // -- revenue sums, the schedule, and now this screen all call the same
+    // function instead of each keeping their own copy of the status strings,
+    // which is exactly how "in progress" vs "in_progress" drifted before.
     lifetimeCents: rows
-      .filter((j) => !CANCELED.has((j.work_status ?? "").toLowerCase()))
+      .filter((j) => !isCanceledJob(j))
       .reduce((sum, j) => sum + (j.total_amount_cents ?? 0), 0),
     jobs: rows.map((j) => ({
       id: j.id,

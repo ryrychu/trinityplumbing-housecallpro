@@ -38,7 +38,7 @@ const CANCELED_JOB_STATUSES = new Set(["pro canceled", "user canceled"]);
 // is case-insensitive since HCP's casing isn't guaranteed. Both schedule
 // surfaces MUST call this same function, not duplicate the `.has(...)` check,
 // or the dashboard and the Slack digest can silently drift out of sync.
-function isCanceledJob(j: { work_status: string | null }): boolean {
+export function isCanceledJob(j: { work_status: string | null }): boolean {
   return CANCELED_JOB_STATUSES.has((j.work_status ?? "").toLowerCase());
 }
 
