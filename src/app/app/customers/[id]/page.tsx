@@ -3,6 +3,7 @@
 import { useEffect } from "react";
 import Link from "next/link";
 import { useAppData } from "@/components/mobile/useAppData";
+import { FreshnessStamp } from "@/components/mobile/FreshnessStamp";
 import { formatPhone } from "@/lib/mobile/phone";
 
 interface CustomerDetail {
@@ -29,7 +30,12 @@ const money = (cents: number) =>
   `$${(cents / 100).toLocaleString("en-US", { maximumFractionDigits: 0 })}`;
 
 export default function CustomerPage({ params }: { params: { id: string } }) {
-  const { data, error } = useAppData<CustomerDetail>(`/api/app/customers/${params.id}`);
+  // generatedAt/fromCache are destructured, not dropped -- see the same comment
+  // on the job detail screen. This is the other page someone acts on: the phone
+  // number below is tapped to call. Cached-and-stale must say so.
+  const { data, generatedAt, error, fromCache } = useAppData<CustomerDetail>(
+    `/api/app/customers/${params.id}`
+  );
 
   // Recording the visit here (not on tap) means the list only ever holds
   // customers that actually resolved.
@@ -63,6 +69,7 @@ export default function CustomerPage({ params }: { params: { id: string } }) {
         <div>
           <h1 className="text-lg font-bold tracking-tight">{data.name}</h1>
           {data.company && <p className="text-xs text-ink-faint">{data.company}</p>}
+          <FreshnessStamp generatedAt={generatedAt} fromCache={fromCache} />
         </div>
       </header>
 

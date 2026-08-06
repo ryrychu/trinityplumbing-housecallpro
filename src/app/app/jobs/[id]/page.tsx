@@ -3,6 +3,7 @@
 import Link from "next/link";
 import type { JobDetail } from "@/lib/mobile/jobDetail";
 import { useAppData } from "@/components/mobile/useAppData";
+import { FreshnessStamp } from "@/components/mobile/FreshnessStamp";
 import { StatusPill } from "@/components/mobile/StatusPill";
 
 const BUSINESS_TIME_ZONE = "America/New_York";
@@ -30,7 +31,14 @@ function Row({ k, v }: { k: string; v: React.ReactNode }) {
 }
 
 export default function JobPage({ params }: { params: { id: string } }) {
-  const { data: job, error } = useAppData<JobDetail>(`/api/app/jobs/${params.id}`);
+  // generatedAt/fromCache are destructured, not dropped: this is one of the two
+  // screens someone ACTS on -- they call this number and drive to this address.
+  // Offline, the service worker serves a cached copy and useAppData sets
+  // fromCache; without the stamp below the page renders as if it were current,
+  // which is the exact dishonesty the freshness contract exists to prevent.
+  const { data: job, generatedAt, error, fromCache } = useAppData<JobDetail>(
+    `/api/app/jobs/${params.id}`
+  );
 
   if (error) {
     return (
@@ -54,6 +62,7 @@ export default function JobPage({ params }: { params: { id: string } }) {
             {job.customerName ?? "Unknown customer"}
           </h1>
           <p className="text-xs text-ink-faint">{timeRange(job.scheduledStart, job.scheduledEnd)}</p>
+          <FreshnessStamp generatedAt={generatedAt} fromCache={fromCache} />
         </div>
         <StatusPill status={job.status} />
       </header>
