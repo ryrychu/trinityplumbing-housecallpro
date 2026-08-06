@@ -19,9 +19,9 @@ const CUSTOMER = {
       id: "job_3417",
       scheduledStart: "2026-08-06T12:00:00Z",
       service: "Water Heater Replacement",
-      // Live HCP string, not a display label -- see the customers.ts fixture
-      // rules in the plan's Global Constraints.
-      status: "complete rated",
+      // A scheduleStatus() display label: the route maps work_status before it
+      // ever reaches the client, so this is what the page actually receives.
+      status: "Completed",
       amountCents: 145_000,
     },
   ],
@@ -57,6 +57,27 @@ describe("CustomerPage", () => {
 
     expect(await screen.findByText("Margaret Kowalski")).toBeInTheDocument();
     expect(screen.getByText(/just now|min ago/i)).toBeInTheDocument();
+  });
+
+  // History renders the status through StatusPill, the same component every
+  // other job surface uses, so one job cannot look like two different things
+  // depending on which screen you reached it from.
+  it("renders a history status as a pill, not bare text", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse({ data: CUSTOMER, generated_at: new Date().toISOString() })
+      )
+    );
+
+    render(<CustomerPage params={{ id: "cus_1" }} />);
+
+    // Asserted on the label's own element, not merely somewhere in the tree:
+    // the lifetime-value figure also carries text-success, so a container-wide
+    // query would pass even with the status back to bare text.
+    const label = await screen.findByText("Completed");
+    expect(label.className).toMatch(/rounded-full/);
+    expect(label.className).toMatch(/text-success/);
   });
 
   it("states it is offline when the service worker served a cached copy", async () => {

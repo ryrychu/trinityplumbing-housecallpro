@@ -181,6 +181,57 @@ describe("getCustomerDetail", () => {
     expect(detail?.jobs).toHaveLength(3);
   });
 
+  // A customer's history and the job detail screen one tap away render the
+  // same job. Passing work_status through raw made history read "complete
+  // rated" / "pro canceled" / "in progress" while the job screen read
+  // "Completed" / "Canceled" / "In Progress" -- the exact drift the shared
+  // scheduleStatus() mapper exists to prevent. Fixtures use live HCP strings.
+  it("maps history statuses to scheduleStatus() display labels, not raw HCP strings", async () => {
+    mockSupabase(CUSTOMER, [
+      { id: "job_1", work_status: "complete rated", scheduled_start: "2026-01-05T00:00:00Z", total_amount_cents: 10_000, raw: {} },
+      { id: "job_2", work_status: "pro canceled", scheduled_start: "2026-01-04T00:00:00Z", total_amount_cents: 5_000, raw: {} },
+      { id: "job_3", work_status: "in progress", scheduled_start: "2026-01-03T00:00:00Z", total_amount_cents: 7_000, raw: {} },
+      { id: "job_4", work_status: "needs scheduling", scheduled_start: null, total_amount_cents: null, raw: {} },
+    ]);
+
+    const detail = await getCustomerDetail("cus_1");
+
+    expect(detail?.jobs.map((j) => j.status)).toEqual([
+      "Completed",
+      "Canceled",
+      "In Progress",
+      "Needs Scheduling",
+    ]);
+  });
+
+  // "En Route" has no work_status of its own -- it is derived from
+  // raw.work_timestamps.on_my_way_at. History must show it for the same reason
+  // the schedule does: the tech is already driving.
+  it("derives En Route from the on-my-way timestamp", async () => {
+    mockSupabase(CUSTOMER, [
+      {
+        id: "job_1",
+        work_status: "scheduled",
+        scheduled_start: "2026-01-05T00:00:00Z",
+        total_amount_cents: 10_000,
+        raw: { work_timestamps: { on_my_way_at: "2026-01-05T11:40:00Z" } },
+      },
+    ]);
+
+    expect((await getCustomerDetail("cus_1"))?.jobs[0].status).toBe("En Route");
+  });
+
+  // scheduleStatus() returns null for a status it does not recognise rather
+  // than echoing it. StatusPill renders nothing for null, so an unmapped value
+  // disappears instead of showing lowercase HCP noise among title-cased pills.
+  it("returns null for an unmapped status rather than echoing it raw", async () => {
+    mockSupabase(CUSTOMER, [
+      { id: "job_1", work_status: "some future hcp status", scheduled_start: null, total_amount_cents: null, raw: {} },
+    ]);
+
+    expect((await getCustomerDetail("cus_1"))?.jobs[0].status).toBeNull();
+  });
+
   it("returns zero lifetime value and an empty history for a customer with no jobs", async () => {
     mockSupabase(CUSTOMER, []);
 

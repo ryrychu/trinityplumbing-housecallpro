@@ -4,6 +4,7 @@ import { useEffect } from "react";
 import Link from "next/link";
 import { useAppData } from "@/components/mobile/useAppData";
 import { FreshnessStamp } from "@/components/mobile/FreshnessStamp";
+import { StatusPill } from "@/components/mobile/StatusPill";
 import { formatPhone } from "@/lib/mobile/phone";
 
 interface CustomerDetail {
@@ -116,8 +117,13 @@ export default function CustomerPage({ params }: { params: { id: string } }) {
               {j.amountCents == null ? "" : money(j.amountCents)}
             </span>
           </div>
-          <div className="mt-0.5 text-xs text-ink-faint">
-            {[j.scheduledStart?.slice(0, 10), j.status].filter(Boolean).join(" · ")}
+          {/* The status is a scheduleStatus() label now, so it renders through
+              the same pill as every other job surface rather than as bare text
+              -- one job must not look like two different things depending on
+              which screen you reached it from. */}
+          <div className="mt-0.5 flex items-center gap-2 text-xs text-ink-faint">
+            {j.scheduledStart && <span>{j.scheduledStart.slice(0, 10)}</span>}
+            <StatusPill status={j.status} />
           </div>
         </Link>
       ))}

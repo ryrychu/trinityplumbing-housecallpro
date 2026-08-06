@@ -1,5 +1,5 @@
 import { getSupabaseServerClient } from "@/lib/supabase/client";
-import { isCanceledJob } from "@/lib/dashboard/queries";
+import { isCanceledJob, scheduleStatus } from "@/lib/dashboard/queries";
 import { normalizePhone } from "./phone";
 
 export interface CustomerHit {
@@ -118,7 +118,13 @@ export async function getCustomerDetail(id: string): Promise<CustomerDetail | nu
     work_status: string | null;
     scheduled_start: string | null;
     total_amount_cents: number | null;
-    raw?: { job_fields?: { job_type?: { name?: string } }; description?: string };
+    raw?: {
+      job_fields?: { job_type?: { name?: string } };
+      description?: string;
+      // Read by scheduleStatus() to derive "En Route" -- HCP's work_status enum
+      // has no en-route value; tapping "On my way" only stamps this timestamp.
+      work_timestamps?: { on_my_way_at?: string | null };
+    };
   }>;
 
   return {
@@ -138,7 +144,14 @@ export async function getCustomerDetail(id: string): Promise<CustomerDetail | nu
       scheduledStart: j.scheduled_start,
       service:
         j.raw?.job_fields?.job_type?.name?.trim() || j.raw?.description?.split("\n")[0]?.trim() || null,
-      status: j.work_status,
+      // Display labels come from scheduleStatus(), never the raw column. Passed
+      // through, a customer's history read "complete rated" / "pro canceled" /
+      // "in progress" while the same job one tap away read "Completed" /
+      // "Canceled" / "In Progress" -- two surfaces disagreeing about one job,
+      // which is precisely what the shared mapper exists to prevent. It also
+      // returns null for an unmapped status rather than echoing lowercase HCP
+      // noise, and derives "En Route" from raw.work_timestamps.on_my_way_at.
+      status: scheduleStatus({ work_status: j.work_status, raw: j.raw }),
       amountCents: j.total_amount_cents,
     })),
   };
