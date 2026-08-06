@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Trinity Ops</title>
+    <style>
+      /*
+        Static fallback, served by sw.js (networkFirstShell) when a screen was
+        never opened while online and there's nothing of its own to show.
+        Plain inline CSS on purpose: this file is fetched directly by the
+        service worker, never through Next's build pipeline, so it can't lean
+        on Tailwind classes. Colors copied from tailwind.config.ts so it still
+        reads as Trinity, not a browser error page.
+      */
+      html,
+      body {
+        height: 100%;
+        margin: 0;
+      }
+      body {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 100dvh;
+        padding: 24px;
+        padding-bottom: calc(24px + env(safe-area-inset-bottom));
+        background: #121212;
+        color: #f6f3e9;
+        font-family: -apple-system, BlinkMacSystemFont, "Inter", system-ui, sans-serif;
+        text-align: center;
+      }
+      .card {
+        max-width: 320px;
+      }
+      h1 {
+        margin: 0 0 8px;
+        font-size: 1.05rem;
+        font-weight: 700;
+        color: #f6f3e9;
+      }
+      p {
+        margin: 0;
+        font-size: 0.9rem;
+        line-height: 1.45;
+        color: #b7b09b;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <h1>Not saved for offline use yet</h1>
+      <p>This screen hasn't loaded on this device while you had signal. It'll be here as soon as you're back online.</p>
+    </div>
+  </body>
+</html>
