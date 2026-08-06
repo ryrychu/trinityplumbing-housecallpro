@@ -20,7 +20,7 @@ export default function SchedulePage() {
   const [dayIndex, setDayIndex] = useState<number | null>(null);
   const [tech, setTech] = useState<string>("all");
 
-  const { data, generatedAt, error, fromCache } = useAppData<SchedulePayload>(
+  const { data, generatedAt, loading, error, fromCache } = useAppData<SchedulePayload>(
     `/api/app/schedule?offset=${offset}`
   );
 
@@ -63,44 +63,56 @@ export default function SchedulePage() {
         </p>
       )}
 
-      <div className="mb-3 flex gap-1">
-        {days.map((d, i) => (
-          <button
-            key={d.dateKey}
-            onClick={() => setDayIndex(dayIndex === i ? null : i)}
-            className={`min-h-[44px] flex-1 rounded-lg border px-0.5 py-1 ${
-              dayIndex === i
-                ? "border-brand bg-brand-tint"
-                : "border-surface-divider bg-surface-card"
-            }`}
-          >
-            <div className="text-[9px] uppercase text-ink-faint">{d.label}</div>
-            <div className="text-xs font-bold">{d.dateKey.slice(-2)}</div>
-            <div className="text-[9px] text-brand">{d.rows.length || "—"}</div>
-          </button>
-        ))}
-      </div>
+      {/* Everything below is gated on `data`, matching Today and Money. Before
+          the first response lands `days` is [] and `visible` is [] -- rendering
+          them ungated told the user "No jobs scheduled this week." before
+          anything had loaded, and on a 502 showed the red error banner AND that
+          empty state at the same time, one of which was necessarily false. An
+          empty week and an unanswered request must never look alike. */}
+      {data && (
+        <>
+          <div className="mb-3 flex gap-1">
+            {days.map((d, i) => (
+              <button
+                key={d.dateKey}
+                onClick={() => setDayIndex(dayIndex === i ? null : i)}
+                className={`min-h-[44px] flex-1 rounded-lg border px-0.5 py-1 ${
+                  dayIndex === i
+                    ? "border-brand bg-brand-tint"
+                    : "border-surface-divider bg-surface-card"
+                }`}
+              >
+                <div className="text-[9px] uppercase text-ink-faint">{d.label}</div>
+                <div className="text-xs font-bold">{d.dateKey.slice(-2)}</div>
+                <div className="text-[9px] text-brand">{d.rows.length || "—"}</div>
+              </button>
+            ))}
+          </div>
 
-      {data && data.technicians.length > 0 && (
-        <select
-          value={tech}
-          onChange={(e) => setTech(e.target.value)}
-          className="mb-3 min-h-[44px] w-full rounded-lg border border-surface-divider bg-surface-card px-3 text-base text-ink-primary"
-        >
-          <option value="all">All technicians</option>
-          {data.technicians.map((t) => (
-            <option key={t.id} value={t.name}>{t.name}</option>
-          ))}
-        </select>
+          {data.technicians.length > 0 && (
+            <select
+              value={tech}
+              onChange={(e) => setTech(e.target.value)}
+              className="mb-3 min-h-[44px] w-full rounded-lg border border-surface-divider bg-surface-card px-3 text-base text-ink-primary"
+            >
+              <option value="all">All technicians</option>
+              {data.technicians.map((t) => (
+                <option key={t.id} value={t.name}>{t.name}</option>
+              ))}
+            </select>
+          )}
+
+          {visible.length === 0 ? (
+            <EmptyState>
+              {selected ? "No jobs scheduled this day." : "No jobs scheduled this week."}
+            </EmptyState>
+          ) : (
+            visible.map((job) => <JobRow key={job.id} job={job} />)
+          )}
+        </>
       )}
 
-      {visible.length === 0 ? (
-        <EmptyState>
-          {selected ? "No jobs scheduled this day." : "No jobs scheduled this week."}
-        </EmptyState>
-      ) : (
-        visible.map((job) => <JobRow key={job.id} job={job} />)
-      )}
+      {loading && !data && <p className="text-sm text-ink-faint">Loading…</p>}
     </main>
   );
 }

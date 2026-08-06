@@ -21,7 +21,7 @@ const money = (cents: number | null) =>
 
 export default function MoneyPage() {
   const [tab, setTab] = useState<"estimates" | "invoices">("estimates");
-  const { data, generatedAt, error, fromCache } = useAppData<MoneyPayload>("/api/app/money");
+  const { data, generatedAt, loading, error, fromCache } = useAppData<MoneyPayload>("/api/app/money");
 
   return (
     <main className="px-3 pt-3">
@@ -113,6 +113,12 @@ export default function MoneyPage() {
           )}
         </>
       )}
+
+      {/* Both segments above are gated on `data`, so without this the screen
+          renders nothing at all under the tab toggle while the first request is
+          in flight -- a blank panel that reads as "no estimates, no invoices"
+          rather than "still loading". Same line Today already carries. */}
+      {loading && !data && <p className="text-sm text-ink-faint">Loading…</p>}
     </main>
   );
 }
