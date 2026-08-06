@@ -29,7 +29,7 @@ vi.mock("@supabase/ssr", () => ({
   },
 }));
 
-import { middleware } from "../middleware";
+import { middleware, config } from "../middleware";
 
 const req = (url: string) => new NextRequest(new Request(`https://ops.trinity.plumbing${url}`));
 
@@ -86,6 +86,44 @@ describe("middleware", () => {
     it("lets the login page itself through", async () => {
       const res = await middleware(req("/app/login"));
       expect(res.status).toBe(200);
+    });
+  });
+
+  // The matcher is the enforcement boundary -- middleware() itself never sees
+  // a path the matcher excluded, so no behavioural test in this file can prove
+  // coverage. Asserting the config directly is the only way to hold it.
+  describe("matcher coverage", () => {
+    it("guards the mobile app, its API, and the dispatch page and API", () => {
+      expect(config.matcher).toEqual(
+        expect.arrayContaining(["/app/:path*", "/api/app/:path*", "/dispatch", "/api/dispatch/:path*"])
+      );
+    });
+
+    // These two must never be separated. Gating only the API leaves the
+    // desktop page rendering while its fetch silently 401s; gating only the
+    // page leaves the data open to anyone calling the route directly.
+    it("keeps the dispatch page and its API gated together", () => {
+      const page = config.matcher.includes("/dispatch");
+      const api = config.matcher.includes("/api/dispatch/:path*");
+      expect(page).toBe(api);
+    });
+  });
+
+  describe("dispatch, signed out", () => {
+    beforeEach(() => getUserMock.mockResolvedValue({ data: { user: null } }));
+
+    it("redirects the desktop dispatch page to login", async () => {
+      const res = await middleware(req("/dispatch"));
+      expect(res.status).toBe(307);
+      expect(res.headers.get("location")).toContain("/app/login");
+    });
+
+    // Same reason as /api/app/*: NearbySearch.tsx calls this with fetch() and
+    // would hand JSON.parse an HTML login page.
+    it("returns 401 JSON for the nearby lookup, never a redirect", async () => {
+      const res = await middleware(req("/api/dispatch/nearby?q=Averill+Park"));
+      expect(res.status).toBe(401);
+      expect(res.headers.get("content-type")).toContain("application/json");
     });
   });
 

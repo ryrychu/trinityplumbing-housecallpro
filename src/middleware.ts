@@ -75,5 +75,26 @@ export async function middleware(req: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/app/:path*", "/api/app/:path*"],
+  // /dispatch and /api/dispatch/* must be listed TOGETHER, and changing one
+  // without the other breaks something either way:
+  //
+  //   - API only  -> the desktop page at /dispatch still loads, but its client
+  //                  component (src/app/dispatch/NearbySearch.tsx) starts
+  //                  getting 401s from a fetch it has no signed-out handling
+  //                  for. A page that renders and then silently fails is worse
+  //                  than one that asks you to sign in.
+  //   - page only -> the API keeps answering anyone who calls it directly,
+  //                  which is the actual exposure; the page was never the
+  //                  protection.
+  //
+  // What that route returns is full customer name, street address, phone,
+  // technician, service and coordinates for up to 100 miles and 60 days --
+  // the same data the login screen exists to protect -- and each hit does
+  // three full-table pulls including the `raw` jsonb through the service-role
+  // key, with no rate limiting.
+  //
+  // NOTE: this locks the desktop /dispatch page, which works today, behind a
+  // login. The Supabase accounts must exist BEFORE this branch deploys or the
+  // owner loses a working page. Recorded in docs/MOBILE-INSTALL.md.
+  matcher: ["/app/:path*", "/api/app/:path*", "/dispatch", "/api/dispatch/:path*"],
 };

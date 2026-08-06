@@ -6,6 +6,36 @@ on a phone. Read the whole document before starting.
 
 ---
 
+## ⚠️ Create the accounts BEFORE this branch is deployed
+
+Read this before you merge, not after.
+
+This branch puts the **existing desktop `/dispatch` page behind a login.** That
+page works today with no sign-in at all. The moment this deploys, it stops
+working for everyone — including the owner — until a Supabase account exists to
+sign in with. **Those accounts do not exist yet.**
+
+So the order is not "deploy, then set up accounts." It is:
+
+1. Create the accounts (Step 1 below).
+2. Verify you can sign in.
+3. *Then* deploy.
+
+Get this backwards and the owner loses access to a page that worked that
+morning, with no way to fix it from a phone. If a deploy has already happened,
+the fix is the same — create the accounts — it is just being done under
+pressure instead of ahead of time.
+
+Why the page is gated at all: it calls `/api/dispatch/nearby`, which returns
+full customer names, street addresses, phone numbers, technicians, services and
+coordinates for up to 100 miles and 60 days — exactly the data the new login
+screen exists to protect — and it answered anyone who asked. The page and that
+API are gated together deliberately: gating only the API would leave the page
+loading and then silently failing, and gating only the page would leave the
+data open to anyone calling the route directly.
+
+---
+
 ## Step 1 — Create the accounts (this blocks everything else)
 
 There is no public sign-up page. That is not the same as it being
@@ -111,15 +141,17 @@ before letting anyone else install.
   desktop dashboard.
 - **No desktop layout.** This is a phone app. Nobody has built or tested a
   tablet or desktop-width version of `/app/*`.
-- **`/api/dispatch/nearby` is not authenticated.** The sign-in requirement
-  covers every page under `/app/*` and every API route under `/api/app/*`,
-  but the nearby-work lookup the Dispatch tab calls lives at
-  `/api/dispatch/nearby`, outside both of those paths, and returns data to
-  anyone who requests it without signing in. This is the same posture the
-  existing desktop `/dispatch` page has always had — it was a deliberate,
-  known gap when that page shipped — but the mobile app now depends on the
-  same unauthenticated route, so it's worth knowing rather than assuming
-  the login screen protects it too.
+- **The desktop `/dispatch` page now requires a sign-in.** It did not before.
+  This is the change the warning at the top of this document is about: the
+  sign-in requirement now covers `/app/*`, `/api/app/*`, `/dispatch` and
+  `/api/dispatch/*`. Anyone used to opening `/dispatch` on a laptop without
+  signing in will be sent to `/app/login` — which is the mobile login screen,
+  the only one this app has. It works fine in a desktop browser; it just
+  looks like a phone screen.
+- **There is still no rate limiting on `/api/dispatch/nearby`.** Each call
+  does three full-table pulls including the `raw` jsonb. It now requires a
+  session, so this is a signed-in user hammering it rather than the open
+  internet, but it is not free to call in a loop.
 
 ---
 
