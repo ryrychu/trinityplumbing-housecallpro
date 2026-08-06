@@ -91,7 +91,8 @@ sequence in particular is easier to drive from a laptop with DevTools).
 |---|------|------------------|
 | 1 | While signed out, load `/app/today` | Redirects to `/app/login`. |
 | 2 | Sign in | Lands on Today, showing the correct date in **Eastern time** (not the device's local time zone if it differs, not UTC). |
-| 3 | Tap each of the five tabs — Today, Schedule, Customers, Money, Dispatch | Each loads and shows a freshness stamp (e.g. "Updated 2 min ago"). |
+| 3 | Tap each of the five tabs — Today, Schedule, Customers, Money, Dispatch | All five load. **Four of them show a freshness stamp** (e.g. "Synced 12 min ago") — Today, Schedule, Money and, once you open a record, the job and customer detail screens. **Dispatch does not, and is not supposed to:** it is a search form that fetches on submit rather than on load, so it has no "as of" moment to report. Don't go hunting for a stamp there. |
+| 3a | Look at what the stamp says | It dates the **mirror**, not the request — "Synced 12 min ago" means the sync last ran 12 minutes ago, not that this page loaded 12 minutes ago. If any screen says **"⚠ Sync is behind"**, the cron has likely stopped; check `/api/cron/sync` before trusting anything else in the app. |
 | 4 | Open a job from Today | Shows status, address, booked amount, and invoice. |
 | 5 | On a job's detail screen, tap the phone number, then the address | Phone: prompts to call. Address: opens Maps. |
 | 6 | Search Customers by a known customer's name | Finds them. |
@@ -108,27 +109,54 @@ and the bug only shows up if you do the steps in this order.
    Application → Storage → Clear site data). This forces a true first
    install — you're about to test what a brand-new user sees.
 2. **Load `/app/today` while signed out.** It will redirect to
-   `/app/login` — that's expected, and it's the point: this is the moment
-   the app's offline cache gets built for the first time, and it happens
-   *before* anyone has signed in.
+   `/app/login` — that's expected. Nothing is cached yet at this point (see
+   below); you are putting the browser in the state a brand-new user is
+   actually in before signing in.
 3. Sign in.
 4. Tap through all five tabs once, online, so each one has a chance to load
    real data.
 5. Turn on Airplane Mode (or DevTools → Network → Offline).
 6. Tap all five tabs again.
 
-**Why the order matters:** the very first thing the app does on install is
-save a copy of each of the five tab screens for offline use. If that first
-save happens while signed out — which is exactly what happens on a fresh
-install, because nobody is signed in yet — earlier testing caught the saved
-copy turning out to be the *login page*, filed under all five tabs' names
-instead of their real content. Sign in first, and that save never happens
-while signed out, so the bug never gets a chance to occur — which is why
-testing that way looks fine and proves nothing. The sequence above forces
-the save to happen at the same moment a real new user would trigger it. If
-step 6 ever shows a login screen instead of Today/Schedule/Customers/
-Money/Dispatch content on any tab, that bug is back — stop and report it
-before letting anyone else install.
+**What this is actually checking.** The bug being guarded against is the
+service worker saving the **login page's HTML** under all five tab names, so
+that every offline tap shows a login screen forever — unrecoverable on a
+phone without clearing site data.
+
+The mechanism matters, because debugging against the wrong one wastes hours.
+It is **not** true that the app caches the five tabs at step 2 while signed
+out. Two things prevent that, and this sequence tests both:
+
+1. **The service worker is never registered on the login page.**
+   `ServiceWorkerRegistrar.tsx` returns early on `/app/login`, so at step 2
+   nothing is registered and nothing is cached. Registration happens after
+   step 3, when signing in navigates to `/app/today` — a client-side
+   `router.replace()`, not a page load, which is why the registrar watches
+   the pathname rather than only checking once on mount. By then the browser
+   has a session, so the five precache requests return real pages.
+2. **The worker refuses a redirected response anyway.** `sw.js` checks
+   `!response.redirected` before storing anything, in both `precache()` and
+   the shell fetch handler. This is the backstop that still holds if a
+   previously-signed-in browser triggers a background install, or if a
+   session expires mid-use and middleware 307s a shell request to login.
+
+So the order is not what creates the risk — it is what puts a **real, empty,
+signed-out browser** through the whole install path, which is the only state
+in which either defence can be observed failing. Signing in before clearing
+site data tests neither.
+
+If step 6 ever shows a login screen instead of Today/Schedule/Customers/
+Money/Dispatch content on any tab, one of those two defences has broken —
+stop and report it before letting anyone else install.
+
+**Bumping `VERSION` in `public/sw.js` wipes every user's offline data.** The
+`activate` handler deletes every cache whose name doesn't match the current
+version, so a changed `VERSION` drops both the shell and the saved API
+responses. Nothing is lost permanently — each screen refills the moment it is
+opened online — but until then, every tab a user hasn't revisited shows "not
+saved for offline use yet". Bump it when the worker's own logic changes;
+don't bump it casually, and don't bump it right before someone goes into a
+basement.
 
 ---
 

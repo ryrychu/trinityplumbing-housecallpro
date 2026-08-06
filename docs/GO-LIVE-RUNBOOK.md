@@ -106,14 +106,18 @@ vercel env add CRON_SECRET
 vercel --prod
 ```
 
-The cron in `vercel.json` runs `/api/cron/sync` once a day (`0 11 * * *` —
-11:00 UTC, chosen so it lands inside the Slack digest's 06:00–12:00
-`America/New_York` window year-round; see `docs/SLACK-ROLLOUT.md`). It is a
-safety net, not the primary scheduler: an external caller must still hit this
-route roughly every 15 minutes for timely polling and digest delivery (see
-the README's "Slack notifications" section). Vercel auto-injects
+The cron in `vercel.json` runs `/api/cron/sync` every 15 minutes
+(`*/15 * * * *`), which the account's Vercel Pro plan allows. It is the
+primary scheduler — no external caller is needed. Some run therefore always
+lands inside the Slack digest's 06:00–12:00 `America/New_York` window
+regardless of DST (see `docs/SLACK-ROLLOUT.md`). Vercel auto-injects
 `Authorization: Bearer $CRON_SECRET` when `CRON_SECRET` is set, so the
 route's auth check works as written.
+
+This cadence is also what the mobile app's freshness thresholds are built
+against: `src/lib/mobile/mirrorFreshness.ts` warns once a jobs-bearing screen's
+mirror is more than three cron cycles behind. Slowing the cron down without
+revisiting that constant would make every screen warn.
 
 ---
 

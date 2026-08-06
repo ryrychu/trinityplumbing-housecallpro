@@ -129,17 +129,14 @@ Two behaviors worth understanding before touching this:
   which is wrong for half the year across DST — so the window check runs on
   every invocation instead. A missed 6:00 run self-heals on the next one,
   right up until the 12:00 cutoff.
-- **This makes an external scheduler load-bearing.** For the digest to arrive
-  anywhere near 6am, and for paid-invoice alerts to be timely, something must
-  call `GET /api/cron/sync` with an `Authorization: Bearer $CRON_SECRET` header
-  roughly every 15 minutes. The `vercel.json` cron (`0 11 * * *`, once a day)
-  is **not** that scheduler — it's a safety net, because Vercel's Hobby plan
-  caps cron invocations at once per day. It is scheduled for 11:00 UTC
-  specifically because that is the only hour that lands inside the 06:00–12:00
-  `America/New_York` digest window year-round (06:00 EST in winter, 07:00 EDT
-  in summer) — any earlier UTC hour, including the previous `0 8 * * *`, falls
-  before 06:00 Eastern in both DST regimes and can only ever run the sync,
-  never produce a digest. Paid invoices have no Housecall Pro webhook and are
+- **The Vercel cron is the scheduler.** `vercel.json` runs
+  `GET /api/cron/sync` every 15 minutes (`*/15 * * * *`), which the account's
+  Vercel Pro plan allows; the external scheduler that used to be required was
+  retired once that landed. Vercel injects
+  `Authorization: Bearer $CRON_SECRET` when `CRON_SECRET` is set. Because a
+  run happens every 15 minutes, some run always falls inside the 06:00–12:00
+  `America/New_York` digest window regardless of DST, and a missed 6:00 digest
+  self-heals on the next run. Paid invoices have no Housecall Pro webhook and are
   only ever picked up by this polling route, so if the external scheduler dies
   silently, paid-invoice alerts stop with it. Nothing in Slack reports that
   any more — the digest used to carry a `last sync: N min ago` footer as a
@@ -167,9 +164,9 @@ vercel env add SLACK_WEBHOOK_ESTIMATES
 vercel --prod
 ```
 
-The Vercel Cron job defined in `vercel.json` runs the sync once a day as a
-safety net — it is not a substitute for the external 15-minute scheduler
-described above. Confirm whether your Vercel plan authorizes cron requests via
+The Vercel Cron job defined in `vercel.json` runs the sync every 15 minutes
+and is the scheduler described above; no external caller is required.
+Confirm whether your Vercel plan authorizes cron requests via
 a `Bearer $CRON_SECRET` `Authorization` header or the built-in `x-vercel-cron`
 header, and adjust the auth check in `src/app/api/cron/sync/route.ts`
 accordingly before deploying.
