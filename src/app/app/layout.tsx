@@ -1,4 +1,5 @@
 import type { Metadata, Viewport } from "next";
+import { TabBar } from "@/components/mobile/TabBar";
 
 export const metadata: Metadata = {
   title: "Trinity Ops",
@@ -25,8 +26,9 @@ export const viewport: Viewport = {
 
 export default function MobileLayout({ children }: { children: React.ReactNode }) {
   return (
-    <div className="min-h-[100dvh] bg-surface-page text-ink-primary">
-      {children}
+    <div className="flex min-h-[100dvh] flex-col bg-surface-page text-ink-primary">
+      <div className="flex-1 pb-2">{children}</div>
+      <TabBar />
     </div>
   );
 }
