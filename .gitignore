@@ -39,3 +39,6 @@ next-env.d.ts
 supabase/.temp/
 
 .vercel
+
+# Superpowers brainstorming companion (local mockups)
+.superpowers/
