@@ -1,10 +1,27 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { NextRequest } from "next/server";
 
-const { getUserMock } = vi.hoisted(() => ({ getUserMock: vi.fn() }));
+const { getUserMock, cookiesAdapterRef } = vi.hoisted(() => ({
+  getUserMock: vi.fn(),
+  // Set by the mocked createServerClient on every call so tests can reach in
+  // and invoke setAll() directly — simulating the token-refresh side effect
+  // the real @supabase/ssr client performs from inside getUser().
+  cookiesAdapterRef: {
+    current: undefined as
+      | undefined
+      | { getAll: () => unknown; setAll: (cookies: unknown, headers?: unknown) => void },
+  },
+}));
 
 vi.mock("@supabase/ssr", () => ({
-  createServerClient: () => ({ auth: { getUser: getUserMock } }),
+  createServerClient: (
+    _url: string,
+    _key: string,
+    config: { cookies: typeof cookiesAdapterRef.current }
+  ) => {
+    cookiesAdapterRef.current = config.cookies;
+    return { auth: { getUser: getUserMock } };
+  },
 }));
 
 import { middleware } from "../middleware";
@@ -53,6 +70,52 @@ describe("middleware", () => {
       getUserMock.mockResolvedValue({ data: { user: { id: "u1", email: "info@trinity.plumbing" } } });
       const res = await middleware(req("/app/today"));
       expect(res.status).toBe(200);
+    });
+  });
+
+  describe("refreshed session cookies", () => {
+    const REFRESHED = [{ name: "sb-access-token", value: "new-token", options: { path: "/" } }];
+    const CACHE_HEADERS = { "cache-control": "private, no-cache, no-store, must-revalidate, max-age=0" };
+
+    // getUser() can silently refresh an expired token; @supabase/ssr signals
+    // that by calling setAll on the adapter mid-call. Simulated here since
+    // the mocked client has no real refresh logic of its own.
+    function refreshDuring(user: { id: string; email: string | null } | null) {
+      getUserMock.mockImplementation(async () => {
+        cookiesAdapterRef.current!.setAll(REFRESHED, CACHE_HEADERS);
+        return { data: { user } };
+      });
+    }
+
+    it("forwards a refreshed cookie onto the signed-in pass-through response", async () => {
+      refreshDuring({ id: "u1", email: "info@trinity.plumbing" });
+      const res = await middleware(req("/app/today"));
+      expect(res.cookies.get("sb-access-token")?.value).toBe("new-token");
+    });
+
+    // This is the actual bug being fixed: building a *new* NextResponse for
+    // the redirect must not mean it loses the Set-Cookie the adapter wrote —
+    // a signed-out visitor whose session just failed to refresh would
+    // otherwise keep carrying the dead cookie indefinitely.
+    it("forwards a refreshed cookie onto the signed-out redirect response", async () => {
+      refreshDuring(null);
+      const res = await middleware(req("/app/today"));
+      expect(res.cookies.get("sb-access-token")?.value).toBe("new-token");
+    });
+
+    it("forwards a refreshed cookie onto the signed-out 401 JSON response", async () => {
+      refreshDuring(null);
+      const res = await middleware(req("/api/app/today"));
+      expect(res.cookies.get("sb-access-token")?.value).toBe("new-token");
+    });
+
+    // Required by @supabase/ssr's setAll contract: without this header, a
+    // CDN or edge cache (this app deploys on Vercel) is free to cache a
+    // Set-Cookie response and serve one visitor's session to the next.
+    it("forwards the cache-control header setAll requires", async () => {
+      refreshDuring(null);
+      const res = await middleware(req("/app/today"));
+      expect(res.headers.get("cache-control")).toBe(CACHE_HEADERS["cache-control"]);
     });
   });
 });

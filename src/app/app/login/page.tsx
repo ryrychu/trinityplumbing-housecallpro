@@ -14,6 +14,21 @@ export default function LoginPage() {
   );
 }
 
+// `next` is attacker-controlled query input, not something safe to trust just
+// because middleware only ever writes an internal /app/... path there —
+// anyone can hand a real person a link like
+// /app/login?next=https://evil.example (or the protocol-relative
+// //evil.example) and, without this check, a *successful* sign-in would
+// hard-navigate straight off-origin (Next's router takes the external-URL
+// branch for any string that parses as absolute). The two accounts that can
+// sign in here hold the only credentials to 1,497 customers' names,
+// addresses and phone numbers — exactly who's worth phishing with a
+// same-origin link. Anything other than an internal /app/ path is rejected.
+function safeNextPath(next: string | null): string {
+  if (next && next.startsWith("/app/")) return next;
+  return "/app/today";
+}
+
 function LoginForm() {
   const router = useRouter();
   const params = useSearchParams();
@@ -40,7 +55,7 @@ function LoginForm() {
       setBusy(false);
       return;
     }
-    router.replace(params.get("next") ?? "/app/today");
+    router.replace(safeNextPath(params.get("next")));
     router.refresh();
   }
 

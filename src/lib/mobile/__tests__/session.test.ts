@@ -1,17 +1,30 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-const { getUserMock, createServerClientMock, cookiesMock } = vi.hoisted(() => ({
-  getUserMock: vi.fn(),
-  createServerClientMock: vi.fn(() => ({ auth: { getUser: getUserMock } })),
-  cookiesMock: vi.fn(() => ({ get: vi.fn(), set: vi.fn() })),
-}));
+const { getUserMock, createServerClientMock, cookieStoreMock, cookiesAdapterRef } = vi.hoisted(() => {
+  const cookieStoreMock = { getAll: vi.fn(() => []), set: vi.fn() };
+  // Set by the mocked createServerClient on every call so tests can reach in
+  // and invoke setAll() directly, the same way @supabase/ssr does internally
+  // on a token refresh.
+  const cookiesAdapterRef: {
+    current?: { getAll: () => unknown; setAll: (cookies: unknown, headers?: unknown) => void };
+  } = {};
+  return {
+    getUserMock: vi.fn(),
+    createServerClientMock: vi.fn((_url: string, _key: string, config: { cookies: typeof cookiesAdapterRef.current }) => {
+      cookiesAdapterRef.current = config.cookies;
+      return { auth: { getUser: getUserMock } };
+    }),
+    cookieStoreMock,
+    cookiesAdapterRef,
+  };
+});
 
 vi.mock("@supabase/ssr", () => ({
   createServerClient: createServerClientMock,
 }));
 
 vi.mock("next/headers", () => ({
-  cookies: cookiesMock,
+  cookies: () => cookieStoreMock,
 }));
 
 import { getSupabaseAuthClient, requireUser } from "../session";
@@ -70,5 +83,43 @@ describe("requireUser", () => {
   it("normalizes a missing email to null instead of undefined", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "u1", email: undefined } } });
     expect(await requireUser()).toEqual({ id: "u1", email: null });
+  });
+});
+
+describe("cookie adapter", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    process.env.NEXT_PUBLIC_SUPABASE_URL = "https://project.supabase.co";
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = "anon-key";
+  });
+
+  // Confirms the migration off the deprecated get/set/remove shim: the
+  // adapter exposes getAll/setAll, and setAll writes every cookie
+  // @supabase/ssr hands it onto the Next.js cookie store.
+  it("writes every cookie setAll receives onto the cookie store", () => {
+    getSupabaseAuthClient();
+    cookiesAdapterRef.current!.setAll([
+      { name: "sb-access-token", value: "new-token", options: { path: "/", httpOnly: true } },
+    ]);
+    expect(cookieStoreMock.set).toHaveBeenCalledWith({
+      name: "sb-access-token",
+      value: "new-token",
+      path: "/",
+      httpOnly: true,
+    });
+  });
+
+  // Server Component rendering is read-only; next/headers throws if code
+  // tries to write a cookie from one. Middleware performs the real refresh,
+  // so this throw is expected here and must not bubble up as an unhandled
+  // error that would break the page render.
+  it("swallows the 'cannot set cookies outside a Server Action' throw", () => {
+    getSupabaseAuthClient();
+    cookieStoreMock.set.mockImplementationOnce(() => {
+      throw new Error("Cookies can only be modified in a Server Action or Route Handler");
+    });
+    expect(() =>
+      cookiesAdapterRef.current!.setAll([{ name: "sb-access-token", value: "x", options: {} }])
+    ).not.toThrow();
   });
 });
