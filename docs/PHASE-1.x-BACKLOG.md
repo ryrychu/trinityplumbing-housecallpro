@@ -232,3 +232,68 @@ single API call instead of the current 58-call full pass.
   column list — the mapper↔schema alignment currently has no compile-time guard.
 - `HcpJob` still types `notes` / `attachments`; harmless, but revisit when their
   sync lands.
+
+## Mobile PWA Phase 1 — deferred items (2026-08-07)
+
+Surfaced during the `feat/mobile-pwa-phase-1` build and its reviews, and
+**deliberately not fixed** there. Recorded so they are tracked, not lost. None
+block Phase 1; each was judged non-blocking with the reasoning kept here.
+
+### Needs its own task
+
+- **`technicianId` is not on `TodayScheduleRow`.** The Schedule tab's technician
+  filter therefore matches on *display name*, so two technicians sharing a name
+  are indistinguishable to it. Contained for now by deduping the dropdown, which
+  stops it offering two options that filter identically. The real fix threads the
+  id through `buildScheduleRow` in `src/lib/dashboard/queries.ts` — shared with
+  the desktop dashboard, the Slack digest and the nearby-work lookup, so it wants
+  its own review. Theoretical at six employees; revisit before headcount grows.
+
+- **`/api/dispatch/nearby` has no `requireUser()` of its own.** It is now behind
+  the middleware matcher, but unlike the six `/api/app/*` handlers it does not
+  re-check the session in the route. One layer thinner than everything else.
+
+### Correctness nits, none user-visible today
+
+- **The invoice reconcile default `20` now lives in two files** —
+  `src/app/api/cron/sync/route.ts:53` and the mobile freshness threshold. They
+  can only drift if someone edits one *and* `INVOICE_RECONCILE_HOURS` is unset.
+- **`appJson` awaits the `sync_cursors` read serially** after the payload query.
+  Starting both together removes a round trip. (Caching it was considered and
+  rejected: memoizing a freshness signal reintroduces the staleness it exists to
+  report.)
+- **A failed *refresh* keeps prior data**, so an error banner can briefly sit
+  beside stale content. Pre-existing shape of `useAppData`, not introduced here.
+- **`lifetimeCents` sums only a customer's first 500 jobs.** No customer is near
+  that.
+- **`readRecent`/`phone.ts` overlap `slack/format.ts`'s phone formatter** — a
+  four-line formatter duplicated, not a business rule.
+
+### Service worker
+
+- **`?_rsc=` payload URLs accumulate** as distinct shell-cache entries, and
+  `VERSION` is pinned `v1` with no eviction, so the cache grows across deploys.
+  Highest-risk of the SW nits: an iOS quota trip evicts the whole origin's
+  storage and takes offline support down with it. Needs a deploy cadence to bite.
+- **`cache.put` is never awaited or caught** — a `QuotaExceededError` becomes a
+  silent unhandled rejection in the worker.
+
+### Accessibility and polish
+
+- **`EmptyState` has no `aria-live`/`role="status"`**, so a screen-reader user
+  gets no cue that a search resolved. Affects Customers and Dispatch.
+- **The job-detail back link always returns to `/app/today`** regardless of
+  whether you arrived from Schedule or a customer's history, and its tap target
+  is ~16px wide. Fix both together.
+- **Customer detail has no empty state for job history.**
+- **The Directions button does not visually disable** when a job has no address,
+  while the Call button beside it does.
+- **Day-strip buttons fall under 44px** on 320px-wide screens.
+
+### Documentation
+
+- **`docs/SLACK-ROLLOUT.md` still describes the retired external scheduler and a
+  `0 11 * * *` Vercel cron.** Reality since `befdd5b`/`4befe8a` is the `*/15`
+  Vercel Pro cron. `README.md` and `docs/GO-LIVE-RUNBOOK.md` were corrected
+  during the mobile build; this one was left alone as a separate document with
+  its own scope.
