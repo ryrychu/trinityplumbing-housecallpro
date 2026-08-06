@@ -39,7 +39,15 @@ runbook below). Behind that gate, `/api/app/*` routes read with
 `getSupabaseServerClient()` (`src/lib/supabase/client.ts`), which holds the
 `SUPABASE_SERVICE_ROLE_KEY` — a server-only env var that never reaches the
 browser. The middleware's sign-in check is what stands between a visitor and
-the data; there is no Postgres row-level security on top of it.
+the data; there is no Postgres row-level security on top of it. That check
+only guards requests that pass through it — a query issued straight from
+browser code with the anon key would skip the middleware entirely, and with
+no RLS underneath to fall back on, it would read the whole `customers`
+table with no login required. That is why every data read is routed through
+`getSupabaseServerClient()` in server-only code (`/api/app/*` route
+handlers) rather than a browser-side Supabase client, and why that
+confinement has to stay that way, not just happen to be how it's written
+today.
 
 **Before anyone installs this on a phone, read
 [`docs/MOBILE-INSTALL.md`](docs/MOBILE-INSTALL.md).** It covers creating
