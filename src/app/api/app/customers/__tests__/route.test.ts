@@ -11,6 +11,17 @@ const { requireUserMock } = vi.hoisted(() => ({
   requireUserMock: vi.fn(async () => ({ id: "u1", email: "info@trinity.plumbing" })),
 }));
 vi.mock("@/lib/mobile/session", () => ({ requireUser: requireUserMock }));
+// The freshness stamp on this screen is only as honest as the resource list
+// the route declares, so that list is asserted rather than assumed.
+const { mirrorSyncedAtMock } = vi.hoisted(() => ({
+  mirrorSyncedAtMock: vi.fn(async () => "2026-08-06T13:48:00Z"),
+}));
+vi.mock("@/lib/mobile/mirrorFreshness", async (importOriginal) => ({
+  // staleAfterMinutes stays real: the threshold a route publishes must be
+  // the one it would publish in production.
+  ...(await importOriginal<typeof import("@/lib/mobile/mirrorFreshness")>()),
+  mirrorSyncedAt: mirrorSyncedAtMock,
+}));
 import { GET } from "../route";
 
 const HIT: CustomerHit = {
@@ -73,5 +84,24 @@ describe("GET /api/app/customers", () => {
     expect(res.status).toBe(401);
     expect((await res.json()).error).toMatch(/not signed in/i);
     expect(searchCustomersMock).not.toHaveBeenCalled();
+  });
+
+  // A screen is only as fresh as its stalest input, so what this route
+  // declares here decides what its stamp is allowed to claim.
+  it("declares the resources its freshness stamp covers", async () => {
+    searchCustomersMock.mockResolvedValue([HIT]);
+    const res = await GET(request("?q=kowalski"));
+
+    expect(mirrorSyncedAtMock).toHaveBeenCalledWith(["customers"]);
+    expect((await res.json()).mirror_synced_at).toBe("2026-08-06T13:48:00Z");
+  });
+
+  // Jobs and customers both ride the 15-minute cron, so this screen can
+  // hold a tight threshold and have it actually mean something.
+  it("publishes the short, cron-cadence staleness threshold", async () => {
+    searchCustomersMock.mockResolvedValue([HIT]);
+    const res = await GET(request("?q=kowalski"));
+
+    expect((await res.json()).stale_after_minutes).toBe(45);
   });
 });

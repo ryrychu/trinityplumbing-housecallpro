@@ -1,8 +1,14 @@
 import { getCustomerDetail } from "@/lib/mobile/customers";
 import { appJson, appError } from "@/lib/mobile/envelope";
 import { requireUser } from "@/lib/mobile/session";
+import type { MirrorResource } from "@/lib/mobile/mirrorFreshness";
 
 export const dynamic = "force-dynamic";
+
+// Both, unlike the search route: getCustomerDetail reads the customer row
+// AND runs a jobs query for the history list and lifetime value. Declaring
+// only `customers` would date half of what this screen renders.
+const RESOURCES: MirrorResource[] = ["customers", "jobs"];
 
 export async function GET(_req: Request, { params }: { params: { id: string } }) {
   // See the comment in the today route: the service-role client plus the
@@ -14,7 +20,7 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
   try {
     const detail = await getCustomerDetail(params.id);
     if (!detail) return appError("Customer not found.", 404);
-    return appJson(detail);
+    return await appJson(detail, RESOURCES);
   } catch (err) {
     return appError(
       `Couldn't load the customer: ${err instanceof Error ? err.message : String(err)}`,

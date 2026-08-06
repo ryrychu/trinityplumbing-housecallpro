@@ -1,8 +1,17 @@
 import { getJobDetail } from "@/lib/mobile/jobDetail";
 import { appJson, appError } from "@/lib/mobile/envelope";
 import { requireUser } from "@/lib/mobile/session";
+import type { MirrorResource } from "@/lib/mobile/mirrorFreshness";
 
 export const dynamic = "force-dynamic";
+
+// KNOWN GAP, same as the today route and stated for the same reason: the
+// linked invoice this screen renders comes from `invoices`, which is NOT
+// declared here. Declaring it would push the threshold past 20 hours and
+// stop the stamp from ever revealing a dead 15-minute cron -- the job's
+// time, address and technician are what someone acts on, and those are
+// what this stamp dates.
+const RESOURCES: MirrorResource[] = ["jobs", "customers"];
 
 export async function GET(_req: Request, { params }: { params: { id: string } }) {
   // See the comment in the today route: the service-role client plus the
@@ -14,7 +23,7 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
   try {
     const detail = await getJobDetail(params.id);
     if (!detail) return appError("Job not found.", 404);
-    return appJson(detail);
+    return await appJson(detail, RESOURCES);
   } catch (err) {
     return appError(
       `Couldn't load the job: ${err instanceof Error ? err.message : String(err)}`,

@@ -36,7 +36,7 @@ export default function JobPage({ params }: { params: { id: string } }) {
   // Offline, the service worker serves a cached copy and useAppData sets
   // fromCache; without the stamp below the page renders as if it were current,
   // which is the exact dishonesty the freshness contract exists to prevent.
-  const { data: job, generatedAt, error, fromCache } = useAppData<JobDetail>(
+  const { data: job, generatedAt, mirrorSyncedAt, staleAfterMinutes, error, fromCache } = useAppData<JobDetail>(
     `/api/app/jobs/${params.id}`
   );
 
@@ -62,7 +62,12 @@ export default function JobPage({ params }: { params: { id: string } }) {
             {job.customerName ?? "Unknown customer"}
           </h1>
           <p className="text-xs text-ink-faint">{timeRange(job.scheduledStart, job.scheduledEnd)}</p>
-          <FreshnessStamp generatedAt={generatedAt} fromCache={fromCache} />
+          <FreshnessStamp
+            generatedAt={generatedAt}
+            fromCache={fromCache}
+            mirrorSyncedAt={mirrorSyncedAt}
+            staleAfterMinutes={staleAfterMinutes}
+          />
         </div>
         <StatusPill status={job.status} />
       </header>

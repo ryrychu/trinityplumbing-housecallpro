@@ -26,6 +26,14 @@ const JOB = {
   notes: [],
 };
 
+const FRESH = {
+  generated_at: new Date().toISOString(),
+  // 12 minutes behind, well inside the 45-minute jobs threshold: the stamp
+  // must date the MIRROR, not the request that just happened.
+  mirror_synced_at: new Date(Date.now() - 12 * 60_000).toISOString(),
+  stale_after_minutes: 45,
+};
+
 function jsonResponse(body: unknown, headers: Record<string, string> = {}, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
@@ -49,14 +57,14 @@ describe("JobPage", () => {
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue(
-        jsonResponse({ data: JOB, generated_at: new Date().toISOString() })
+        jsonResponse({ data: JOB, ...FRESH })
       )
     );
 
     render(<JobPage params={{ id: "job_3417" }} />);
 
     expect(await screen.findByText("Margaret Kowalski")).toBeInTheDocument();
-    expect(screen.getByText(/just now|min ago/i)).toBeInTheDocument();
+    expect(screen.getByText(/Synced 12 min ago/i)).toBeInTheDocument();
   });
 
   // The defect this whole finding is about: offline, the service worker serves

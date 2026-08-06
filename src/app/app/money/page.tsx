@@ -21,13 +21,18 @@ const money = (cents: number | null) =>
 
 export default function MoneyPage() {
   const [tab, setTab] = useState<"estimates" | "invoices">("estimates");
-  const { data, generatedAt, loading, error, fromCache } = useAppData<MoneyPayload>("/api/app/money");
+  const { data, generatedAt, mirrorSyncedAt, staleAfterMinutes, loading, error, fromCache } = useAppData<MoneyPayload>("/api/app/money");
 
   return (
     <main className="px-3 pt-3">
       <header className="mb-3">
         <h1 className="text-xl font-bold tracking-tight">Money</h1>
-        <FreshnessStamp generatedAt={generatedAt} fromCache={fromCache} />
+        <FreshnessStamp
+            generatedAt={generatedAt}
+            fromCache={fromCache}
+            mirrorSyncedAt={mirrorSyncedAt}
+            staleAfterMinutes={staleAfterMinutes}
+          />
       </header>
 
       {error && (

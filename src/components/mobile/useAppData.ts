@@ -5,6 +5,13 @@ import { useCallback, useEffect, useState } from "react";
 export interface AppData<T> {
   data: T | null;
   generatedAt: string | null;
+  // When the mirror this screen's data came from was last synced, and how old
+  // that is allowed to get before the screen should say something is wrong.
+  // Both are route-declared (see src/lib/mobile/mirrorFreshness.ts) because
+  // "stale" means something different for a screen reading 15-minute job data
+  // than for one reading invoices reconciled once a day.
+  mirrorSyncedAt: string | null;
+  staleAfterMinutes: number | null;
   loading: boolean;
   error: string | null;
   fromCache: boolean;
@@ -17,6 +24,8 @@ export interface AppData<T> {
 export function useAppData<T>(path: string): AppData<T> {
   const [data, setData] = useState<T | null>(null);
   const [generatedAt, setGeneratedAt] = useState<string | null>(null);
+  const [mirrorSyncedAt, setMirrorSyncedAt] = useState<string | null>(null);
+  const [staleAfterMinutes, setStaleAfterMinutes] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [fromCache, setFromCache] = useState(false);
@@ -52,6 +61,13 @@ export function useAppData<T>(path: string): AppData<T> {
         if (cancelled) return;
         setData(body.data as T);
         setGeneratedAt(body.generated_at ?? null);
+        // Absent on a response cached before this contract existed, so both
+        // stay nullable and FreshnessStamp falls back to the old wording
+        // rather than rendering "Synced NaN min ago" after an upgrade.
+        setMirrorSyncedAt(body.mirror_synced_at ?? null);
+        setStaleAfterMinutes(
+          typeof body.stale_after_minutes === "number" ? body.stale_after_minutes : null
+        );
         // Set by the service worker (Task 11) when it serves a stale cached
         // copy. This header is the ONLY signal that distinguishes a live
         // response from a cached one -- everything downstream (FreshnessStamp)
@@ -72,5 +88,14 @@ export function useAppData<T>(path: string): AppData<T> {
     };
   }, [path, nonce]);
 
-  return { data, generatedAt, loading, error, fromCache, refresh };
+  return {
+    data,
+    generatedAt,
+    mirrorSyncedAt,
+    staleAfterMinutes,
+    loading,
+    error,
+    fromCache,
+    refresh,
+  };
 }

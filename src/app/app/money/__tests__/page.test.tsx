@@ -26,6 +26,14 @@ const PAYLOAD = {
   invoicesTotalCents: 42_000,
 };
 
+const FRESH = {
+  generated_at: new Date().toISOString(),
+  // 12 minutes behind, well inside the 45-minute jobs threshold: the stamp
+  // must date the MIRROR, not the request that just happened.
+  mirror_synced_at: new Date(Date.now() - 12 * 60_000).toISOString(),
+  stale_after_minutes: 45,
+};
+
 function jsonResponse(body: unknown, headers: Record<string, string> = {}, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
@@ -49,7 +57,7 @@ describe("MoneyPage", () => {
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue(
-        jsonResponse({ data: PAYLOAD, generated_at: new Date().toISOString() })
+        jsonResponse({ data: PAYLOAD, ...FRESH })
       )
     );
 
@@ -57,6 +65,31 @@ describe("MoneyPage", () => {
 
     expect(await screen.findByText("Margaret Kowalski")).toBeInTheDocument();
     expect(screen.queryByText("Loading…")).not.toBeInTheDocument();
+    // Dates the mirror, not the request that just completed.
+    expect(screen.getByText(/Synced 12 min ago/i)).toBeInTheDocument();
+  });
+
+  // Money is the invoice-bearing screen and so carries the long threshold. This
+  // is the end-to-end shape of the warning: past the route's OWN window, the
+  // screen says so rather than showing a comfortable-looking number.
+  it("warns when the mirror is older than this route's threshold", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse({
+          data: PAYLOAD,
+          generated_at: new Date().toISOString(),
+          mirror_synced_at: new Date(Date.now() - 30 * 3_600_000).toISOString(),
+          stale_after_minutes: 24 * 60,
+        })
+      )
+    );
+
+    render(<MoneyPage />);
+
+    expect(await screen.findByText(/Sync is behind/i)).toBeInTheDocument();
+    // The data is still shown -- stale is a caveat, not a reason to withhold.
+    expect(screen.getByText("Margaret Kowalski")).toBeInTheDocument();
   });
 
   it("shows the error alone on a failure, never alongside an empty state", async () => {

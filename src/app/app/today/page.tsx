@@ -24,7 +24,7 @@ function Stat({ n, label, tone }: { n: number; label: string; tone?: string }) {
 }
 
 export default function TodayPage() {
-  const { data, generatedAt, loading, error, fromCache, refresh } =
+  const { data, generatedAt, mirrorSyncedAt, staleAfterMinutes, loading, error, fromCache, refresh } =
     useAppData<TodayPayload>("/api/app/today");
 
   return (
@@ -33,7 +33,12 @@ export default function TodayPage() {
         <div>
           <h1 className="text-xl font-bold tracking-tight">Today</h1>
           <p className="text-xs text-ink-faint">{data?.dateLabel ?? " "}</p>
-          <FreshnessStamp generatedAt={generatedAt} fromCache={fromCache} />
+          <FreshnessStamp
+            generatedAt={generatedAt}
+            fromCache={fromCache}
+            mirrorSyncedAt={mirrorSyncedAt}
+            staleAfterMinutes={staleAfterMinutes}
+          />
         </div>
         <button
           onClick={refresh}

@@ -18,6 +18,17 @@ const { requireUserMock } = vi.hoisted(() => ({
 }));
 vi.mock("@/lib/mobile/session", () => ({ requireUser: requireUserMock }));
 
+// The freshness stamp on this screen is only as honest as the resource list
+// the route declares, so that list is asserted rather than assumed.
+const { mirrorSyncedAtMock } = vi.hoisted(() => ({
+  mirrorSyncedAtMock: vi.fn(async () => "2026-08-06T13:48:00Z"),
+}));
+vi.mock("@/lib/mobile/mirrorFreshness", async (importOriginal) => ({
+  // staleAfterMinutes stays real: the threshold a route publishes must be
+  // the one it would publish in production.
+  ...(await importOriginal<typeof import("@/lib/mobile/mirrorFreshness")>()),
+  mirrorSyncedAt: mirrorSyncedAtMock,
+}));
 import { GET } from "../route";
 
 const ESTIMATE: EstimateHit = {
@@ -90,5 +101,23 @@ describe("GET /api/app/money", () => {
     expect((await res.json()).error).toMatch(/not signed in/i);
     expect(openEstimatesMock).not.toHaveBeenCalled();
     expect(unpaidInvoicesMock).not.toHaveBeenCalled();
+  });
+
+  // A screen is only as fresh as its stalest input, so what this route
+  // declares here decides what its stamp is allowed to claim.
+  it("declares the resources its freshness stamp covers", async () => {
+    const res = await GET();
+
+    expect(mirrorSyncedAtMock).toHaveBeenCalledWith(["invoices", "estimates"]);
+    expect((await res.json()).mirror_synced_at).toBe("2026-08-06T13:48:00Z");
+  });
+
+  // Invoices reconcile at most once every INVOICE_RECONCILE_HOURS, and a
+  // screen is only as fresh as its stalest input -- so invoices governs
+  // here, not the 15-minute estimates cadence.
+  it("publishes the long, invoice-reconcile staleness threshold", async () => {
+    const res = await GET();
+
+    expect((await res.json()).stale_after_minutes).toBeGreaterThan(20 * 60);
   });
 });

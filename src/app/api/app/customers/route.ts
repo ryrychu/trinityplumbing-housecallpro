@@ -1,8 +1,13 @@
 import { searchCustomers } from "@/lib/mobile/customers";
 import { appJson, appError } from "@/lib/mobile/envelope";
 import { requireUser } from "@/lib/mobile/session";
+import type { MirrorResource } from "@/lib/mobile/mirrorFreshness";
 
 export const dynamic = "force-dynamic";
+
+// Search reads the customers table and nothing else. The job history that
+// makes the DETAIL route also declare `jobs` is not on this screen.
+const RESOURCES: MirrorResource[] = ["customers"];
 
 export async function GET(req: Request) {
   // See the comment in the today route: the service-role client plus the
@@ -13,7 +18,7 @@ export async function GET(req: Request) {
 
   const q = new URL(req.url).searchParams.get("q") ?? "";
   try {
-    return appJson({ query: q, hits: await searchCustomers(q) });
+    return await appJson({ query: q, hits: await searchCustomers(q) }, RESOURCES);
   } catch (err) {
     return appError(
       `Search failed: ${err instanceof Error ? err.message : String(err)}`,

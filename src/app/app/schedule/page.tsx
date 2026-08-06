@@ -20,7 +20,7 @@ export default function SchedulePage() {
   const [dayIndex, setDayIndex] = useState<number | null>(null);
   const [tech, setTech] = useState<string>("all");
 
-  const { data, generatedAt, loading, error, fromCache } = useAppData<SchedulePayload>(
+  const { data, generatedAt, mirrorSyncedAt, staleAfterMinutes, loading, error, fromCache } = useAppData<SchedulePayload>(
     `/api/app/schedule?offset=${offset}`
   );
 
@@ -41,7 +41,12 @@ export default function SchedulePage() {
         <div>
           <h1 className="text-xl font-bold tracking-tight">Schedule</h1>
           <p className="text-xs text-ink-faint">{data?.weekLabel ?? " "}</p>
-          <FreshnessStamp generatedAt={generatedAt} fromCache={fromCache} />
+          <FreshnessStamp
+            generatedAt={generatedAt}
+            fromCache={fromCache}
+            mirrorSyncedAt={mirrorSyncedAt}
+            staleAfterMinutes={staleAfterMinutes}
+          />
         </div>
         <div className="flex gap-1">
           <button

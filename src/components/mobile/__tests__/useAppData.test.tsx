@@ -28,6 +28,46 @@ describe("useAppData", () => {
     expect(result.current.fromCache).toBe(false);
   });
 
+  // The fields the freshness stamp actually renders. generated_at alone can
+  // only ever say how long ago the request happened.
+  it("exposes the mirror age and the route's staleness threshold", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse({
+          data: {},
+          generated_at: "2026-08-06T14:00:00Z",
+          mirror_synced_at: "2026-08-06T13:48:00Z",
+          stale_after_minutes: 45,
+        })
+      )
+    );
+
+    const { result } = renderHook(() => useAppData("/api/app/today"));
+
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.mirrorSyncedAt).toBe("2026-08-06T13:48:00Z");
+    expect(result.current.staleAfterMinutes).toBe(45);
+  });
+
+  // A response cached by the service worker before this contract existed has
+  // neither field. Both must come back null so FreshnessStamp degrades to the
+  // old wording instead of rendering "Synced NaN min ago" after an upgrade.
+  it("reports nulls for a cached response predating the freshness contract", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse({ data: {}, generated_at: "2026-08-06T14:00:00Z" })
+      )
+    );
+
+    const { result } = renderHook(() => useAppData("/api/app/today"));
+
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.mirrorSyncedAt).toBeNull();
+    expect(result.current.staleAfterMinutes).toBeNull();
+  });
+
   // The service worker marks a stale-cache reply with this header; without it
   // the UI cannot tell a live fetch from a cached one and would lie.
   it("reports a service-worker cache hit", async () => {

@@ -3,11 +3,17 @@ import { weekRange } from "@/lib/dashboard/week";
 import { getSupabaseServerClient } from "@/lib/supabase/client";
 import { appJson, appError } from "@/lib/mobile/envelope";
 import { requireUser } from "@/lib/mobile/session";
+import type { MirrorResource } from "@/lib/mobile/mirrorFreshness";
 
 export const dynamic = "force-dynamic";
 
 const BUSINESS_TIME_ZONE = "America/New_York";
 const MAX_OFFSET_WEEKS = 26;
+
+// The week grid and its rows. Same reasoning as the today route: jobs and
+// customers both ride the 15-minute cron, so this screen's stamp can hold a
+// tight threshold and actually mean something.
+const RESOURCES: MirrorResource[] = ["jobs", "customers"];
 
 function clampOffset(raw: string | null): number {
   const n = Number(raw);
@@ -45,25 +51,28 @@ export async function GET(req: Request) {
       listTechnicians(),
     ]);
 
-    return appJson({
-      weekLabel: `Week of ${anchor.toLocaleDateString("en-US", {
-        month: "short",
-        day: "numeric",
-        timeZone: BUSINESS_TIME_ZONE,
-      })}`,
-      offset,
-      days: days.map((d) => ({
-        ...d,
-        // d.dateKey is a bare YYYY-MM-DD; anchor mid-day before parsing so a
-        // DST boundary can't roll the label onto the wrong calendar day (same
-        // reason getScheduleDays anchors its own buckets at 16:00 UTC).
-        label: new Date(`${d.dateKey}T16:00:00Z`).toLocaleDateString("en-US", {
-          weekday: "short",
+    return await appJson(
+      {
+        weekLabel: `Week of ${anchor.toLocaleDateString("en-US", {
+          month: "short",
+          day: "numeric",
           timeZone: BUSINESS_TIME_ZONE,
-        }),
-      })),
-      technicians,
-    });
+        })}`,
+        offset,
+        days: days.map((d) => ({
+          ...d,
+          // d.dateKey is a bare YYYY-MM-DD; anchor mid-day before parsing so a
+          // DST boundary can't roll the label onto the wrong calendar day (same
+          // reason getScheduleDays anchors its own buckets at 16:00 UTC).
+          label: new Date(`${d.dateKey}T16:00:00Z`).toLocaleDateString("en-US", {
+            weekday: "short",
+            timeZone: BUSINESS_TIME_ZONE,
+          }),
+        })),
+        technicians,
+      },
+      RESOURCES
+    );
   } catch (err) {
     return appError(
       `Couldn't load the schedule: ${err instanceof Error ? err.message : String(err)}`,

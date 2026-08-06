@@ -34,7 +34,7 @@ export default function CustomerPage({ params }: { params: { id: string } }) {
   // generatedAt/fromCache are destructured, not dropped -- see the same comment
   // on the job detail screen. This is the other page someone acts on: the phone
   // number below is tapped to call. Cached-and-stale must say so.
-  const { data, generatedAt, error, fromCache } = useAppData<CustomerDetail>(
+  const { data, generatedAt, mirrorSyncedAt, staleAfterMinutes, error, fromCache } = useAppData<CustomerDetail>(
     `/api/app/customers/${params.id}`
   );
 
@@ -76,7 +76,12 @@ export default function CustomerPage({ params }: { params: { id: string } }) {
         <div>
           <h1 className="text-lg font-bold tracking-tight">{data.name}</h1>
           {data.company && <p className="text-xs text-ink-faint">{data.company}</p>}
-          <FreshnessStamp generatedAt={generatedAt} fromCache={fromCache} />
+          <FreshnessStamp
+            generatedAt={generatedAt}
+            fromCache={fromCache}
+            mirrorSyncedAt={mirrorSyncedAt}
+            staleAfterMinutes={staleAfterMinutes}
+          />
         </div>
       </header>
 
