@@ -96,5 +96,25 @@ export const config = {
   // NOTE: this locks the desktop /dispatch page, which works today, behind a
   // login. The Supabase accounts must exist BEFORE this branch deploys or the
   // owner loses a working page. Recorded in docs/MOBILE-INSTALL.md.
-  matcher: ["/app/:path*", "/api/app/:path*", "/dispatch", "/api/dispatch/:path*"],
+  //
+  // /dashboard is here for the same reason /dispatch is, and it was the larger
+  // hole of the two: it renders every one of today's jobs with the customer's
+  // full name and street address, to anyone who knows the URL. There was never
+  // an auth check in front of it -- the login screen has always guarded /app/*
+  // while the same data sat in the open one path over.
+  //
+  // /admin is defence in depth rather than a hole being closed. Its page is
+  // just a form; the thing that actually posts to Slack is
+  // /api/admin/trigger, which checks ADMIN_TRIGGER_TOKEN and still does. But
+  // there is no reason for a signed-out stranger to reach the form at all, and
+  // the token stays the check that matters -- do NOT remove it on the strength
+  // of this line.
+  matcher: [
+    "/app/:path*",
+    "/api/app/:path*",
+    "/dispatch",
+    "/api/dispatch/:path*",
+    "/dashboard",
+    "/admin",
+  ],
 };

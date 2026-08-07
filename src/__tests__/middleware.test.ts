@@ -107,6 +107,50 @@ describe("middleware", () => {
       const api = config.matcher.includes("/api/dispatch/:path*");
       expect(page).toBe(api);
     });
+
+    // /dashboard renders every one of today's jobs with the customer's full
+    // name and street address. It sat outside the matcher while /app/* -- the
+    // same data behind a different path -- was gated from the start, so this
+    // pins the hole closed rather than trusting it to stay closed.
+    it("guards the operations dashboard", () => {
+      expect(config.matcher).toContain("/dashboard");
+    });
+
+    // Defence in depth: ADMIN_TRIGGER_TOKEN is still what authorizes the Slack
+    // post, and this line is not a licence to drop it.
+    it("guards the admin page", () => {
+      expect(config.matcher).toContain("/admin");
+    });
+  });
+
+  describe("dashboard and admin, signed out", () => {
+    beforeEach(() => getUserMock.mockResolvedValue({ data: { user: null } }));
+
+    it("redirects the operations dashboard to login", async () => {
+      const res = await middleware(req("/dashboard"));
+      expect(res.status).toBe(307);
+      expect(res.headers.get("location")).toContain("/app/login");
+    });
+
+    it("sends the reader back to the dashboard after signing in", async () => {
+      const res = await middleware(req("/dashboard"));
+      expect(res.headers.get("location")).toContain("next=%2Fdashboard");
+    });
+
+    it("redirects the admin page to login", async () => {
+      const res = await middleware(req("/admin"));
+      expect(res.status).toBe(307);
+      expect(res.headers.get("location")).toContain("/app/login");
+    });
+  });
+
+  describe("dashboard, signed in", () => {
+    it("lets the dashboard through", async () => {
+      getUserMock.mockResolvedValue({ data: { user: { id: "u1" } } });
+      const res = await middleware(req("/dashboard"));
+      expect(res.status).toBe(200);
+      expect(res.headers.get("location")).toBeNull();
+    });
   });
 
   describe("dispatch, signed out", () => {

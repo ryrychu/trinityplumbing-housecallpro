@@ -15,6 +15,12 @@ page works today with no sign-in at all. The moment this deploys, it stops
 working for everyone — including the owner — until a Supabase account exists to
 sign in with. **Those accounts do not exist yet.**
 
+**As of 2026-08-07 the same is now true of `/dashboard` and `/admin`.** If the
+accounts already exist from the `/dispatch` rollout above, nothing more is
+needed — but confirm you can sign in before deploying, because these two are
+the pages the owner opens first, and losing both at once has no workaround
+from a phone.
+
 So the order is not "deploy, then set up accounts." It is:
 
 1. Create the accounts (Step 1 below).
@@ -169,10 +175,18 @@ basement.
   desktop dashboard.
 - **No desktop layout.** This is a phone app. Nobody has built or tested a
   tablet or desktop-width version of `/app/*`.
+- **`/dashboard` now requires a sign-in too (2026-08-07).** It never did
+  before, and that was the larger of the two holes: it renders every one of
+  today's jobs with the customer's full name and street address, to anyone
+  who knew the URL, while `/app/*` served the same data behind a login one
+  path over. `/admin` is gated alongside it as defence in depth —
+  `ADMIN_TRIGGER_TOKEN` is still what authorizes the Slack post, and gating
+  the page is not a reason to drop that token.
 - **The desktop `/dispatch` page now requires a sign-in.** It did not before.
   This is the change the warning at the top of this document is about: the
-  sign-in requirement now covers `/app/*`, `/api/app/*`, `/dispatch` and
-  `/api/dispatch/*`. Anyone used to opening `/dispatch` on a laptop without
+  sign-in requirement now covers `/app/*`, `/api/app/*`, `/dispatch`,
+  `/api/dispatch/*`, `/dashboard` and `/admin`. Anyone used to opening
+  `/dispatch` on a laptop without
   signing in will be sent to `/app/login` — which is the mobile login screen,
   the only one this app has. It works fine in a desktop browser; it just
   looks like a phone screen.

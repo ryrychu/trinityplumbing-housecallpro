@@ -31,9 +31,14 @@ writes of its own. Five tabs:
 - **Dispatch** — the "are we already going near there?" lookup, same
   `/api/dispatch/nearby` route the desktop `/dispatch` page uses.
 
-Auth is Supabase Auth, gated by `src/middleware.ts` on every `/app/*` page
-and `/api/app/*` route: signed-out browser requests are redirected to
-`/app/login`, signed-out API requests get a 401. There is no public
+Auth is Supabase Auth, gated by `src/middleware.ts`: signed-out browser
+requests are redirected to `/app/login`, signed-out API requests get a 401.
+As of 2026-08-07 the gate covers `/app/*`, `/api/app/*`, `/dispatch`,
+`/api/dispatch/*`, `/dashboard` and `/admin` — every surface that renders
+customer names or addresses. `/dashboard` was public until that date, which
+meant the operations dashboard served today's jobs, customer names and street
+addresses to anyone with the URL while `/app/*` served the same data behind a
+login. There is no public
 sign-up — accounts are created by hand in the Supabase dashboard (see the
 runbook below). Behind that gate, `/api/app/*` routes read with
 `getSupabaseServerClient()` (`src/lib/supabase/client.ts`), which holds the
