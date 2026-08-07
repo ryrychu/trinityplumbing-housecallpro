@@ -1,6 +1,13 @@
-import { describe, it, expect, vi, afterEach } from "vitest";
+import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import SchedulePage from "../page";
+import { clearAppDataCache } from "@/components/mobile/useAppData";
+
+// useAppData holds payloads in module state so a reopened tab paints instantly.
+// That state outlives a render, so each case here starts from an empty cache --
+// otherwise a test asserting the first-load view inherits the previous test's
+// data and sees a fully populated screen.
+beforeEach(() => clearAppDataCache());
 
 // This screen told the user "No jobs scheduled this week." on first paint,
 // before any response had arrived, and showed that same empty state alongside

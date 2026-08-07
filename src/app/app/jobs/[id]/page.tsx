@@ -5,12 +5,14 @@ import type { JobDetail } from "@/lib/mobile/jobDetail";
 import { useAppData } from "@/components/mobile/useAppData";
 import { FreshnessStamp } from "@/components/mobile/FreshnessStamp";
 import { DetailHeader } from "@/components/mobile/DetailHeader";
+import { BackLink } from "@/components/mobile/BackLink";
 import { StatusPill } from "@/components/mobile/StatusPill";
 import { ActionPair } from "@/components/mobile/ActionPair";
 import { DetailRow } from "@/components/ui/DetailRow";
 import { SectionHeader } from "@/components/ui/SectionHeader";
 import { Panel } from "@/components/ui/Panel";
 import { ChevronRightIcon } from "@/components/ui/icons";
+import { Skeleton, LoadingStatus } from "@/components/ui/Skeleton";
 
 const BUSINESS_TIME_ZONE = "America/New_York";
 
@@ -25,6 +27,44 @@ function timeRange(startIso: string | null, endIso: string | null): string {
   const start = new Date(startIso).toLocaleTimeString("en-US", opts);
   if (!endIso) return start;
   return `${start} – ${new Date(endIso).toLocaleTimeString("en-US", opts)}`;
+}
+
+/**
+ * The screen's shape while it loads. The back control is real, not a
+ * placeholder: it is the one thing that must work before the data arrives,
+ * because a slow or failed job is exactly when someone wants out.
+ */
+function JobSkeleton() {
+  return (
+    <main className="px-3 pb-4 pt-3">
+      <LoadingStatus />
+      <header className="mb-4 flex items-start gap-1.5">
+        <BackLink fallback="/app/today" />
+        <div className="min-w-0 flex-1 space-y-2">
+          <Skeleton className="h-6 w-2/3" />
+          <Skeleton className="h-3 w-32" />
+        </div>
+      </header>
+      <div className="mb-5 flex gap-2">
+        <Skeleton className="h-12 flex-1 rounded-xl" />
+        <Skeleton className="h-12 flex-1 rounded-xl" />
+      </div>
+      <SectionHeader>Job</SectionHeader>
+      <Panel className="overflow-hidden">
+        {[0, 1, 2, 3, 4].map((i) => (
+          <div
+            key={i}
+            className={`flex items-baseline justify-between gap-4 px-3.5 py-2.5 ${
+              i === 4 ? "" : "border-b border-surface-divider"
+            }`}
+          >
+            <Skeleton className="h-3 w-20" />
+            <Skeleton className="h-3.5 w-32" />
+          </div>
+        ))}
+      </Panel>
+    </main>
+  );
 }
 
 export default function JobPage({ params }: { params: { id: string } }) {
@@ -46,7 +86,7 @@ export default function JobPage({ params }: { params: { id: string } }) {
       </main>
     );
   }
-  if (!job) return <main className="px-3 pt-3 text-sm text-ink-faint">Loading…</main>;
+  if (!job) return <JobSkeleton />;
 
   return (
     <main className="px-3 pb-4 pt-3">

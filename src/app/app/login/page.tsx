@@ -3,6 +3,7 @@
 import { Suspense, useState } from "react";
 import { createBrowserClient } from "@supabase/ssr";
 import { useRouter, useSearchParams } from "next/navigation";
+import { Spinner } from "@/components/ui/Spinner";
 
 // useSearchParams() opts the page out of static prerendering unless it's
 // wrapped in Suspense — without this, `next build` fails on this page.
@@ -42,21 +43,42 @@ function LoginForm() {
     setBusy(true);
     setError(null);
 
-    const supabase = createBrowserClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-    );
-    const { error: signInError } = await supabase.auth.signInWithPassword({ email, password });
+    // Everything from here is wrapped, because anything that throws rather
+    // than returning an error leaves the button spinning forever with nothing
+    // on screen to say why — a dead end with no way back but a reload. It is
+    // not hypothetical: a malformed NEXT_PUBLIC_SUPABASE_URL makes
+    // createBrowserClient throw on construction, and no signInWithPassword
+    // error is ever returned to handle.
+    try {
+      const supabase = createBrowserClient(
+        process.env.NEXT_PUBLIC_SUPABASE_URL!,
+        process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+      );
+      const { error: signInError } = await supabase.auth.signInWithPassword({ email, password });
 
-    if (signInError) {
-      // Deliberately not "no account with that email" — that would confirm
-      // which addresses exist to anyone who finds this page.
-      setError("Email or password is incorrect.");
+      if (signInError) {
+        // Deliberately not "no account with that email" — that would confirm
+        // which addresses exist to anyone who finds this page.
+        setError("Email or password is incorrect.");
+        setBusy(false);
+        return;
+      }
+      // Deliberately no setBusy(false) on the success path. The credentials are
+      // good and this screen is on its way out, but replace() + refresh() still
+      // have to round-trip before the next one paints. Clearing it here would
+      // put the button back to "Sign in", enabled, for that whole gap — which
+      // reads as "nothing happened, press it again", and pressing it again
+      // fires a second sign-in. It stays spinning until this component
+      // unmounts.
+      router.replace(safeNextPath(params.get("next")));
+      router.refresh();
+    } catch {
+      // Separate wording from the rejected-password case on purpose: this one
+      // is not about the credentials, and telling someone their password is
+      // wrong when the app never got to ask sends them off changing it.
+      setError("Couldn't reach the sign-in service. Check your connection and try again.");
       setBusy(false);
-      return;
     }
-    router.replace(safeNextPath(params.get("next")));
-    router.refresh();
   }
 
   return (
@@ -69,25 +91,29 @@ function LoginForm() {
       </h1>
       <p className="mt-2 text-sm text-ink-muted">Sign in to continue.</p>
 
-      <form onSubmit={onSubmit} className="mt-8 space-y-3">
+      {/* aria-busy marks the whole form, not just the button: while the request
+          is out, none of it is accepting input. */}
+      <form onSubmit={onSubmit} aria-busy={busy} className="mt-8 space-y-3">
         <input
           type="email"
           inputMode="email"
           autoComplete="username"
           required
+          disabled={busy}
           value={email}
           onChange={(e) => setEmail(e.target.value)}
           placeholder="Email"
-          className="min-h-[44px] w-full rounded-xl border border-surface-border bg-surface-card px-4 text-base text-ink-primary placeholder:text-ink-faint"
+          className="min-h-[44px] w-full rounded-xl border border-surface-border bg-surface-card px-4 text-base text-ink-primary placeholder:text-ink-faint disabled:opacity-50"
         />
         <input
           type="password"
           autoComplete="current-password"
           required
+          disabled={busy}
           value={password}
           onChange={(e) => setPassword(e.target.value)}
           placeholder="Password"
-          className="min-h-[44px] w-full rounded-xl border border-surface-border bg-surface-card px-4 text-base text-ink-primary placeholder:text-ink-faint"
+          className="min-h-[44px] w-full rounded-xl border border-surface-border bg-surface-card px-4 text-base text-ink-primary placeholder:text-ink-faint disabled:opacity-50"
         />
         {error && (
           <p role="alert" className="rounded-lg bg-danger-tint px-3 py-2 text-sm text-danger">
@@ -97,8 +123,9 @@ function LoginForm() {
         <button
           type="submit"
           disabled={busy}
-          className="min-h-[44px] w-full rounded-xl bg-brand text-base font-bold text-ink-inverse disabled:opacity-60"
+          className="flex min-h-[48px] w-full items-center justify-center gap-2 rounded-xl bg-brand text-base font-bold text-ink-inverse disabled:opacity-70"
         >
+          {busy && <Spinner />}
           {busy ? "Signing in…" : "Sign in"}
         </button>
       </form>

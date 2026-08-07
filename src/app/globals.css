@@ -39,15 +39,33 @@
   }
 }
 
+@layer components {
+  /* The one animation in the app that is information rather than decoration:
+     it is the only thing on screen saying a request is still in flight. */
+  .spinner-ring {
+    animation: spin 0.9s linear infinite;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
-  /* The dial's entrance is the only motion in the app, and it is the exact
-     kind (many small things scaling in at once) that triggers vestibular
-     symptoms. Honour the preference rather than merely shortening it. */
+  /* The dial's entrance is the exact kind of motion (many small things scaling
+     in at once) that triggers vestibular symptoms. Honour the preference
+     rather than merely shortening it. */
   *,
   *::before,
   *::after {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
+  }
+
+  /* Except the progress ring. Collapsed to 0.01ms and one iteration it stops
+     dead, and a frozen spinner does not read as "reduced motion" — it reads as
+     a hung app, which is worse than the motion it was avoiding. It keeps
+     turning, slower, which is a steady rotation rather than the kind of
+     movement the preference is actually about. */
+  .spinner-ring {
+    animation-duration: 1.6s !important;
+    animation-iteration-count: infinite !important;
   }
 }

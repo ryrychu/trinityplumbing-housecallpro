@@ -8,6 +8,8 @@ import { ScreenHeader } from "@/components/mobile/ScreenHeader";
 import { RunSheet } from "@/components/schedule/RunSheet";
 import { SectionHeader } from "@/components/ui/SectionHeader";
 import { IconButton } from "@/components/ui/IconButton";
+import { Skeleton, LoadingStatus } from "@/components/ui/Skeleton";
+import { RunSheetSkeleton } from "@/components/schedule/RunSheetSkeleton";
 
 interface ScheduleDay { dateKey: string; label: string; rows: TodayScheduleRow[] }
 interface SchedulePayload {
@@ -22,9 +24,8 @@ export default function SchedulePage() {
   const [dayIndex, setDayIndex] = useState<number | null>(null);
   const [tech, setTech] = useState<string>("all");
 
-  const { data, generatedAt, mirrorSyncedAt, staleAfterMinutes, loading, error, fromCache } = useAppData<SchedulePayload>(
-    `/api/app/schedule?offset=${offset}`
-  );
+  const { data, generatedAt, mirrorSyncedAt, staleAfterMinutes, loading, revalidating, error, fromCache } =
+    useAppData<SchedulePayload>(`/api/app/schedule?offset=${offset}`);
 
   const days = data?.days ?? [];
   const selected = dayIndex == null ? null : days[dayIndex];
@@ -81,8 +82,24 @@ export default function SchedulePage() {
           anything had loaded, and on a 502 showed the red error banner AND that
           empty state at the same time, one of which was necessarily false. An
           empty week and an unanswered request must never look alike. */}
-      {data && (
+      {loading && (
         <>
+          <LoadingStatus />
+          {/* The seven day buttons keep their real height so the run sheet
+              below them does not jump when the week lands. */}
+          <div className="mb-4 flex gap-1">
+            {Array.from({ length: 7 }, (_, i) => (
+              <Skeleton key={i} className="h-[60px] flex-1 rounded-lg" />
+            ))}
+          </div>
+          <Skeleton className="mb-4 h-11 w-full rounded-xl" />
+          <SectionHeader>This week</SectionHeader>
+          <RunSheetSkeleton rows={5} />
+        </>
+      )}
+
+      {data && (
+        <div className={revalidating ? "opacity-60 transition-opacity" : "transition-opacity"}>
           <div className="mb-4 flex gap-1">
             {days.map((d, i) => {
               const on = dayIndex === i;
@@ -151,10 +168,8 @@ export default function SchedulePage() {
             jobs={visible}
             empty={selected ? "No jobs scheduled this day." : "No jobs scheduled this week."}
           />
-        </>
+        </div>
       )}
-
-      {loading && !data && <p className="text-sm text-ink-faint">Loading…</p>}
     </main>
   );
 }

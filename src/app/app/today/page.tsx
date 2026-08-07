@@ -12,6 +12,8 @@ import { Panel } from "@/components/ui/Panel";
 import { Figure } from "@/components/ui/Figure";
 import { IconButton } from "@/components/ui/IconButton";
 import { ChevronRightIcon } from "@/components/ui/icons";
+import { Skeleton, LoadingStatus } from "@/components/ui/Skeleton";
+import { RunSheetSkeleton } from "@/components/schedule/RunSheetSkeleton";
 
 interface TodayPayload {
   dateLabel: string;
@@ -21,9 +23,59 @@ interface TodayPayload {
   jobs: TodayScheduleRow[];
 }
 
+/**
+ * The screen's own shape, not a generic spinner. Same panels, same heights, so
+ * nothing moves when the data lands.
+ */
+function TodaySkeleton() {
+  return (
+    <>
+      <LoadingStatus />
+      <section className="mb-5">
+        <SectionHeader>The day</SectionHeader>
+        <Panel className="flex justify-center px-3 py-4">
+          {/* A ring, not a disc. The dial it stands in for is mostly empty
+              space and hairlines, so a filled circle is far heavier than the
+              thing arriving — the placeholder would be the loudest object on
+              the screen and then vanish. */}
+          <div
+            aria-hidden
+            className="aspect-square w-full max-w-[340px] animate-pulse rounded-full border-[14px] border-surface-elevated"
+          />
+        </Panel>
+      </section>
+      <section className="mb-5">
+        <Panel>
+          <div className="grid grid-cols-3 divide-x divide-surface-divider">
+            {[0, 1, 2].map((i) => (
+              <div key={i} className="space-y-2 px-3 py-3">
+                <Skeleton className="h-6 w-8" />
+                <Skeleton className="h-2.5 w-16" />
+              </div>
+            ))}
+          </div>
+        </Panel>
+      </section>
+      <section>
+        <SectionHeader>Run sheet</SectionHeader>
+        <RunSheetSkeleton />
+      </section>
+    </>
+  );
+}
+
 export default function TodayPage() {
-  const { data, generatedAt, mirrorSyncedAt, staleAfterMinutes, loading, error, fromCache, refresh } =
-    useAppData<TodayPayload>("/api/app/today");
+  const {
+    data,
+    generatedAt,
+    mirrorSyncedAt,
+    staleAfterMinutes,
+    loading,
+    revalidating,
+    error,
+    fromCache,
+    refresh,
+  } = useAppData<TodayPayload>("/api/app/today");
 
   const jobs = data?.jobs ?? [];
 
@@ -48,8 +100,14 @@ export default function TodayPage() {
         </p>
       )}
 
+      {loading && <TodaySkeleton />}
+
+      {/* Held at reduced opacity while a refresh is in flight rather than
+          replaced by the skeleton again: throwing away readable content to
+          show its outline is a step backwards, and the swap makes the page
+          jump. */}
       {data && (
-        <>
+        <div className={revalidating ? "opacity-60 transition-opacity" : "transition-opacity"}>
           {/* The shape of the day comes first. A dispatcher's first question is
               not "how many" but "where" — whether the trucks are working one
               town or crossing the county twice. */}
@@ -115,10 +173,8 @@ export default function TodayPage() {
             </SectionHeader>
             <RunSheet jobs={jobs} />
           </section>
-        </>
+        </div>
       )}
-
-      {loading && !data && <p className="text-sm text-ink-faint">Loading…</p>}
     </main>
   );
 }

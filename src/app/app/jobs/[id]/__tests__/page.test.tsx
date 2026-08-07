@@ -1,6 +1,13 @@
-import { describe, it, expect, vi, afterEach } from "vitest";
+import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import JobPage from "../page";
+import { clearAppDataCache } from "@/components/mobile/useAppData";
+
+// useAppData holds payloads in module state so a reopened tab paints instantly.
+// That state outlives a render, so each case here starts from an empty cache --
+// otherwise a test asserting the first-load view inherits the previous test's
+// data and sees a fully populated screen.
+beforeEach(() => clearAppDataCache());
 
 // The job detail screen is one of the two a person ACTS on -- they tap the
 // number to call and the address to drive there. These tests exist because the

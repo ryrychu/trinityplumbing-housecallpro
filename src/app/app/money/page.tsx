@@ -9,6 +9,7 @@ import { EmptyState } from "@/components/mobile/EmptyState";
 import { Panel } from "@/components/ui/Panel";
 import { Figure } from "@/components/ui/Figure";
 import { ChevronRightIcon } from "@/components/ui/icons";
+import { Skeleton, LoadingStatus } from "@/components/ui/Skeleton";
 
 interface EstimateHit { id: string; customerId: string | null; customerName: string | null; amountCents: number | null; status: string | null }
 interface InvoiceHit { id: string; customerId: string | null; customerName: string | null; amountCents: number | null; status: string | null; dueDate: string | null; overdueDays: number | null }
@@ -81,7 +82,8 @@ function MoneyRow({
 
 export default function MoneyPage() {
   const [tab, setTab] = useState<"estimates" | "invoices">("estimates");
-  const { data, generatedAt, mirrorSyncedAt, staleAfterMinutes, loading, error, fromCache } = useAppData<MoneyPayload>("/api/app/money");
+  const { data, generatedAt, mirrorSyncedAt, staleAfterMinutes, loading, revalidating, error, fromCache } =
+    useAppData<MoneyPayload>("/api/app/money");
 
   return (
     <main className="px-3 pb-4 pt-3">
@@ -124,6 +126,34 @@ export default function MoneyPage() {
         ))}
       </div>
 
+      {loading && (
+        <>
+          <LoadingStatus />
+          <Panel className="mb-4 space-y-2 px-4 py-3.5">
+            <Skeleton className="h-8 w-40" />
+            <Skeleton className="h-2.5 w-24" />
+            <Skeleton className="h-3 w-28" />
+          </Panel>
+          <Panel className="overflow-hidden">
+            <ul className="divide-y divide-surface-divider">
+              {Array.from({ length: 6 }, (_, i) => (
+                <li key={i} className="flex min-h-[44px] items-baseline justify-between gap-3 px-3.5 py-2.5">
+                  <div className="min-w-0 flex-1 space-y-1.5">
+                    <Skeleton className="h-3.5 w-2/3" />
+                    <Skeleton className="h-3 w-1/3" />
+                  </div>
+                  <Skeleton className="h-3.5 w-14 shrink-0" />
+                </li>
+              ))}
+            </ul>
+          </Panel>
+        </>
+      )}
+
+      {/* Held at reduced opacity during a refresh rather than swapped back to
+          the skeleton — replacing readable numbers with their outline is a step
+          backwards, and the swap makes the page jump. */}
+      <div className={revalidating ? "opacity-60 transition-opacity" : "transition-opacity"}>
       {data && tab === "estimates" && (
         <>
           <Panel className="mb-4 px-4 py-3.5">
@@ -189,12 +219,12 @@ export default function MoneyPage() {
           )}
         </>
       )}
+      </div>
 
-      {/* Both segments above are gated on `data`, so without this the screen
-          renders nothing at all under the tab toggle while the first request is
-          in flight -- a blank panel that reads as "no estimates, no invoices"
-          rather than "still loading". Same line Today already carries. */}
-      {loading && !data && <p className="text-sm text-ink-faint">Loading…</p>}
+      {/* Both segments above are gated on `data`; the skeleton above covers the
+          first request, so the screen is never a blank panel under the toggle
+          that reads as "no estimates, no invoices" rather than "still
+          loading". */}
     </main>
   );
 }

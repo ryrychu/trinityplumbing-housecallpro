@@ -5,11 +5,13 @@ import Link from "next/link";
 import { useAppData } from "@/components/mobile/useAppData";
 import { FreshnessStamp } from "@/components/mobile/FreshnessStamp";
 import { DetailHeader } from "@/components/mobile/DetailHeader";
+import { BackLink } from "@/components/mobile/BackLink";
 import { StatusPill } from "@/components/mobile/StatusPill";
 import { ActionPair } from "@/components/mobile/ActionPair";
 import { SectionHeader } from "@/components/ui/SectionHeader";
 import { Panel } from "@/components/ui/Panel";
 import { Figure } from "@/components/ui/Figure";
+import { Skeleton, LoadingStatus } from "@/components/ui/Skeleton";
 import { formatPhone } from "@/lib/mobile/phone";
 
 interface CustomerDetail {
@@ -70,7 +72,47 @@ export default function CustomerPage({ params }: { params: { id: string } }) {
       </main>
     );
   }
-  if (!data) return <main className="px-3 pt-3 text-sm text-ink-faint">Loading…</main>;
+  if (!data) {
+    return (
+      <main className="px-3 pb-4 pt-3">
+        <LoadingStatus />
+        {/* The back control is real, not a placeholder — it is the one thing
+            that must work before the data arrives. */}
+        <header className="mb-4 flex items-start gap-1.5">
+          <BackLink fallback="/app/customers" />
+          <div className="min-w-0 flex-1 space-y-2">
+            <Skeleton className="h-6 w-2/3" />
+            <Skeleton className="h-3 w-32" />
+          </div>
+        </header>
+        <div className="mb-5 flex gap-2">
+          <Skeleton className="h-12 flex-1 rounded-xl" />
+          <Skeleton className="h-12 flex-1 rounded-xl" />
+        </div>
+        <Panel className="mb-5">
+          <div className="grid grid-cols-2 divide-x divide-surface-divider">
+            {[0, 1].map((i) => (
+              <div key={i} className="space-y-2 px-4 py-3.5">
+                <Skeleton className="h-6 w-16" />
+                <Skeleton className="h-2.5 w-14" />
+              </div>
+            ))}
+          </div>
+        </Panel>
+        <SectionHeader>History</SectionHeader>
+        <Panel className="overflow-hidden">
+          <ul className="divide-y divide-surface-divider">
+            {Array.from({ length: 5 }, (_, i) => (
+              <li key={i} className="space-y-1.5 px-3.5 py-2.5">
+                <Skeleton className="h-3.5 w-1/2" />
+                <Skeleton className="h-3 w-1/3" />
+              </li>
+            ))}
+          </ul>
+        </Panel>
+      </main>
+    );
+  }
 
   return (
     <main className="px-3 pb-4 pt-3">
