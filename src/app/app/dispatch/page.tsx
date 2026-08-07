@@ -2,6 +2,8 @@
 
 import { useState } from "react";
 import { EmptyState } from "@/components/mobile/EmptyState";
+import { ScreenHeader } from "@/components/mobile/ScreenHeader";
+import { SectionHeader } from "@/components/ui/SectionHeader";
 
 // Only the fields this screen renders. The API also returns per-job detail
 // (customer, address, technician, miles away) for the desktop table, but the
@@ -68,26 +70,24 @@ export default function DispatchPage() {
   }
 
   return (
-    <main className="px-3 pt-3">
-      <header className="mb-3">
-        <h1 className="text-xl font-bold tracking-tight">Dispatch</h1>
-        <p className="text-xs text-ink-faint">Are we already going near there?</p>
-      </header>
+    <main className="px-3 pb-4 pt-3">
+      <ScreenHeader title="Dispatch" subtitle="Are we already going near there?" />
 
-      <form onSubmit={search} className="mb-3 flex gap-2">
+      <form onSubmit={search} className="mb-4 flex gap-2">
         <input
           type="search"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
+          aria-label="Town or full address"
           placeholder="Town or full address"
           className="min-h-[44px] flex-1 rounded-full border border-surface-border bg-surface-card px-4 text-base text-ink-primary placeholder:text-ink-faint"
         />
         <button
           type="submit"
           disabled={busy}
-          className="min-h-[44px] rounded-full bg-brand px-5 text-sm font-bold text-ink-inverse disabled:opacity-60"
+          className="min-h-[44px] shrink-0 rounded-full bg-brand px-6 font-display text-base font-semibold uppercase tracking-wide text-ink-inverse disabled:opacity-60"
         >
-          {busy ? "…" : "Go"}
+          {busy ? "…" : "Find"}
         </button>
       </form>
 
@@ -106,23 +106,36 @@ export default function DispatchPage() {
         </EmptyState>
       )}
 
-      {days?.map((d, i) => (
-        <div
-          key={d.dateKey}
-          className={`mb-2 rounded-xl border px-3 py-2.5 ${
-            i === 0 ? "border-brand bg-brand-tint" : "border-surface-divider bg-surface-card"
-          }`}
-        >
-          {i === 0 && (
-            <div className="text-[10px] font-bold uppercase tracking-wider text-brand">Best day</div>
-          )}
-          <div className="mt-0.5 text-sm font-semibold">{dayLabel(d.dateKey)}</div>
-          <div className="mt-0.5 text-xs text-ink-muted">{d.summary}</div>
-          {d.detourMinutes != null && (
-            <div className="mt-0.5 text-xs text-ink-faint">≈ {d.detourMinutes} min detour</div>
-          )}
-        </div>
-      ))}
+      {days && days.length > 0 && (
+        <>
+          <SectionHeader meta={`${days.length} ${days.length === 1 ? "day" : "days"}`}>
+            Days with work nearby
+          </SectionHeader>
+          <ol className="space-y-2">
+            {days.map((d, i) => (
+              <li
+                key={d.dateKey}
+                className={`rounded-xl border px-3.5 py-3 ${
+                  i === 0 ? "border-brand bg-brand-tint" : "border-surface-divider bg-surface-card"
+                }`}
+              >
+                {i === 0 && (
+                  <div className="mb-1 font-display text-xs font-semibold uppercase tracking-wider text-brand">
+                    Best day
+                  </div>
+                )}
+                <div className="text-sm font-semibold text-ink-primary">{dayLabel(d.dateKey)}</div>
+                <div className="mt-0.5 text-xs text-ink-muted">{d.summary}</div>
+                {d.detourMinutes != null && (
+                  <div className="mt-1 font-mono text-xs text-ink-faint tnum">
+                    ≈ {d.detourMinutes} min detour
+                  </div>
+                )}
+              </li>
+            ))}
+          </ol>
+        </>
+      )}
     </main>
   );
 }

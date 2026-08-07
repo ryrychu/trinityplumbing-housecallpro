@@ -3,7 +3,10 @@
 import { useState } from "react";
 import { useAppData } from "@/components/mobile/useAppData";
 import { FreshnessStamp } from "@/components/mobile/FreshnessStamp";
+import { ScreenHeader } from "@/components/mobile/ScreenHeader";
 import { EmptyState } from "@/components/mobile/EmptyState";
+import { Panel } from "@/components/ui/Panel";
+import { Figure } from "@/components/ui/Figure";
 
 interface EstimateHit { id: string; customerName: string | null; amountCents: number | null; status: string | null }
 interface InvoiceHit { id: string; customerName: string | null; amountCents: number | null; status: string | null; dueDate: string | null; overdueDays: number | null }
@@ -19,21 +22,25 @@ const money = (cents: number | null) =>
     ? "—"
     : `$${(cents / 100).toLocaleString("en-US", { maximumFractionDigits: 0 })}`;
 
+const TABS = [
+  { key: "estimates", label: "Estimates" },
+  { key: "invoices", label: "Invoices" },
+] as const;
+
 export default function MoneyPage() {
   const [tab, setTab] = useState<"estimates" | "invoices">("estimates");
   const { data, generatedAt, mirrorSyncedAt, staleAfterMinutes, loading, error, fromCache } = useAppData<MoneyPayload>("/api/app/money");
 
   return (
-    <main className="px-3 pt-3">
-      <header className="mb-3">
-        <h1 className="text-xl font-bold tracking-tight">Money</h1>
+    <main className="px-3 pb-4 pt-3">
+      <ScreenHeader title="Money" subtitle="Outstanding on both sides">
         <FreshnessStamp
-            generatedAt={generatedAt}
-            fromCache={fromCache}
-            mirrorSyncedAt={mirrorSyncedAt}
-            staleAfterMinutes={staleAfterMinutes}
-          />
-      </header>
+          generatedAt={generatedAt}
+          fromCache={fromCache}
+          mirrorSyncedAt={mirrorSyncedAt}
+          staleAfterMinutes={staleAfterMinutes}
+        />
+      </ScreenHeader>
 
       {error && (
         <p role="alert" className="mb-3 rounded-lg bg-danger-tint px-3 py-2 text-sm text-danger">
@@ -41,80 +48,100 @@ export default function MoneyPage() {
         </p>
       )}
 
-      <div className="mb-3 flex rounded-xl border border-surface-divider bg-surface-card p-1">
-        {(["estimates", "invoices"] as const).map((key) => (
+      {/* Plain buttons with aria-pressed rather than role="tab": a real tablist
+          owes the reader tabpanels and arrow-key navigation, and half-built
+          ARIA reads worse to a screen reader than none. */}
+      <div className="mb-4 flex rounded-xl border border-surface-divider bg-surface-card p-1">
+        {TABS.map(({ key, label }) => (
           <button
             key={key}
+            type="button"
+            aria-pressed={tab === key}
             onClick={() => setTab(key)}
-            className={`min-h-[44px] flex-1 rounded-lg text-sm capitalize ${
-              tab === key ? "bg-brand font-bold text-ink-inverse" : "text-ink-muted"
+            className={`min-h-[40px] flex-1 rounded-lg font-display text-base font-semibold uppercase tracking-wide transition-colors ${
+              tab === key ? "bg-brand text-ink-inverse" : "text-ink-muted"
             }`}
           >
-            {key} {data ? (key === "estimates" ? data.estimates.length : data.invoices.length) : ""}
+            {label}
+            {data && (
+              <span className={`ml-1.5 font-mono text-xs ${tab === key ? "opacity-70" : "text-ink-faint"}`}>
+                {key === "estimates" ? data.estimates.length : data.invoices.length}
+              </span>
+            )}
           </button>
         ))}
       </div>
 
       {data && tab === "estimates" && (
         <>
-          <div className="mb-3 rounded-xl border border-surface-divider bg-surface-card p-3">
-            <div className="font-mono text-xl font-bold text-warn">
-              {money(data.estimatesTotalCents)}
-            </div>
-            <div className="text-xs text-ink-faint">
-              Awaiting a response · {data.estimates.length} estimates
-            </div>
-          </div>
+          <Panel className="mb-4 px-4 py-3.5">
+            <Figure
+              value={money(data.estimatesTotalCents)}
+              label="Awaiting a response"
+              tone="warn"
+              caption={`${data.estimates.length} ${data.estimates.length === 1 ? "estimate" : "estimates"}`}
+            />
+          </Panel>
           {data.estimates.length === 0 ? (
             <EmptyState>No estimates are waiting on a customer.</EmptyState>
           ) : (
-            data.estimates.map((e) => (
-              <div
-                key={e.id}
-                className="mb-2 rounded-xl border border-surface-divider border-l-2 border-l-warn bg-surface-card px-3 py-2.5"
-              >
-                <div className="flex justify-between text-sm">
-                  <span className="font-semibold">{e.customerName ?? "Unknown customer"}</span>
-                  <span className="font-mono text-ink-muted">{money(e.amountCents)}</span>
-                </div>
-                {e.status && <div className="mt-0.5 text-xs text-ink-faint">{e.status}</div>}
-              </div>
-            ))
+            <Panel className="overflow-hidden">
+              <ul className="divide-y divide-surface-divider">
+                {data.estimates.map((e) => (
+                  <li key={e.id} className="flex items-baseline justify-between gap-3 px-3.5 py-2.5">
+                    <div className="min-w-0">
+                      <div className="truncate text-sm font-semibold text-ink-primary">
+                        {e.customerName ?? "Unknown customer"}
+                      </div>
+                      {e.status && <div className="mt-0.5 text-xs text-ink-faint">{e.status}</div>}
+                    </div>
+                    <span className="shrink-0 font-mono text-sm text-ink-muted tnum">
+                      {money(e.amountCents)}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </Panel>
           )}
         </>
       )}
 
       {data && tab === "invoices" && (
         <>
-          <div className="mb-3 rounded-xl border border-surface-divider bg-surface-card p-3">
-            <div className="font-mono text-xl font-bold text-warn">
-              {money(data.invoicesTotalCents)}
-            </div>
-            <div className="text-xs text-ink-faint">Unpaid · {data.invoices.length} invoices</div>
-          </div>
+          <Panel className="mb-4 px-4 py-3.5">
+            <Figure
+              value={money(data.invoicesTotalCents)}
+              label="Unpaid"
+              tone="warn"
+              caption={`${data.invoices.length} ${data.invoices.length === 1 ? "invoice" : "invoices"}`}
+            />
+          </Panel>
           {data.invoices.length === 0 ? (
             <EmptyState>Nothing outstanding. Every invoice is settled.</EmptyState>
           ) : (
-            data.invoices.map((i) => (
-              <div
-                key={i.id}
-                className={`mb-2 rounded-xl border border-surface-divider border-l-2 bg-surface-card px-3 py-2.5 ${
-                  i.overdueDays ? "border-l-danger" : "border-l-warn"
-                }`}
-              >
-                <div className="flex justify-between text-sm">
-                  <span className="font-semibold">{i.customerName ?? "Unknown customer"}</span>
-                  <span className="font-mono text-ink-muted">{money(i.amountCents)}</span>
-                </div>
-                <div className="mt-0.5 text-xs">
-                  {i.overdueDays ? (
-                    <span className="text-danger">{i.overdueDays} days overdue</span>
-                  ) : (
-                    <span className="text-ink-faint">Due {i.dueDate ?? "—"}</span>
-                  )}
-                </div>
-              </div>
-            ))
+            <Panel className="overflow-hidden">
+              <ul className="divide-y divide-surface-divider">
+                {data.invoices.map((i) => (
+                  <li key={i.id} className="flex items-baseline justify-between gap-3 px-3.5 py-2.5">
+                    <div className="min-w-0">
+                      <div className="truncate text-sm font-semibold text-ink-primary">
+                        {i.customerName ?? "Unknown customer"}
+                      </div>
+                      <div className="mt-0.5 text-xs">
+                        {i.overdueDays ? (
+                          <span className="font-medium text-danger">{i.overdueDays} days overdue</span>
+                        ) : (
+                          <span className="text-ink-faint">Due {i.dueDate ?? "—"}</span>
+                        )}
+                      </div>
+                    </div>
+                    <span className="shrink-0 font-mono text-sm text-ink-muted tnum">
+                      {money(i.amountCents)}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </Panel>
           )}
         </>
       )}

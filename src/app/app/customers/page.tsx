@@ -4,6 +4,9 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { formatPhone } from "@/lib/mobile/phone";
 import { EmptyState } from "@/components/mobile/EmptyState";
+import { ScreenHeader } from "@/components/mobile/ScreenHeader";
+import { SectionHeader } from "@/components/ui/SectionHeader";
+import { Panel } from "@/components/ui/Panel";
 
 interface CustomerHit { id: string; name: string; phone: string | null; address: string | null }
 
@@ -74,16 +77,20 @@ export default function CustomersPage() {
   const list = hits ?? recent;
 
   return (
-    <main className="px-3 pt-3">
-      <h1 className="mb-3 text-xl font-bold tracking-tight">Customers</h1>
+    <main className="px-3 pb-4 pt-3">
+      {/* No subtitle: the field's placeholder and the empty state both already
+          say how to search, and a third copy of the same sentence in the header
+          was the screen telling you the same thing three times. */}
+      <ScreenHeader title="Customers" />
 
       <input
         type="search"
         inputMode="search"
         value={query}
         onChange={(e) => setQuery(e.target.value)}
+        aria-label="Search customers"
         placeholder="Name, phone or address"
-        className="mb-3 min-h-[44px] w-full rounded-full border border-surface-border bg-surface-card px-4 text-base text-ink-primary placeholder:text-ink-faint"
+        className="mb-4 min-h-[44px] w-full rounded-full border border-surface-border bg-surface-card px-4 text-base text-ink-primary placeholder:text-ink-faint"
       />
 
       {error && (
@@ -92,10 +99,10 @@ export default function CustomersPage() {
         </p>
       )}
 
-      {!hits && recent.length > 0 && (
-        <h2 className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-ink-faint">
-          Recently viewed
-        </h2>
+      {list.length > 0 && (
+        <SectionHeader meta={`${list.length}`}>
+          {hits ? "Results" : "Recently viewed"}
+        </SectionHeader>
       )}
 
       {list.length === 0 ? (
@@ -103,18 +110,23 @@ export default function CustomersPage() {
           {hits ? `No customer matches "${query}".` : "Search by name, phone or address."}
         </EmptyState>
       ) : (
-        list.map((c) => (
-          <Link
-            key={c.id}
-            href={`/app/customers/${c.id}`}
-            className="mb-2 block min-h-[44px] rounded-xl border border-surface-divider bg-surface-card px-3 py-2.5"
-          >
-            <div className="text-sm font-semibold">{c.name}</div>
-            <div className="mt-0.5 text-xs text-ink-muted">
-              {[formatPhone(c.phone), c.address].filter(Boolean).join(" · ")}
-            </div>
-          </Link>
-        ))
+        <Panel className="overflow-hidden">
+          <ul className="divide-y divide-surface-divider">
+            {list.map((c) => (
+              <li key={c.id}>
+                <Link
+                  href={`/app/customers/${c.id}`}
+                  className="block min-h-[44px] px-3.5 py-2.5 transition-colors hover:bg-surface-raised"
+                >
+                  <div className="truncate text-sm font-semibold text-ink-primary">{c.name}</div>
+                  <div className="mt-0.5 truncate text-xs text-ink-muted">
+                    {[formatPhone(c.phone), c.address].filter(Boolean).join(" · ")}
+                  </div>
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </Panel>
       )}
     </main>
   );

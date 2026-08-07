@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Card } from "../dashboard/components/Card";
+import { Panel } from "@/components/ui/Panel";
 
 interface NearbyJob {
   id: string;
@@ -80,7 +80,7 @@ export function NearbySearch() {
 
   return (
     <div className="space-y-6">
-      <Card className="p-5">
+      <Panel className="p-5">
         <form onSubmit={search}>
           <label htmlFor="q" className="block text-sm font-medium text-ink-primary">
             Where is the customer?
@@ -118,17 +118,17 @@ export function NearbySearch() {
             </button>
           </div>
         </form>
-      </Card>
+      </Panel>
 
       {error && (
-        <Card className="border-danger/50 p-5">
+        <Panel className="border-danger/50 p-5">
           <p className="text-sm text-danger">{error}</p>
-        </Card>
+        </Panel>
       )}
 
       {result && (
         <>
-          <Card className="p-5">
+          <Panel className="p-5">
             <p className="text-sm text-ink-muted">
               <span className="font-medium text-ink-primary">{result.location.label}</span>
               {result.location.via === "town" ? (
@@ -138,20 +138,20 @@ export function NearbySearch() {
               )}
               . Next {result.days} days, within {result.radiusMiles} miles.
             </p>
-          </Card>
+          </Panel>
 
           {result.matches.length === 0 ? (
-            <Card className="p-5">
+            <Panel className="p-5">
               <p className="text-sm text-ink-primary">Nothing scheduled near there yet.</p>
               <p className="mt-1 text-sm text-ink-faint">
                 No existing job within {result.radiusMiles} miles over the next {result.days} days,
                 so this one is a trip of its own — widen the radius to see how close the nearest
                 work gets.
               </p>
-            </Card>
+            </Panel>
           ) : (
             result.matches.map((day) => (
-              <Card key={day.dateKey} className="p-5">
+              <Panel key={day.dateKey} className="p-5">
                 <div className="flex flex-wrap items-baseline justify-between gap-2">
                   <h2 className="text-base font-semibold text-ink-primary">{dayLabel(day.dateKey)}</h2>
                   <span className="text-sm text-ink-faint">
@@ -176,7 +176,7 @@ export function NearbySearch() {
                     </li>
                   ))}
                 </ul>
-              </Card>
+              </Panel>
             ))
           )}
         </>

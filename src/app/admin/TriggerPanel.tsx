@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Card } from "../dashboard/components/Card";
+import { Panel } from "@/components/ui/Panel";
 
 type Action = "digest" | "week";
 
@@ -65,7 +65,7 @@ export function TriggerPanel() {
 
   return (
     <div className="space-y-6">
-      <Card className="p-5">
+      <Panel className="p-5">
         <label htmlFor="admin-token" className="block text-sm font-medium text-ink-primary">
           Admin token
         </label>
@@ -82,10 +82,10 @@ export function TriggerPanel() {
           placeholder="Paste the token"
           className="mt-3 w-full rounded-lg border border-surface-border bg-surface-raised px-3 py-2 font-mono text-sm text-ink-primary placeholder:text-ink-faint focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
         />
-      </Card>
+      </Panel>
 
       {ACTIONS.map((a) => (
-        <Card key={a.id} className="p-5">
+        <Panel key={a.id} className="p-5">
           <h2 className="text-base font-semibold text-ink-primary">{a.label}</h2>
           <p className="mt-1 text-sm text-ink-faint">{a.hint}</p>
           <div className="mt-4 flex flex-wrap gap-3">
@@ -106,11 +106,11 @@ export function TriggerPanel() {
               {busy === `${a.id}:true` ? "Sending…" : "Send to Slack"}
             </button>
           </div>
-        </Card>
+        </Panel>
       ))}
 
       {result && (
-        <Card
+        <Panel
           className={`p-5 ${
             result.kind === "error" ? "border-danger/50" : result.kind === "posted" ? "border-success/50" : ""
           }`}
@@ -134,7 +134,7 @@ export function TriggerPanel() {
               {result.text}
             </pre>
           )}
-        </Card>
+        </Panel>
       )}
     </div>
   );
