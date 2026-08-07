@@ -50,8 +50,23 @@ const TABS = [
   { href: "/app/dispatch", label: "Dispatch", icon: "dispatch", owns: ["/app/dispatch"] },
 ];
 
+// The login screen lives under /app/ too, so it inherits the layout that
+// renders this bar -- and a signed-out visitor was being shown five tabs that
+// all bounce straight back to the login they are already looking at. Nothing
+// leaked: these are static labels in the client bundle and middleware turns
+// every one of them away. It just made the sign-in screen look like the app,
+// on the one screen with nowhere to go.
+//
+// Hidden here rather than by lifting the tabs into a route-group layout that
+// excludes login, because login needs the REST of that layout: the viewport
+// block sets maximumScale 1, and without it iOS zooms the whole page the
+// moment someone focuses the email field.
+const CHROMELESS = ["/app/login"];
+
 export function TabBar() {
   const pathname = usePathname() ?? "";
+
+  if (CHROMELESS.includes(pathname)) return null;
 
   return (
     <nav

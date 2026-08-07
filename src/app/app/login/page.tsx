@@ -61,8 +61,13 @@ function LoginForm() {
 
   return (
     <main className="mx-auto flex min-h-[100dvh] max-w-sm flex-col justify-center px-6">
-      <h1 className="text-2xl font-bold tracking-tight">Trinity Ops</h1>
-      <p className="mt-1 text-sm text-ink-faint">Sign in to continue.</p>
+      {/* Same wordmark treatment as the dashboard header — this is the first
+          screen anyone sees, and it was the one place still setting the
+          product's name in the body face. */}
+      <h1 className="font-display text-3xl font-bold uppercase leading-none tracking-wide text-ink-primary">
+        Trinity <span className="text-ink-faint">Ops</span>
+      </h1>
+      <p className="mt-2 text-sm text-ink-muted">Sign in to continue.</p>
 
       <form onSubmit={onSubmit} className="mt-8 space-y-3">
         <input

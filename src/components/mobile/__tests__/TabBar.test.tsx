@@ -38,3 +38,28 @@ describe("TabBar", () => {
     expect(screen.getByRole("link", { name: /Customers/ })).not.toHaveAttribute("aria-current");
   });
 });
+
+describe("TabBar on the sign-in screen", () => {
+  // /app/login sits under the same layout as the tabs, so it inherited this
+  // bar: a signed-out visitor was shown five tabs that all bounce straight
+  // back to the login they were already looking at.
+  it("renders nothing on the login screen", () => {
+    pathnameMock.mockReturnValue("/app/login");
+    const { container } = render(<TabBar />);
+    expect(container).toBeEmptyDOMElement();
+  });
+
+  it("still renders on every other screen", () => {
+    pathnameMock.mockReturnValue("/app/today");
+    const { container } = render(<TabBar />);
+    expect(container).not.toBeEmptyDOMElement();
+  });
+
+  // A prefix match would hide the bar for anything merely starting with the
+  // login path, so the check is exact.
+  it("does not hide on a route that merely starts with the login path", () => {
+    pathnameMock.mockReturnValue("/app/login-help");
+    render(<TabBar />);
+    expect(screen.getByText("Today")).toBeInTheDocument();
+  });
+});
