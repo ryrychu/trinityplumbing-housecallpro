@@ -4,6 +4,11 @@ import { localDateKey } from "@/lib/notifications/schedule";
 
 export interface EstimateHit {
   id: string;
+  // Null when the estimate carries no customer, OR when that customer is not
+  // in the mirror. These rows link to /app/customers/<id>, and a link built
+  // from an id the customers table does not hold is a dead end — so an
+  // unresolvable customer renders as plain text rather than a link that 404s.
+  customerId: string | null;
   customerName: string | null;
   amountCents: number | null;
   status: string | null;
@@ -11,6 +16,8 @@ export interface EstimateHit {
 
 export interface InvoiceHit {
   id: string;
+  /** Null when unresolvable — see the note on EstimateHit.customerId. */
+  customerId: string | null;
   customerName: string | null;
   amountCents: number | null;
   status: string | null;
@@ -76,6 +83,7 @@ export async function listOpenEstimates(): Promise<EstimateHit[]> {
     .filter(isOpenEstimate)
     .map((e) => ({
       id: e.id,
+      customerId: e.customer_id && names.has(e.customer_id) ? e.customer_id : null,
       customerName: e.customer_id ? names.get(e.customer_id) ?? null : null,
       amountCents: e.amount_cents,
       status: e.status,
@@ -130,6 +138,7 @@ export async function listUnpaidInvoices(now: Date = new Date()): Promise<Invoic
       const days = dueUtcMs == null ? null : Math.round((todayUtcMs - dueUtcMs) / DAY_MS);
       return {
         id: i.id,
+        customerId: i.customer_id && names.has(i.customer_id) ? i.customer_id : null,
         customerName: i.customer_id ? names.get(i.customer_id) ?? null : null,
         amountCents: i.amount_cents,
         status: i.status,

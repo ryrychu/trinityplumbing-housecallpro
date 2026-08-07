@@ -4,7 +4,13 @@ import Link from "next/link";
 import type { JobDetail } from "@/lib/mobile/jobDetail";
 import { useAppData } from "@/components/mobile/useAppData";
 import { FreshnessStamp } from "@/components/mobile/FreshnessStamp";
+import { DetailHeader } from "@/components/mobile/DetailHeader";
 import { StatusPill } from "@/components/mobile/StatusPill";
+import { ActionPair } from "@/components/mobile/ActionPair";
+import { DetailRow } from "@/components/ui/DetailRow";
+import { SectionHeader } from "@/components/ui/SectionHeader";
+import { Panel } from "@/components/ui/Panel";
+import { ChevronRightIcon } from "@/components/ui/icons";
 
 const BUSINESS_TIME_ZONE = "America/New_York";
 
@@ -19,15 +25,6 @@ function timeRange(startIso: string | null, endIso: string | null): string {
   const start = new Date(startIso).toLocaleTimeString("en-US", opts);
   if (!endIso) return start;
   return `${start} – ${new Date(endIso).toLocaleTimeString("en-US", opts)}`;
-}
-
-function Row({ k, v }: { k: string; v: React.ReactNode }) {
-  return (
-    <div className="flex justify-between border-b border-surface-divider py-2 text-sm">
-      <span className="text-ink-faint">{k}</span>
-      <span className="text-right font-medium">{v}</span>
-    </div>
-  );
 }
 
 export default function JobPage({ params }: { params: { id: string } }) {
@@ -52,82 +49,106 @@ export default function JobPage({ params }: { params: { id: string } }) {
   if (!job) return <main className="px-3 pt-3 text-sm text-ink-faint">Loading…</main>;
 
   return (
-    <main className="px-3 pt-3">
-      <header className="mb-3 flex items-center gap-2">
-        <Link href="/app/today" aria-label="Back" className="min-h-[44px] px-1 text-xl text-brand">
-          ‹
-        </Link>
-        <div className="flex-1">
-          <h1 className="text-lg font-bold tracking-tight">
-            {job.customerName ?? "Unknown customer"}
-          </h1>
-          <p className="text-xs text-ink-faint">{timeRange(job.scheduledStart, job.scheduledEnd)}</p>
-          <FreshnessStamp
-            generatedAt={generatedAt}
-            fromCache={fromCache}
-            mirrorSyncedAt={mirrorSyncedAt}
-            staleAfterMinutes={staleAfterMinutes}
-          />
-        </div>
-        <StatusPill status={job.status} />
-      </header>
+    <main className="px-3 pb-4 pt-3">
+      <DetailHeader
+        title={job.customerName ?? "Unknown customer"}
+        subtitle={timeRange(job.scheduledStart, job.scheduledEnd)}
+        backTo="/app/today"
+        trailing={<StatusPill status={job.status} />}
+      >
+        <FreshnessStamp
+          generatedAt={generatedAt}
+          fromCache={fromCache}
+          mirrorSyncedAt={mirrorSyncedAt}
+          staleAfterMinutes={staleAfterMinutes}
+        />
+      </DetailHeader>
 
-      {/* tel: and maps: are plain links — no API call, and they work offline. */}
-      <div className="mb-4 flex gap-2">
-        <a
-          href={job.customerPhone ? `tel:${job.customerPhone}` : undefined}
-          aria-disabled={!job.customerPhone}
-          className={`min-h-[44px] flex-1 rounded-xl py-3 text-center text-sm font-bold ${
-            job.customerPhone ? "bg-brand text-ink-inverse" : "bg-surface-elevated text-ink-faint"
-          }`}
-        >
-          📞 Call
-        </a>
-        <a
-          href={job.address ? `maps:?q=${encodeURIComponent(job.address)}` : undefined}
-          aria-disabled={!job.address}
-          className="min-h-[44px] flex-1 rounded-xl border border-surface-border py-3 text-center text-sm font-bold"
-        >
-          🧭 Directions
-        </a>
-      </div>
+      <ActionPair phone={job.customerPhone} address={job.address} />
 
-      <Row k="Address" v={job.address ?? "—"} />
-      <Row k="Technician" v={job.technicianName ?? "Unassigned"} />
-      <Row k="Service" v={job.service ?? "—"} />
-      {/* Booked, not paid — the mirror has no line items. Labelled so nobody
-          reads it as revenue collected. */}
-      <Row k="Booked amount" v={<span className="text-success">{money(job.amountCents)}</span>} />
-      <Row
-        k="Invoice"
-        v={
-          job.invoice ? (
-            <span className={job.invoice.status === "paid" ? "text-success" : "text-warn"}>
-              {money(job.invoice.amountCents)} · {job.invoice.status}
-            </span>
-          ) : (
-            "—"
-          )
-        }
-      />
+      <section className="mb-5">
+        <SectionHeader>Job</SectionHeader>
+        <Panel className="overflow-hidden">
+          <dl>
+            <DetailRow k="Address" v={job.address ?? "—"} />
+            <DetailRow k="Technician" v={job.technicianName ?? "Unassigned"} />
+            <DetailRow k="Service" v={job.service ?? "—"} />
+            {/* Booked, not paid — the mirror has no line items. Labelled so
+                nobody reads it as revenue collected. */}
+            <DetailRow
+              k="Booked amount"
+              v={<span className="text-success">{money(job.amountCents)}</span>}
+            />
+            <DetailRow
+              k="Invoice"
+              v={
+                job.invoice ? (
+                  <span className={job.invoice.status === "paid" ? "text-success" : "text-warn"}>
+                    {money(job.invoice.amountCents)} · {job.invoice.status}
+                  </span>
+                ) : (
+                  "—"
+                )
+              }
+              last
+            />
+          </dl>
+        </Panel>
+      </section>
 
-      <h2 className="mb-2 mt-5 text-[10px] font-semibold uppercase tracking-wider text-ink-faint">
-        Notes
-      </h2>
-      {job.notes.length === 0 ? (
-        <p className="text-sm text-ink-faint">No notes on this job.</p>
-      ) : (
-        job.notes.map((n, i) => (
-          <div key={i} className="mb-2 rounded-xl border border-surface-divider bg-surface-card p-3">
-            <p className="text-sm text-ink-muted">{n.content}</p>
-            {(n.author || n.createdAt) && (
-              <p className="mt-1 text-[10px] text-ink-faint">
-                {[n.author, n.createdAt?.slice(0, 10)].filter(Boolean).join(" · ")}
-              </p>
-            )}
-          </div>
-        ))
+      {/* getJobDetail() has always returned customerId and no screen ever read
+          it, so a job was a dead end: you could reach it from a customer but
+          never walk back the other way to their number or their history. */}
+      {job.customerId && (
+        <section className="mb-5">
+          <SectionHeader>Customer</SectionHeader>
+          <Panel className="overflow-hidden">
+            <Link
+              href={`/app/customers/${job.customerId}`}
+              className="flex min-h-[44px] items-center gap-3 px-3.5 py-3 transition-colors hover:bg-surface-raised"
+            >
+              {/* Deliberately not the customer's name again — the heading at
+                  the top of this screen is already their name, and repeating
+                  it here says nothing about where the row goes. */}
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-sm font-semibold text-ink-primary">
+                  Customer record
+                </div>
+                <div className="mt-0.5 text-xs text-ink-faint">
+                  Every job and the lifetime total
+                </div>
+              </div>
+              <ChevronRightIcon className="h-4 w-4 shrink-0 text-ink-faint" />
+            </Link>
+          </Panel>
+        </section>
       )}
+
+      <section>
+        <SectionHeader meta={job.notes.length > 0 ? `${job.notes.length}` : undefined}>
+          Notes
+        </SectionHeader>
+        {job.notes.length === 0 ? (
+          <Panel className="px-4 py-6 text-center text-sm text-ink-faint">
+            No notes on this job.
+          </Panel>
+        ) : (
+          <Panel className="overflow-hidden">
+            <ul className="divide-y divide-surface-divider">
+              {job.notes.map((n, i) => (
+                <li key={i} className="px-3.5 py-3">
+                  <p className="whitespace-pre-wrap text-sm text-ink-muted">{n.content}</p>
+                  {(n.author || n.createdAt) && (
+                    <p className="mt-1.5 text-[11px] text-ink-faint">
+                      {[n.author, n.createdAt?.slice(0, 10)].filter(Boolean).join(" · ")}
+                    </p>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </Panel>
+        )}
+      </section>
     </main>
   );
 }

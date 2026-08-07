@@ -89,8 +89,12 @@ the emoji action buttons become the same drawn icons the tab bar uses. Call and
 Directions stay plain `tel:` / `maps:` anchors — no API call, and they work
 offline, which is the whole reason they are anchors today.
 
-A shared `DetailHeader` wraps `ScreenHeader` with the back control, so the two
-screens cannot drift apart again.
+A shared `DetailHeader` carries the back control, so the two screens cannot
+drift apart again. It is *not* a wrapper around `ScreenHeader`: a tab title is a
+UI label and wears the condensed display face in caps, while a detail title is a
+person's name out of the database. Uppercasing content mangles it — "McDonald"
+is not "MCDONALD" — so names stay in the body face and the display face stays on
+labels.
 
 ### Money rows
 

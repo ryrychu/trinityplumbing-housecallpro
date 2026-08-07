@@ -70,7 +70,9 @@ export function DashboardView({
               height and the dial floats in a column of empty card. */}
           <Panel className="min-w-0 px-3 py-4 lg:col-span-2 lg:self-start">
             {jobs.length > 0 ? (
-              <DispatchDial jobs={jobs} />
+              // Read-only here for the same reason the run sheet's rows are
+              // static: the job screen lives in the installable app.
+              <DispatchDial jobs={jobs} linkJobs={false} />
             ) : (
               <p className="px-4 py-10 text-center text-sm text-ink-faint">
                 No jobs scheduled today.

@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import type { TodayScheduleRow } from "@/lib/dashboard/queries";
 import { useAppData } from "@/components/mobile/useAppData";
 import { FreshnessStamp } from "@/components/mobile/FreshnessStamp";
@@ -10,6 +11,7 @@ import { SectionHeader } from "@/components/ui/SectionHeader";
 import { Panel } from "@/components/ui/Panel";
 import { Figure } from "@/components/ui/Figure";
 import { IconButton } from "@/components/ui/IconButton";
+import { ChevronRightIcon } from "@/components/ui/icons";
 
 interface TodayPayload {
   dateLabel: string;
@@ -81,14 +83,24 @@ export default function TodayPage() {
                     tone={data.emergencyCalls > 0 ? "danger" : "default"}
                   />
                 </div>
-                <div className="px-3 py-3">
+                {/* The only one of the three with somewhere to go. Running and
+                    Emergency are both answered by the run sheet directly below,
+                    with their status pills on the rows; the unpaid invoices are
+                    on another tab and are the ones you act on. Making all three
+                    tappable for symmetry would promise two destinations that
+                    do not exist. */}
+                <Link
+                  href="/app/money"
+                  className="flex items-center justify-between gap-1 px-3 py-3 transition-colors hover:bg-surface-raised"
+                >
                   <Figure
                     value={data.pendingInvoices}
                     label="Unpaid"
                     size="compact"
                     tone={data.pendingInvoices > 0 ? "warn" : "default"}
                   />
-                </div>
+                  <ChevronRightIcon className="h-3.5 w-3.5 shrink-0 self-start text-ink-faint" />
+                </Link>
               </div>
             </Panel>
           </section>

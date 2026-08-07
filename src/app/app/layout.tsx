@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { TabBar } from "@/components/mobile/TabBar";
 import { ServiceWorkerRegistrar } from "@/components/mobile/ServiceWorkerRegistrar";
+import { NavigationTracker } from "@/components/mobile/NavigationTracker";
 
 export const metadata: Metadata = {
   title: "Trinity Ops",
@@ -30,6 +31,9 @@ export default function MobileLayout({ children }: { children: React.ReactNode }
     <div className="flex min-h-[100dvh] flex-col bg-surface-page text-ink-primary">
       <div className="flex-1 pb-2">{children}</div>
       <TabBar />
+      {/* Counts screen changes so a detail screen's back control knows whether
+          there is anything behind it. Renders nothing. */}
+      <NavigationTracker />
       <ServiceWorkerRegistrar />
     </div>
   );

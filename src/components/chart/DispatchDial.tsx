@@ -1,8 +1,10 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import type { TodayScheduleRow } from "@/lib/dashboard/queries";
 import { buildDial, type DialMark } from "@/lib/dial/geometry";
+import { ChevronRightIcon } from "@/components/ui/icons";
 
 // Geometry in viewBox units. The box is square and the plot is inset far
 // enough for the compass letters to sit outside the outer ring.
@@ -49,7 +51,42 @@ function markLabel(m: DialMark): string {
  * not decoration: red and the mark grey sit at CVD ΔE 6.4, inside the band that
  * is only legal with a second, non-colour channel carrying the same meaning.
  */
-export function DispatchDial({ jobs }: { jobs: TodayScheduleRow[] }) {
+function ReadoutBody({ active, href }: { active: DialMark; href: string | null }) {
+  const body = (
+    <>
+      <span className="font-mono text-ink-primary tnum">{clock(active.job.scheduledStart)}</span>{" "}
+      <span className="font-semibold text-ink-primary">
+        {active.job.customerName ?? "Unknown customer"}
+      </span>
+      <br />
+      <span className="text-ink-faint">
+        {active.job.zone} · {active.miles} mi {active.compass}
+        {active.job.driveMinutes != null && ` · ${active.job.driveMinutes} min drive`}
+      </span>
+    </>
+  );
+
+  if (!href) return <span>{body}</span>;
+
+  return (
+    <Link
+      href={href}
+      className="inline-flex min-h-[44px] items-center justify-center gap-1.5 rounded-lg px-2 text-left transition-colors hover:bg-surface-raised"
+    >
+      <span>{body}</span>
+      <ChevronRightIcon className="h-3.5 w-3.5 shrink-0 text-brand" />
+    </Link>
+  );
+}
+
+export function DispatchDial({
+  jobs,
+  linkJobs = true,
+}: {
+  jobs: TodayScheduleRow[];
+  /** Only the installable app has a job screen to open. */
+  linkJobs?: boolean;
+}) {
   const [activeId, setActiveId] = useState<string | null>(null);
   const dial = buildDial(jobs);
   const active = dial.marks.find((m) => m.id === activeId) ?? null;
@@ -272,19 +309,12 @@ export function DispatchDial({ jobs }: { jobs: TodayScheduleRow[] }) {
         className="mt-2 min-h-[2.5rem] text-center text-xs leading-snug text-ink-muted"
       >
         {active ? (
-          <span>
-            <span className="font-mono text-ink-primary tnum">
-              {clock(active.job.scheduledStart)}
-            </span>{" "}
-            <span className="font-semibold text-ink-primary">
-              {active.job.customerName ?? "Unknown customer"}
-            </span>
-            <br />
-            <span className="text-ink-faint">
-              {active.job.zone} · {active.miles} mi {active.compass}
-              {active.job.driveMinutes != null && ` · ${active.job.driveMinutes} min drive`}
-            </span>
-          </span>
+          // Two steps on purpose. A phone has no hover, so one tap cannot both
+          // reveal which job a mark is AND open it without guessing which the
+          // reader meant. The first tap fills this readout; the readout is the
+          // link. When the dial is read-only -- the desktop dashboard has no
+          // job screen to open -- it stays plain text.
+          <ReadoutBody active={active} href={linkJobs ? `/app/jobs/${active.job.id}` : null} />
         ) : (
           <span>
             {summary}

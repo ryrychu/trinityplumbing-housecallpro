@@ -204,3 +204,52 @@ describe("listUnpaidInvoices", () => {
     ]);
   });
 });
+
+// The Money rows link to /app/customers/<id>, so the id has to reach the
+// payload -- and it must be null rather than a bad id when the customer is not
+// in the mirror, or the row becomes a link that 404s.
+describe("customerId on money rows", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("carries the customer id on an estimate whose customer resolves", async () => {
+    mockRows({
+      customers: CUSTOMERS,
+      estimates: [
+        { id: "csr_1", customer_id: "cus_1", status: "scheduled", amount_cents: 1, raw: { options: [{ approval_status: null }] } },
+      ],
+    });
+    const [estimate] = await listOpenEstimates();
+    expect(estimate.customerId).toBe("cus_1");
+  });
+
+  it("nulls the id when the estimate's customer is not in the mirror", async () => {
+    mockRows({
+      customers: CUSTOMERS,
+      estimates: [
+        { id: "csr_1", customer_id: "cus_missing", status: "scheduled", amount_cents: 1, raw: { options: [{ approval_status: null }] } },
+      ],
+    });
+    const [estimate] = await listOpenEstimates();
+    expect(estimate.customerId).toBeNull();
+    // The name is null too, so the row still renders -- just without a link.
+    expect(estimate.customerName).toBeNull();
+  });
+
+  it("carries the customer id on an invoice whose customer resolves", async () => {
+    mockRows({
+      customers: CUSTOMERS,
+      invoices: [{ id: "inv_1", customer_id: "cus_1", status: "open", amount_cents: 1, due_date: null }],
+    });
+    const [invoice] = await listUnpaidInvoices(new Date("2026-08-06T12:00:00Z"));
+    expect(invoice.customerId).toBe("cus_1");
+  });
+
+  it("nulls the id when the invoice carries no customer at all", async () => {
+    mockRows({
+      customers: CUSTOMERS,
+      invoices: [{ id: "inv_1", customer_id: null, status: "open", amount_cents: 1, due_date: null }],
+    });
+    const [invoice] = await listUnpaidInvoices(new Date("2026-08-06T12:00:00Z"));
+    expect(invoice.customerId).toBeNull();
+  });
+});

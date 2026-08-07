@@ -4,7 +4,12 @@ import { useEffect } from "react";
 import Link from "next/link";
 import { useAppData } from "@/components/mobile/useAppData";
 import { FreshnessStamp } from "@/components/mobile/FreshnessStamp";
+import { DetailHeader } from "@/components/mobile/DetailHeader";
 import { StatusPill } from "@/components/mobile/StatusPill";
+import { ActionPair } from "@/components/mobile/ActionPair";
+import { SectionHeader } from "@/components/ui/SectionHeader";
+import { Panel } from "@/components/ui/Panel";
+import { Figure } from "@/components/ui/Figure";
 import { formatPhone } from "@/lib/mobile/phone";
 
 interface CustomerDetail {
@@ -68,76 +73,85 @@ export default function CustomerPage({ params }: { params: { id: string } }) {
   if (!data) return <main className="px-3 pt-3 text-sm text-ink-faint">Loading…</main>;
 
   return (
-    <main className="px-3 pt-3">
-      <header className="mb-3 flex items-center gap-2">
-        <Link href="/app/customers" aria-label="Back" className="min-h-[44px] px-1 text-xl text-brand">
-          ‹
-        </Link>
-        <div>
-          <h1 className="text-lg font-bold tracking-tight">{data.name}</h1>
-          {data.company && <p className="text-xs text-ink-faint">{data.company}</p>}
-          <FreshnessStamp
-            generatedAt={generatedAt}
-            fromCache={fromCache}
-            mirrorSyncedAt={mirrorSyncedAt}
-            staleAfterMinutes={staleAfterMinutes}
-          />
-        </div>
-      </header>
+    <main className="px-3 pb-4 pt-3">
+      <DetailHeader
+        title={data.name}
+        subtitle={data.company ?? formatPhone(data.phone) ?? undefined}
+        backTo="/app/customers"
+      >
+        <FreshnessStamp
+          generatedAt={generatedAt}
+          fromCache={fromCache}
+          mirrorSyncedAt={mirrorSyncedAt}
+          staleAfterMinutes={staleAfterMinutes}
+        />
+      </DetailHeader>
 
-      <div className="mb-4 flex gap-2">
-        <a
-          href={data.phone ? `tel:${data.phone}` : undefined}
-          className={`min-h-[44px] flex-1 rounded-xl py-3 text-center text-sm font-bold ${
-            data.phone ? "bg-brand text-ink-inverse" : "bg-surface-elevated text-ink-faint"
-          }`}
-        >
-          📞 {formatPhone(data.phone) ?? "No number"}
-        </a>
-        <a
-          href={data.address ? `maps:?q=${encodeURIComponent(data.address)}` : undefined}
-          className="min-h-[44px] rounded-xl border border-surface-border px-4 py-3 text-center text-sm font-bold"
-        >
-          🧭
-        </a>
-      </div>
+      <ActionPair phone={data.phone} address={data.address} />
 
-      <div className="mb-4 flex gap-2">
-        <div className="flex-1 rounded-xl border border-surface-divider bg-surface-card p-3 text-center">
-          <div className="font-mono text-lg font-bold">{data.jobs.length}</div>
-          <div className="text-[10px] uppercase text-ink-faint">Jobs</div>
-        </div>
-        <div className="flex-1 rounded-xl border border-surface-divider bg-surface-card p-3 text-center">
-          <div className="font-mono text-lg font-bold text-success">{money(data.lifetimeCents)}</div>
-          <div className="text-[10px] uppercase text-ink-faint">Lifetime</div>
-        </div>
-      </div>
-
-      <h2 className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-ink-faint">
-        History
-      </h2>
-      {data.jobs.map((j) => (
-        <Link
-          key={j.id}
-          href={`/app/jobs/${j.id}`}
-          className="mb-2 block min-h-[44px] rounded-xl border border-surface-divider bg-surface-card px-3 py-2.5"
-        >
-          <div className="flex justify-between text-sm">
-            <span className="font-medium">{j.service ?? "Job"}</span>
-            <span className="text-ink-muted">
-              {j.amountCents == null ? "" : money(j.amountCents)}
-            </span>
+      <section className="mb-5">
+        <Panel>
+          <div className="grid grid-cols-2 divide-x divide-surface-divider">
+            <div className="px-4 py-3.5">
+              <Figure value={data.jobs.length} label="Jobs" size="compact" />
+            </div>
+            <div className="px-4 py-3.5">
+              <Figure
+                value={money(data.lifetimeCents)}
+                label="Lifetime"
+                size="compact"
+                tone="success"
+              />
+            </div>
           </div>
-          {/* The status is a scheduleStatus() label now, so it renders through
-              the same pill as every other job surface rather than as bare text
-              -- one job must not look like two different things depending on
-              which screen you reached it from. */}
-          <div className="mt-0.5 flex items-center gap-2 text-xs text-ink-faint">
-            {j.scheduledStart && <span>{j.scheduledStart.slice(0, 10)}</span>}
-            <StatusPill status={j.status} />
-          </div>
-        </Link>
-      ))}
+        </Panel>
+      </section>
+
+      <section>
+        <SectionHeader meta={data.jobs.length > 0 ? `${data.jobs.length}` : undefined}>
+          History
+        </SectionHeader>
+        {data.jobs.length === 0 ? (
+          <Panel className="px-4 py-6 text-center text-sm text-ink-faint">
+            No jobs on record for this customer.
+          </Panel>
+        ) : (
+          <Panel className="overflow-hidden">
+            <ul className="divide-y divide-surface-divider">
+              {data.jobs.map((j) => (
+                <li key={j.id}>
+                  <Link
+                    href={`/app/jobs/${j.id}`}
+                    className="block min-h-[44px] px-3.5 py-2.5 transition-colors hover:bg-surface-raised"
+                  >
+                    <div className="flex items-baseline justify-between gap-3">
+                      <span className="min-w-0 truncate text-sm font-medium text-ink-primary">
+                        {j.service ?? "Job"}
+                      </span>
+                      <span className="shrink-0 font-mono text-xs text-ink-muted tnum">
+                        {j.amountCents == null ? "" : money(j.amountCents)}
+                      </span>
+                    </div>
+                    {/* The status is a scheduleStatus() label now, so it renders
+                        through the same pill as every other job surface rather
+                        than as bare text -- one job must not look like two
+                        different things depending on which screen you reached
+                        it from. */}
+                    <div className="mt-1 flex items-center gap-2">
+                      {j.scheduledStart && (
+                        <span className="font-mono text-[11px] text-ink-faint tnum">
+                          {j.scheduledStart.slice(0, 10)}
+                        </span>
+                      )}
+                      <StatusPill status={j.status} />
+                    </div>
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          </Panel>
+        )}
+      </section>
     </main>
   );
 }
