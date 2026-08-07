@@ -73,7 +73,15 @@ export function TabBar() {
       // pb-[env(safe-area-inset-bottom)] keeps the tabs above the iPhone home
       // indicator; without it the bottom row is half-swallowed on every modern
       // iPhone. It only resolves because layout.tsx sets viewportFit: "cover".
-      className="sticky bottom-0 z-10 flex border-t border-surface-divider bg-surface-raised pb-[env(safe-area-inset-bottom)]"
+      //
+      // No `sticky bottom-0` any more, and its removal is the fix rather than a
+      // simplification: it never worked. globals.css sets overflow-x: hidden on
+      // body, which per spec makes the other axis compute to auto, so body was
+      // the scroll container and this bar's sticky range was zero — on a long
+      // screen it sat at the end of the list. The shell in layout.tsx now owns
+      // the scrolling and this is a plain flex sibling of it, so it is always
+      // on screen by construction. Re-adding sticky here would do nothing.
+      className="shrink-0 flex border-t border-surface-divider bg-surface-raised pb-[env(safe-area-inset-bottom)]"
     >
       {TABS.map((tab) => {
         // A plain startsWith(p) would light Customers for "/app/customers-archive"

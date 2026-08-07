@@ -82,7 +82,11 @@ function LoginForm() {
   }
 
   return (
-    <main className="mx-auto flex min-h-[100dvh] max-w-sm flex-col justify-center px-6">
+    // min-h-full, not min-h-[100dvh]: the shell is already exactly the
+    // viewport, so asking for a second full viewport inside it overflows by
+    // the scroll area's own padding and leaves the sign-in form scrollable by
+    // a few pixels for no reason.
+    <main className="mx-auto flex min-h-full max-w-sm flex-col justify-center px-6">
       {/* Same wordmark treatment as the dashboard header — this is the first
           screen anyone sees, and it was the one place still setting the
           product's name in the body face. */}

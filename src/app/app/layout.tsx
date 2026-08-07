@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import { TabBar } from "@/components/mobile/TabBar";
 import { ServiceWorkerRegistrar } from "@/components/mobile/ServiceWorkerRegistrar";
 import { NavigationTracker } from "@/components/mobile/NavigationTracker";
+import { AppScrollArea } from "@/components/mobile/AppScrollArea";
 
 export const metadata: Metadata = {
   title: "Trinity Ops",
@@ -28,8 +29,12 @@ export const viewport: Viewport = {
 
 export default function MobileLayout({ children }: { children: React.ReactNode }) {
   return (
-    <div className="flex min-h-[100dvh] flex-col bg-surface-page text-ink-primary">
-      <div className="flex-1 pb-2">{children}</div>
+    // h-[100dvh], not min-h: the shell is exactly the viewport, and the screen
+    // inside it scrolls. With min-h the shell grew with the content and took
+    // the tab bar down the page with it. dvh rather than vh so the height
+    // tracks iOS Safari's URL bar instead of sitting under it.
+    <div className="flex h-[100dvh] flex-col overflow-hidden bg-surface-page text-ink-primary">
+      <AppScrollArea>{children}</AppScrollArea>
       <TabBar />
       {/* Counts screen changes so a detail screen's back control knows whether
           there is anything behind it. Renders nothing. */}
