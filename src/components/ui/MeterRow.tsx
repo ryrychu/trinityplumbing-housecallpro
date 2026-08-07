@@ -22,7 +22,13 @@ export function MeterRow({
   return (
     <li className="px-3.5 py-2.5">
       <div className="flex items-baseline justify-between gap-3 text-sm">
-        <span className={muted ? "italic text-ink-faint" : "font-medium text-ink-primary"}>
+        {/* Technician names come from Housecall Pro and are not length-capped,
+            so this truncates rather than shoving the job count off the row. */}
+        <span
+          className={`min-w-0 truncate ${
+            muted ? "italic text-ink-faint" : "font-medium text-ink-primary"
+          }`}
+        >
           {name}
         </span>
         <span className="shrink-0 whitespace-nowrap font-mono text-xs text-ink-muted tnum">

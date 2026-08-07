@@ -68,7 +68,7 @@ export function DashboardView({
         <div className="grid gap-4 lg:grid-cols-5">
           {/* self-start, or the grid stretches this panel to the run sheet's
               height and the dial floats in a column of empty card. */}
-          <Panel className="px-3 py-4 lg:col-span-2 lg:self-start">
+          <Panel className="min-w-0 px-3 py-4 lg:col-span-2 lg:self-start">
             {jobs.length > 0 ? (
               <DispatchDial jobs={jobs} />
             ) : (
@@ -78,7 +78,13 @@ export function DashboardView({
             )}
           </Panel>
 
-          <div className="lg:col-span-3">
+          {/* min-w-0, for the same reason the run sheet's customer name needs
+              it: a grid item's automatic minimum size is its content, so one
+              long service-and-technician line stretches this column past its
+              track and squeezes the dial. body{overflow-x:hidden} then hides
+              the evidence, so it reads as "the panel is cut off" rather than
+              as an overflow. */}
+          <div className="min-w-0 lg:col-span-3">
             <Panel className="mb-4">
               <div className="grid grid-cols-3 divide-x divide-surface-divider">
                 <div className="px-4 py-3.5">
@@ -129,7 +135,7 @@ export function DashboardView({
       </section>
 
       <div className="grid gap-9 lg:grid-cols-2">
-        <section>
+        <section className="min-w-0">
           <SectionHeader>Revenue</SectionHeader>
           <Panel>
             <div className="grid grid-cols-2 divide-x divide-surface-divider">
@@ -153,7 +159,7 @@ export function DashboardView({
           </Panel>
         </section>
 
-        <section>
+        <section className="min-w-0">
           <SectionHeader>Crew</SectionHeader>
           <TechnicianWorkloadPanel rows={snapshot.technicianWorkload} />
         </section>
