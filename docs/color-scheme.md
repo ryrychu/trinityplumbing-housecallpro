@@ -82,6 +82,42 @@ fontFamily: {
 
 ---
 
+## What this app adds on top (internal ops only)
+
+The operations dashboard and the installable app share the palette above
+unchanged — same surfaces, same gold, same warm off-white. They add one thing
+the marketing sites do not have, and it does **not** apply to trinity.plumbing
+or trinityplumbingny:
+
+- **A display face: Barlow Condensed** (`font-display`, weights 500–700), used
+  only for section headers, screen titles, the wordmark, and the compass
+  letters on the dispatch dial. Barlow's drawing comes out of American highway
+  and rolling-stock signage, which is the vernacular an app about driving out
+  of Averill Park lives in; condensed is also what lets a section header set at
+  22px stay on one line on a 360px phone.
+- **Inter stays the body and UI face**, and stays the face for every headline
+  figure. A display face on a hero number reads as decoration, and the number
+  is data.
+- **Geist Mono (`font-mono`) is for figures that align vertically only** — the
+  run sheet's time rail, the dial's ring ticks, table columns. Not for
+  standalone headline numbers: equal-width digits open a visible gap under a
+  lone `121` at display sizes.
+
+Two colour rules the ops surfaces hold to, both narrower than the palette
+itself allows:
+
+- **Zones are identities, not states, so they are not colour-coded.** An
+  earlier version painted the six dispatch zones in six hues, which spent the
+  whole status palette on a label that already says what it is in words. The
+  one exception is `Outside Service Area`, which genuinely is a state and keeps
+  the danger token.
+- **The dispatch dial is an emphasis chart, not a categorical one.** Every job
+  is the same recessive `ink-muted` mark; gold marks the farthest job of the
+  day and a hollow danger ring marks out-of-area work. The ring is a *shape*
+  difference on purpose — danger and the mark grey sit at CVD ΔE 6.4, inside
+  the band that is only legal with a second, non-colour channel carrying the
+  same meaning.
+
 ## Relationship to Trinity Plumbing NY (commercial)
 
 As of the commercial redesign, **both sites share this dark + gold identity.** The commercial
