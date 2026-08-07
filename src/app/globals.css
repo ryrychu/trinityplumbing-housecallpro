@@ -23,4 +23,31 @@
     color: inherit;
     text-decoration: none;
   }
+
+  /* One visible focus ring for the whole app. The gold is the accent, so a
+     keyboard user lands on the same colour the design already uses to say
+     "here"; the offset keeps it legible against a card edge. */
+  :focus-visible {
+    @apply outline-none ring-2 ring-brand ring-offset-2 ring-offset-surface-page;
+  }
+
+  /* Numbers that sit in a column — the run sheet's time rail, dial ticks,
+     table cells — line up. Standalone headline figures deliberately do not
+     use this; see the Figure component. */
+  .tnum {
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* The dial's entrance is the only motion in the app, and it is the exact
+     kind (many small things scaling in at once) that triggers vestibular
+     symptoms. Honour the preference rather than merely shortening it. */
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }

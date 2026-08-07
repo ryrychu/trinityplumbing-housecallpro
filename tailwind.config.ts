@@ -37,7 +37,21 @@ const config: Config = {
       },
       fontFamily: {
         sans: ["var(--font-inter)", "Inter", "system-ui", "sans-serif"],
+        // Section headers and the wordmark only — never a headline figure.
+        display: ["var(--font-display)", "Barlow Condensed", "Inter", "sans-serif"],
+        // Figures that align vertically (time rail, ring ticks, table columns).
         mono: ["var(--font-geist-mono)", "monospace"],
+      },
+      keyframes: {
+        // The dial plots the day in clock order, so its marks arrive in clock
+        // order too — the animation says something true rather than decorating.
+        "dial-mark-in": {
+          from: { opacity: "0", transform: "scale(0.4)" },
+          to: { opacity: "1", transform: "scale(1)" },
+        },
+      },
+      animation: {
+        "dial-mark-in": "dial-mark-in 380ms cubic-bezier(0.2, 0.8, 0.2, 1) both",
       },
     },
   },

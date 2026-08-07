@@ -38,7 +38,14 @@ export function distanceFromAverillPark(lat: number, lng: number) {
   };
 }
 
-export function compassDirectionFromAverillPark(lat: number, lng: number): string {
+// True initial bearing from Averill Park, in degrees clockwise from north
+// (0 = due north, 90 = due east). The dispatch dial plots jobs at their real
+// angle, so it needs the continuous value; compassDirectionFromAverillPark
+// below buckets this same number into the eight names a dispatcher says out
+// loud. Both must come from one implementation — a second copy of the
+// spherical bearing formula is how the dial and the run sheet would start
+// disagreeing about which way a job is.
+export function bearingFromAverillPark(lat: number, lng: number): number {
   const dLng = toRadians(lng - AVERILL_PARK_LNG);
 
   const y = Math.sin(dLng) * Math.cos(toRadians(lat));
@@ -46,9 +53,11 @@ export function compassDirectionFromAverillPark(lat: number, lng: number): strin
     Math.cos(toRadians(AVERILL_PARK_LAT)) * Math.sin(toRadians(lat)) -
     Math.sin(toRadians(AVERILL_PARK_LAT)) * Math.cos(toRadians(lat)) * Math.cos(dLng);
   const bearing = (Math.atan2(y, x) * 180) / Math.PI;
-  const normalized = (bearing + 360) % 360;
+  return (bearing + 360) % 360;
+}
 
+export function compassDirectionFromAverillPark(lat: number, lng: number): string {
   const directions = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
-  const index = Math.round(normalized / 45) % 8;
+  const index = Math.round(bearingFromAverillPark(lat, lng) / 45) % 8;
   return directions[index];
 }
