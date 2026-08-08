@@ -327,13 +327,22 @@ Anthropic's infrastructure.
 
 ## Middleware change
 
-`src/middleware.ts` must let `/api/slack/*` through its Supabase-session gate,
-because Slack is a machine with no session and no cookies.
+**Correction, found while planning: there is nothing to change here.**
+`src/middleware.ts:112-119` matches only `/app/:path*`, `/api/app/:path*`,
+`/dispatch`, `/api/dispatch/:path*`, `/dashboard` and `/admin`. `/api/slack/*`
+is already outside that list, so middleware never runs on it and no exclusion is
+needed. The earlier draft of this section was wrong.
 
-**In this pass, exclude `/api/slack/*` only.** `/api/mcp` is added to the
-exclusion at the same time the route itself is built, never before — an
-exclusion for a route that does not exist yet is a hole waiting for something to
-fall into it.
+What **is** needed is a regression test pinning that boundary. The failure mode
+is invisible: a later broad matcher such as `/api/:path*` would answer every
+slash command with a `302` to `/app/login`, which Slack surfaces as a bare
+"didn't work" with nothing in it to diagnose. The route authenticates itself
+with `SLACK_SIGNING_SECRET`; the test is what stops that from being silently
+taken away.
+
+`/api/mcp` gets the same treatment at the same time the route is built, never
+before — an exclusion for a route that does not exist yet is a hole waiting for
+something to fall into it.
 
 This is not a loosening of security: each route authenticates on its own terms
 (HMAC signature for Slack, bearer token + IP for MCP), and both are strictly
