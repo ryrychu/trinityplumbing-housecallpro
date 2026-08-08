@@ -121,6 +121,20 @@ describe("middleware", () => {
     it("guards the admin page", () => {
       expect(config.matcher).toContain("/admin");
     });
+
+    // /api/slack/* must stay OUTSIDE the matcher. A slash command arrives from
+    // Slack's servers with no Supabase session, so a gated route would answer
+    // every command with a 302 to /app/login -- which Slack surfaces as a bare
+    // "didn't work" with nothing in it to diagnose. The route authenticates
+    // itself with SLACK_SIGNING_SECRET instead (src/lib/slack/verify.ts); this
+    // assertion is what stops a later broad pattern like "/api/:path*" from
+    // quietly taking that away.
+    it("leaves the Slack command route outside the session gate", () => {
+      const gatesSlack = config.matcher.some(
+        (p) => p.startsWith("/api/slack") || p === "/api/:path*"
+      );
+      expect(gatesSlack).toBe(false);
+    });
   });
 
   describe("dashboard and admin, signed out", () => {
