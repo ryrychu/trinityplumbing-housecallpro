@@ -277,6 +277,69 @@ curl -H "Authorization: Bearer <CRON_SECRET>" \
 
 ---
 
+## Slash commands — `/trinity`
+
+Separate from the notifications above and independently switchable. These read
+the same Supabase mirror the digests do and post nothing on their own — they
+only answer when someone types.
+
+### Step A — Create the command
+
+In the same Slack app: **Slash Commands → Create New Command**.
+
+- **Command:** `/trinity`
+- **Request URL:** `https://<your-vercel-domain>/api/slack/command`
+- **Short description:** `Schedule and money, on demand`
+- **Usage hint:** `today | tomorrow | week | next week | thursday | money`
+
+Reinstall the app to the workspace if Slack asks.
+
+### Step B — Set the signing secret
+
+**Basic Information → App Credentials → Signing Secret**, then:
+
+```bash
+vercel env add SLACK_SIGNING_SECRET
+```
+
+This is the only thing authenticating the command route — `/api/slack/*` sits
+outside the app's login gate, because a slash command arrives from Slack's
+servers with no session cookie. Treat it like the password it is.
+
+### Step C — Flip the switch
+
+```bash
+vercel env add SLACK_COMMANDS_ENABLED   # value: true (exactly this string)
+```
+
+Redeploy, then type `/trinity today` and compare against `/dashboard`, and
+`/trinity week` against the Monday digest. They are rendered by the same code
+and should agree exactly.
+
+### What it costs
+
+Nothing per use. There is no AI in this path and no Anthropic API key — the
+commands are a fixed vocabulary rendered from Supabase. Why it works that way,
+and what was ruled out, is in
+`docs/superpowers/specs/2026-08-08-slack-commands-mcp-design.md`.
+
+### Who can use it
+
+Anyone in the workspace. This was a deliberate decision, taken knowing the
+replies carry customer names, street addresses and phone numbers. Replies are
+**ephemeral** (only the person who typed the command sees them, and nothing is
+left in channel history) and everything is read-only, so the exposure is
+disclosure rather than damage. To restrict it later, add a `user_id` allowlist
+check in `src/lib/slack/commands.ts` — the route already has `user_id` in hand.
+
+### Rollback
+
+Set `SLACK_COMMANDS_ENABLED` to anything other than `true` (or delete it) and
+redeploy. The command then replies "not enabled" and touches no data. The
+notification settings above are unaffected either way.
+
+---
+
 ## Rollback
 
 Setting `SLACK_ALERTS_ENABLED` to anything other than the exact string
