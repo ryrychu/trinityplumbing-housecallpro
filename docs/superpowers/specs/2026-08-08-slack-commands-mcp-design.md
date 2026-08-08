@@ -1,7 +1,9 @@
 # Slack Schedule Commands + Trinity MCP Connector — Design
 
 **Date:** 2026-08-08
-**Status:** Approved, ready for implementation planning
+**Status:** Part A approved, ready for implementation planning.
+**Part B (MCP connector) is deferred** — the implementation gate below was run
+on 2026-08-08 and did not pass. See "Gate result".
 **Depends on:** Phase 1 foundation (HCP → Supabase sync, live), the dashboard
 query layer (`src/lib/dashboard/queries.ts`), and the Slack notification layer
 (`src/lib/slack/`, `src/lib/notifications/`)
@@ -115,6 +117,37 @@ Open Claude → **Customize → Connectors → Add custom connector**, and look 
 - **Absent** → **stop.** Build Part A only, and email Anthropic for early access
   to request-header authentication before building Part B.
 
+### Gate result — 2026-08-08: DID NOT PASS
+
+The dialog on the account that would hold this connector offers **Name**,
+**Remote MCP server URL**, and under **Advanced settings** only **OAuth Client
+ID** and **OAuth Client Secret**. There is no Request headers section, so the
+fixed-credential beta is not enabled for this account.
+
+**Part B is deferred and must not be built as specified.** The remaining routes,
+in the order they were judged:
+
+1. **Request early access from Anthropic** (recommended). The documentation
+   states request-header auth is "being slowly rolled out to customers; contact
+   Anthropic for early access." If granted, Part B builds exactly as written
+   below with no redesign.
+2. **Implement an OAuth 2.0 authorization server**, which would make the
+   dialog's existing OAuth fields usable. This requires protected-resource
+   metadata (RFC 9728), authorization-server discovery (RFC 8414), `/authorize`
+   with S256 PKCE, a `/token` endpoint accepting `application/x-www-form-urlencoded`,
+   refresh with RFC 6749-compliant `invalid_grant` errors, and the
+   `https://claude.ai/api/mcp/auth_callback` redirect URI. Several hundred lines
+   of security-critical code guarding customer names, addresses and phone
+   numbers. Viable, but not proportionate while route 1 is an email.
+3. **A local (stdio) MCP server for Claude Desktop** — no public endpoint and no
+   auth surface at all, but desktop-only, which does not serve the phone-in-the-field
+   use case that motivated this work.
+
+**Part A is unaffected** and proceeds now. Slash commands authenticate with
+Slack's signing secret and need nothing from Claude. Slack's mobile app already
+runs on the owner's phone, so `/trinity week` in the field — the literal request
+that started this — is delivered without Part B.
+
 **Do not ship an unauthenticated `/api/mcp`.** IP-allowlisting Anthropic's range
 does not substitute for the token: an attacker who learned the URL would add it
 as a connector on *their own* Claude account, and their requests would arrive
@@ -227,7 +260,13 @@ names, street addresses and phone numbers, and only the person who asked needs
 to see them. `in_channel` is a one-line change if the owner later decides the
 schedule channel should see them.
 
-## Part B — Trinity MCP connector
+## Part B — Trinity MCP connector (DEFERRED)
+
+> **Not being built in this pass.** The implementation gate did not pass on
+> 2026-08-08 — see "Gate result" above. This section is retained unchanged so
+> that if request-header auth becomes available, the work is already specified
+> and needs no redesign. Nothing below should be implemented until that gate
+> passes.
 
 ### Files
 
@@ -288,9 +327,13 @@ Anthropic's infrastructure.
 
 ## Middleware change
 
-`src/middleware.ts` must let `/api/slack/*` and `/api/mcp` through its
-Supabase-session gate, because both callers are machines with no session and no
-cookies.
+`src/middleware.ts` must let `/api/slack/*` through its Supabase-session gate,
+because Slack is a machine with no session and no cookies.
+
+**In this pass, exclude `/api/slack/*` only.** `/api/mcp` is added to the
+exclusion at the same time the route itself is built, never before — an
+exclusion for a route that does not exist yet is a hole waiting for something to
+fall into it.
 
 This is not a loosening of security: each route authenticates on its own terms
 (HMAC signature for Slack, bearer token + IP for MCP), and both are strictly
@@ -335,18 +378,17 @@ input returns help.
 without awaiting the work; a retry header short-circuits; the kill switch
 suppresses everything.
 
-**`src/lib/mcp/__tests__/auth.test.ts`** — correct token + in-range IP passes;
-correct token + out-of-range IP fails; wrong token fails; missing header fails.
-Include boundary IPs `160.79.104.0`, `160.79.111.255` (both in range) and
-`160.79.112.0` (out).
+**`src/__tests__/middleware.test.ts`** — extend: `/api/slack/command` is **not**
+redirected to `/app/login`, while `/api/app/*` and `/dashboard` still are. The
+second assertion matters as much as the first — it is what catches an exclusion
+pattern written too broadly.
 
-**`src/lib/mcp/__tests__/tools.test.ts`** — each tool against a mocked Supabase;
-`get_schedule` returns both `formatted` and `rows`, and they describe the same
-jobs.
-
-**`src/__tests__/middleware.test.ts`** — extend: `/api/slack/command` and
-`/api/mcp` are **not** redirected to `/app/login`, while `/api/app/*` and
-`/dashboard` still are.
+**Deferred with Part B** — `src/lib/mcp/__tests__/auth.test.ts` (correct token +
+in-range IP passes; correct token + out-of-range IP fails; wrong token fails;
+missing header fails; boundary IPs `160.79.104.0` and `160.79.111.255` in range,
+`160.79.112.0` out) and `src/lib/mcp/__tests__/tools.test.ts` (each tool against
+a mocked Supabase; `get_schedule` returns both `formatted` and `rows` describing
+the same jobs).
 
 ## Environment variables
 
@@ -354,8 +396,8 @@ jobs.
 |---|---|
 | `SLACK_SIGNING_SECRET` | Verify slash-command requests |
 | `SLACK_COMMANDS_ENABLED` | Kill switch — commands inert unless exactly `"true"` |
-| `MCP_AUTH_TOKEN` | Bearer token for the connector |
-| `MCP_ENABLED` | Kill switch — `/api/mcp` returns 404 unless exactly `"true"` |
+| ~~`MCP_AUTH_TOKEN`~~ | Deferred with Part B — do not set in this pass |
+| ~~`MCP_ENABLED`~~ | Deferred with Part B — do not set in this pass |
 
 Both kill switches follow the `slackAlertsEnabled()` pattern in
 `src/lib/slack/client.ts`: **default off**, exact string `"true"` only, so a
@@ -372,13 +414,19 @@ connector dialog.
    `/api/slack/command`, set `SLACK_SIGNING_SECRET`, redeploy.
 3. Set `SLACK_COMMANDS_ENABLED=true`. Run `/trinity today` and compare against
    the dashboard, then `/trinity week` against the Monday digest.
-4. **Run the implementation gate above.** Only if Request headers is available:
+4. ~~Run the implementation gate.~~ **Done 2026-08-08 — did not pass.** Steps 1–3
+   are the whole rollout for now. When request-header auth becomes available:
    set `MCP_AUTH_TOKEN` and `MCP_ENABLED=true`, add the connector in Claude, and
    verify with "what's on for this week" — checking the returned jobs against
    `/trinity week`.
 
-Rollback for either half is unsetting its kill switch and redeploying. No
-database change is involved, so there is nothing to undo.
+Rollback is unsetting the kill switch and redeploying. No database change is
+involved, so there is nothing to undo.
+
+Because Part B is deferred, `MCP_AUTH_TOKEN` and `MCP_ENABLED` are **not set in
+this pass**, and no `/api/mcp` route is created. The middleware exclusion added
+for Slack must therefore cover `/api/slack/*` only — adding `/api/mcp` to it
+ahead of time would leave a hole waiting for a future route to fall into.
 
 ## Accepted risk
 
