@@ -5,6 +5,10 @@
 // Slack"), and the whole point of this surface is that it is free and instant.
 // The conversational version lives in Claude, not here.
 
+import { weekRange, localParts } from "@/lib/dashboard/week";
+import { dayLabelFromKey } from "./format";
+import { localDateKey } from "@/lib/notifications/schedule";
+
 export type Command =
   | { kind: "today" | "tomorrow" | "week" | "nextWeek" | "money" | "help" }
   | { kind: "weekday"; dow: number };
@@ -40,4 +44,58 @@ export function parseCommand(text: string): Command {
 
   // Unrecognized input returns help rather than an error — see the module note.
   return { kind: "help" };
+}
+
+// A UTC instant at 16:00 on the given calendar date. That is noon-ish Eastern
+// under either offset (-04:00 or -05:00) and never within hours of a DST
+// boundary, so localParts() always resolves it back to the intended calendar
+// day. Exactly the anchor trick getScheduleDays() uses internally
+// (src/lib/dashboard/queries.ts) — reused rather than reinvented, because a
+// second piece of DST arithmetic is how two surfaces start disagreeing about
+// which day a job falls on.
+function noonAnchor(y: number, m0: number, d: number): Date {
+  return new Date(Date.UTC(y, m0, d, 16, 0, 0));
+}
+
+export function resolveWindow(
+  cmd: Command,
+  now: Date
+): { anchor: Date; days: number; title: string } | null {
+  const { y, m0, d, dow } = localParts(now);
+
+  switch (cmd.kind) {
+    case "help":
+    case "money":
+      return null;
+
+    case "today":
+      return { anchor: now, days: 1, title: `Today — ${dayLabelFromKey(localDateKey(now))}` };
+
+    case "tomorrow": {
+      const anchor = noonAnchor(y, m0, d + 1);
+      return { anchor, days: 1, title: `Tomorrow — ${dayLabelFromKey(localDateKey(anchor))}` };
+    }
+
+    case "week":
+      return {
+        anchor: new Date(weekRange(now, "this").startIso),
+        days: 7,
+        title: "Week ahead",
+      };
+
+    case "nextWeek":
+      return {
+        anchor: new Date(weekRange(now, "next").startIso),
+        days: 7,
+        title: "Next week",
+      };
+
+    case "weekday": {
+      // Today counts as the next occurrence: asking on a Thursday for
+      // "thursday" means today, not a week out.
+      const delta = (cmd.dow - dow + 7) % 7;
+      const anchor = noonAnchor(y, m0, d + delta);
+      return { anchor, days: 1, title: dayLabelFromKey(localDateKey(anchor)) };
+    }
+  }
 }

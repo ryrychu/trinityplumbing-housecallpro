@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { parseCommand } from "../commands";
+import { parseCommand, resolveWindow } from "../commands";
+import { localParts } from "@/lib/dashboard/week";
 
 describe("parseCommand", () => {
   it.each([
@@ -55,5 +56,69 @@ describe("parseCommand", () => {
     expect(parseCommand("toString")).toEqual({ kind: "help" });
     expect(parseCommand("valueOf")).toEqual({ kind: "help" });
     expect(parseCommand("__proto__")).toEqual({ kind: "help" });
+  });
+});
+
+// Saturday 2026-08-08, 08:00 Eastern (12:00 UTC, EDT).
+const SAT = new Date("2026-08-08T12:00:00Z");
+
+describe("resolveWindow", () => {
+  it("returns null for commands with no date window", () => {
+    expect(resolveWindow({ kind: "help" }, SAT)).toBeNull();
+    expect(resolveWindow({ kind: "money" }, SAT)).toBeNull();
+  });
+
+  it("resolves today to a one-day window on the current local date", () => {
+    const w = resolveWindow({ kind: "today" }, SAT)!;
+    expect(w.days).toBe(1);
+    expect(localParts(w.anchor).d).toBe(8);
+  });
+
+  it("resolves tomorrow to the next local calendar day", () => {
+    const w = resolveWindow({ kind: "tomorrow" }, SAT)!;
+    expect(w.days).toBe(1);
+    expect(localParts(w.anchor).d).toBe(9);
+    expect(w.title).toBe("Tomorrow — Sun Aug 9");
+  });
+
+  it("resolves week to the Monday of the current local week", () => {
+    const w = resolveWindow({ kind: "week" }, SAT)!;
+    expect(w.days).toBe(7);
+    expect(localParts(w.anchor).dow).toBe(1);
+    expect(localParts(w.anchor).d).toBe(3); // Mon 2026-08-03
+    expect(w.title).toBe("Week ahead");
+  });
+
+  it("resolves next week to the following Monday", () => {
+    const w = resolveWindow({ kind: "nextWeek" }, SAT)!;
+    expect(w.days).toBe(7);
+    expect(localParts(w.anchor).d).toBe(10); // Mon 2026-08-10
+    expect(w.title).toBe("Next week");
+  });
+
+  it("resolves a weekday to its next occurrence", () => {
+    // Saturday asking for Tuesday -> Tue 2026-08-11.
+    const w = resolveWindow({ kind: "weekday", dow: 2 }, SAT)!;
+    expect(w.days).toBe(1);
+    expect(localParts(w.anchor).d).toBe(11);
+    expect(w.title).toBe("Tue Aug 11");
+  });
+
+  // Explicit per the spec: asking on a Thursday for "thursday" means today,
+  // not a week out.
+  it("counts today as the next occurrence of its own weekday", () => {
+    const w = resolveWindow({ kind: "weekday", dow: 6 }, SAT)!; // Saturday
+    expect(localParts(w.anchor).d).toBe(8);
+    expect(w.title).toBe("Sat Aug 8");
+  });
+
+  // DST-safety. 2026-11-01 is the fall-back Sunday in America/New_York; a week
+  // built by adding fixed 24h multiples drifts off local midnight after it.
+  it("returns seven distinct local days across a DST transition", () => {
+    const beforeFallBack = new Date("2026-10-28T12:00:00Z"); // Wed 2026-10-28
+    const w = resolveWindow({ kind: "nextWeek" }, beforeFallBack)!;
+    expect(w.days).toBe(7);
+    expect(localParts(w.anchor).dow).toBe(1);
+    expect(localParts(w.anchor).d).toBe(2); // Mon 2026-11-02
   });
 });
