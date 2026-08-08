@@ -6,8 +6,11 @@
 // The conversational version lives in Claude, not here.
 
 import { weekRange, localParts } from "@/lib/dashboard/week";
-import { dayLabelFromKey } from "./format";
+import { dayLabelFromKey, formatScheduleDays, formatMoneySummary } from "./format";
 import { localDateKey } from "@/lib/notifications/schedule";
+import { getScheduleDays } from "@/lib/dashboard/queries";
+import { renderDigest } from "@/lib/notifications/digest";
+import { listOpenEstimates, listUnpaidInvoices } from "@/lib/mobile/money";
 
 export type Command =
   | { kind: "today" | "tomorrow" | "week" | "nextWeek" | "money" | "help" }
@@ -98,4 +101,38 @@ export function resolveWindow(
       return { anchor, days: 1, title: dayLabelFromKey(localDateKey(anchor)) };
     }
   }
+}
+
+export const HELP_TEXT = [
+  "*Trinity* — ask for a schedule or the money.",
+  "",
+  "`/trinity today` — today's jobs",
+  "`/trinity tomorrow` — tomorrow's jobs",
+  "`/trinity week` — this Monday to Sunday",
+  "`/trinity next week` — next Monday to Sunday",
+  "`/trinity thursday` — the next Thursday (any weekday works)",
+  "`/trinity money` — open estimates and unpaid invoices",
+].join("\n");
+
+export async function renderCommand(cmd: Command, now: Date): Promise<string> {
+  if (cmd.kind === "help") return HELP_TEXT;
+
+  if (cmd.kind === "money") {
+    const [estimates, invoices] = await Promise.all([
+      listOpenEstimates(),
+      listUnpaidInvoices(now),
+    ]);
+    return formatMoneySummary(estimates, invoices);
+  }
+
+  // today and week go through renderDigest so a command and the 6am post are
+  // the same string by construction, not by two implementations agreeing today
+  // and drifting next month. src/lib/notifications/digest.ts exists for exactly
+  // this reason — do not reimplement either here.
+  if (cmd.kind === "today") return renderDigest("digest", now);
+  if (cmd.kind === "week") return renderDigest("week", now);
+
+  const window = resolveWindow(cmd, now)!;
+  const days = await getScheduleDays(window.anchor, window.days);
+  return formatScheduleDays(window.title, days);
 }
