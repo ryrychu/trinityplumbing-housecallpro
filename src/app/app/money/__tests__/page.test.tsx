@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import MoneyPage from "../page";
 import { clearAppDataCache } from "@/components/mobile/useAppData";
 
@@ -129,5 +129,137 @@ describe("MoneyPage", () => {
 
     expect(await screen.findByText(/offline/i)).toBeInTheDocument();
     expect(screen.getByText("Margaret Kowalski")).toBeInTheDocument();
+  });
+});
+
+// Filtering runs in the browser over the payload the screen already has, so
+// these exercise the real controls rather than a query parameter.
+describe("MoneyPage filtering", () => {
+  const MANY = {
+    estimates: [
+      { id: "e1", customerId: "c1", customerName: "Margaret Kowalski", amountCents: 100_000, status: "Scheduled" },
+      { id: "e2", customerId: "c2", customerName: "Peter Nowak", amountCents: 50_000, status: "In Progress" },
+      { id: "e3", customerId: "c3", customerName: "Ruiz Property Group", amountCents: 25_000, status: "Scheduled" },
+    ],
+    estimatesTotalCents: 175_000,
+    invoices: [
+      { id: "i1", customerId: "c1", customerName: "Margaret Kowalski", amountCents: 40_000, status: "open", dueDate: "2026-07-01", overdueDays: 37 },
+      { id: "i2", customerId: "c2", customerName: "Peter Nowak", amountCents: 60_000, status: "open", dueDate: "2026-09-01", overdueDays: null },
+    ],
+    invoicesTotalCents: 100_000,
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    clearAppDataCache();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(jsonResponse({ data: MANY, ...FRESH }))
+    );
+  });
+
+  async function ready() {
+    render(<MoneyPage />);
+    await screen.findByText("Margaret Kowalski");
+  }
+
+  it("narrows the list by customer", async () => {
+    await ready();
+    fireEvent.change(screen.getByLabelText("Search by customer"), { target: { value: "ruiz" } });
+
+    expect(screen.getByText("Ruiz Property Group")).toBeInTheDocument();
+    expect(screen.queryByText("Margaret Kowalski")).not.toBeInTheDocument();
+  });
+
+  // The figure is what people read. A filtered list under an unfiltered total
+  // is the screen saying two different things at once.
+  it("recomputes the headline figure from the visible rows", async () => {
+    await ready();
+    expect(screen.getByText("$1,750")).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("Search by customer"), { target: { value: "ruiz" } });
+    // Twice on purpose: the headline figure and the single row it is now the
+    // sum of. Before this, the figure would still have read $1,750 over one
+    // $250 row.
+    expect(screen.getAllByText("$250")).toHaveLength(2);
+    expect(screen.getByText(/1 of 3 estimates/i)).toBeInTheDocument();
+    expect(screen.queryByText("$1,750")).not.toBeInTheDocument();
+  });
+
+  it("filters estimates by their status", async () => {
+    await ready();
+    fireEvent.change(screen.getByLabelText("Filter by status"), { target: { value: "In Progress" } });
+
+    expect(screen.getByText("Peter Nowak")).toBeInTheDocument();
+    expect(screen.queryByText("Ruiz Property Group")).not.toBeInTheDocument();
+  });
+
+  // Only statuses actually present are offered -- a filter that can only
+  // return nothing wastes a tap and reads as a bug.
+  it("offers only the statuses the estimates actually carry", async () => {
+    await ready();
+    const options = Array.from(
+      screen.getByLabelText("Filter by status").querySelectorAll("option")
+    ).map((o) => o.textContent);
+    expect(options).toEqual(["All statuses", "Scheduled", "In Progress"]);
+  });
+
+  it("keeps only late invoices behind the overdue toggle", async () => {
+    await ready();
+    fireEvent.click(screen.getByRole("button", { name: /estimates/i }).parentElement!.querySelectorAll("button")[1]);
+    await screen.findByRole("button", { name: /overdue only/i });
+
+    fireEvent.click(screen.getByRole("button", { name: /overdue only/i }));
+    expect(screen.getByText("Margaret Kowalski")).toBeInTheDocument();
+    expect(screen.queryByText("Peter Nowak")).not.toBeInTheDocument();
+    // Unpaid and overdue are different debts, and the label has to say which.
+    expect(screen.getByText("Overdue")).toBeInTheDocument();
+  });
+
+  // "Every invoice is settled" is very good news; "your filter matched
+  // nothing" is not news at all. Showing the first when it means the second
+  // tells the owner their debts are paid.
+  it("does not claim everything is settled when a filter simply matched nothing", async () => {
+    await ready();
+    fireEvent.change(screen.getByLabelText("Search by customer"), {
+      target: { value: "nobody at all" },
+    });
+
+    expect(screen.getByText(/nothing matches those filters/i)).toBeInTheDocument();
+    expect(screen.queryByText(/no estimates are waiting/i)).not.toBeInTheDocument();
+  });
+
+  it("puts the whole list back from the empty state", async () => {
+    await ready();
+    fireEvent.change(screen.getByLabelText("Search by customer"), {
+      target: { value: "nobody at all" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /clear filters/i }));
+
+    expect(screen.getByText("Margaret Kowalski")).toBeInTheDocument();
+    expect(screen.getByText("$1,750")).toBeInTheDocument();
+  });
+});
+
+// "$0 overdue" over a search that found nobody is a claim about the debt, not
+// about the search -- and it is a false one while five overdue invoices exist.
+describe("MoneyPage headline figure with no matches", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    clearAppDataCache();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({ data: PAYLOAD, ...FRESH })));
+  });
+
+  it("shows no figure at all rather than a zero one", async () => {
+    render(<MoneyPage />);
+    await screen.findByText("Margaret Kowalski");
+
+    fireEvent.change(screen.getByLabelText("Search by customer"), {
+      target: { value: "nobody at all" },
+    });
+
+    expect(screen.getByText(/nothing matches those filters/i)).toBeInTheDocument();
+    expect(screen.queryByText("$0")).not.toBeInTheDocument();
+    expect(screen.queryByText(/awaiting a response/i)).not.toBeInTheDocument();
   });
 });

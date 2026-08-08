@@ -253,3 +253,47 @@ describe("customerId on money rows", () => {
     expect(invoice.customerId).toBeNull();
   });
 });
+
+// The screen was rendering HCP's raw enum -- "in progress", "complete unrated"
+// -- among title-cased labels everywhere else in the app. queries.ts already
+// warned that an unmapped status would read as lowercase noise; the fix routes
+// these through the same scheduleStatus() the run sheet and job screen use, so
+// one estimate cannot describe itself two ways on two screens.
+describe("estimate status labels", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  function withStatus(status: string) {
+    mockRows({
+      customers: CUSTOMERS,
+      estimates: [
+        {
+          id: "csr_1",
+          customer_id: "cus_1",
+          status,
+          amount_cents: 1,
+          raw: { options: [{ approval_status: null }] },
+        },
+      ],
+    });
+    return listOpenEstimates();
+  }
+
+  it.each([
+    ["scheduled", "Scheduled"],
+    ["in progress", "In Progress"],
+    ["needs scheduling", "Needs Scheduling"],
+    ["complete rated", "Completed"],
+    ["complete unrated", "Completed"],
+  ])("renders HCP's %s as %s", async (raw, label) => {
+    const [estimate] = await withStatus(raw);
+    expect(estimate.status).toBe(label);
+  });
+
+  // scheduleStatus() returns null rather than echoing something it does not
+  // recognise; the screen shows "Awaiting a response" for that instead of
+  // inventing a label.
+  it("reports null for a work_status it does not recognise", async () => {
+    const [estimate] = await withStatus("some future hcp state");
+    expect(estimate.status).toBeNull();
+  });
+});

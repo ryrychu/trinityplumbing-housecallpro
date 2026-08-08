@@ -1,5 +1,5 @@
 import { getSupabaseServerClient } from "@/lib/supabase/client";
-import { isOpenEstimate } from "@/lib/dashboard/queries";
+import { isOpenEstimate, scheduleStatus } from "@/lib/dashboard/queries";
 import { localDateKey } from "@/lib/notifications/schedule";
 
 export interface EstimateHit {
@@ -11,6 +11,12 @@ export interface EstimateHit {
   customerId: string | null;
   customerName: string | null;
   amountCents: number | null;
+  /**
+   * A display label from scheduleStatus() — "Scheduled", "In Progress",
+   * "Completed", "Needs Scheduling" — never HCP's raw lowercase enum. Null for
+   * a work_status scheduleStatus does not recognise, which the screen renders
+   * as "Awaiting a response" rather than inventing a label.
+   */
   status: string | null;
 }
 
@@ -86,7 +92,14 @@ export async function listOpenEstimates(): Promise<EstimateHit[]> {
       customerId: e.customer_id && names.has(e.customer_id) ? e.customer_id : null,
       customerName: e.customer_id ? names.get(e.customer_id) ?? null : null,
       amountCents: e.amount_cents,
-      status: e.status,
+      // Through scheduleStatus(), not echoed raw. `estimates.status` holds
+      // HCP's work_status, and HCP lowercases its enum -- so this screen was
+      // rendering "in progress" and "complete unrated" among title-cased
+      // labels everywhere else in the app. queries.ts already predicted this
+      // exact noise; the fix is to reuse the one mapping rather than add a
+      // second, which is also what keeps the vocabulary identical to the run
+      // sheet and the job screen.
+      status: scheduleStatus({ work_status: e.status }),
     }))
     .sort((a, b) => (b.amountCents ?? 0) - (a.amountCents ?? 0));
 }
