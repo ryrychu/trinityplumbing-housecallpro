@@ -132,7 +132,7 @@ export async function renderCommand(cmd: Command, now: Date): Promise<string> {
   if (cmd.kind === "today") return renderDigest("digest", now);
   if (cmd.kind === "week") return renderDigest("week", now);
 
-  const window = resolveWindow(cmd, now)!;
-  const days = await getScheduleDays(window.anchor, window.days);
-  return formatScheduleDays(window.title, days);
+  const range = resolveWindow(cmd, now)!;
+  const days = await getScheduleDays(range.anchor, range.days);
+  return formatScheduleDays(range.title, days);
 }

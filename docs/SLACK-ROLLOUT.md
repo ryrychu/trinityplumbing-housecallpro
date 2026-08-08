@@ -249,14 +249,16 @@ vercel env add ADMIN_TRIGGER_TOKEN
 
 Then redeploy and open `https://<your-domain>/admin`.
 
-**Understand what this page is before you deploy it.** This app has no
-authentication of any kind — `/dashboard` is already public to anyone who
-knows the URL, customer names, addresses and phone numbers included. That
-token is therefore the *only* thing standing between a stranger and your
-Slack channels. Use a long random string, not a word. If you'd rather close
-the hole properly, Vercel's Deployment Protection puts the whole site behind
-your team's login; it needs a bypass configured for the Housecall Pro webhook
-path, which is why it isn't turned on here by default.
+**Understand what this page is before you deploy it.** `/dashboard` and
+`/admin` now sit behind the Supabase login gate (`src/middleware.ts`), but
+signing in only proves you're one of the app's users — it says nothing about
+who should be allowed to fire a message into Slack. `ADMIN_TRIGGER_TOKEN` is
+still the *only* thing standing between a signed-in account and your Slack
+channels; being logged in does not make the token optional. Use a long random
+string, not a word. If you'd rather add another layer, Vercel's Deployment
+Protection puts the whole site behind your team's login; it needs a bypass
+configured for the Housecall Pro webhook path, which is why it isn't turned on
+here by default.
 
 Two behaviors worth knowing:
 
@@ -330,7 +332,10 @@ replies carry customer names, street addresses and phone numbers. Replies are
 **ephemeral** (only the person who typed the command sees them, and nothing is
 left in channel history) and everything is read-only, so the exposure is
 disclosure rather than damage. To restrict it later, add a `user_id` allowlist
-check in `src/lib/slack/commands.ts` — the route already has `user_id` in hand.
+check in `src/app/api/slack/command/route.ts`, after the form body is parsed
+with `URLSearchParams` — that is where `user_id` is actually available.
+`renderCommand` in `src/lib/slack/commands.ts` only receives `(cmd, now)` and
+never sees who asked.
 
 ### Rollback
 

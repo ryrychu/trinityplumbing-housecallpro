@@ -127,13 +127,23 @@ describe("middleware", () => {
     // every command with a 302 to /app/login -- which Slack surfaces as a bare
     // "didn't work" with nothing in it to diagnose. The route authenticates
     // itself with SLACK_SIGNING_SECRET instead (src/lib/slack/verify.ts); this
-    // assertion is what stops a later broad pattern like "/api/:path*" from
-    // quietly taking that away.
+    // assertion is what stops a later pattern -- an explicit "/api/slack*", the
+    // literal "/api/:path*", or a broad catch-all such as "/api/(.*)" or
+    // "/((?!_next).*)" that would gate the route without matching either
+    // literal check below -- from quietly taking that away.
     it("leaves the Slack command route outside the session gate", () => {
       const gatesSlack = config.matcher.some(
         (p) => p.startsWith("/api/slack") || p === "/api/:path*"
       );
       expect(gatesSlack).toBe(false);
+
+      // A regex-flavored catch-all (e.g. "/api/(.*)" or "/((?!_next).*)") would
+      // pass the check above while still matching /api/slack/command at
+      // runtime -- Next's matcher treats these entries as path-to-regexp
+      // patterns, not literal strings. Neither of the literal checks above
+      // would catch that, so this closes the gap directly.
+      const hasCatchAll = config.matcher.some((p) => p.includes("(.*)") || p.includes("(?!"));
+      expect(hasCatchAll).toBe(false);
     });
   });
 

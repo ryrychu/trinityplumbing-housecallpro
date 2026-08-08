@@ -288,6 +288,26 @@ describe("formatScheduleDays", () => {
     expect(out).toContain("— 0 jobs");
     expect(out).toContain("No jobs");
   });
+
+  // The single-day branch is new output for /trinity today, /trinity tomorrow
+  // and /trinity thursday, and every other test in this block only asserts
+  // toContain — a mutated join (e.g. "\n\n" -> "\n") would still pass every
+  // one of them. Hardcoded rather than built from the function under test, so
+  // this pins the actual bytes instead of trivially agreeing with itself.
+  it("pins the exact rendered text for a single day", () => {
+    const out = formatScheduleDays("Tomorrow — Thu Aug 13", [
+      { dateKey: "2026-08-13", rows: [row()] },
+    ]);
+    const expected = `*Tomorrow — Thu Aug 13* — 1 job
+
+
+
+• *1:30 PM* — Devon Robinson  ·  📞 (518) 555-0142
+     📍 123 Main St, Averill Park
+     🔧 Water Heater Repair
+     👤 Dan  ·  Scheduled`;
+    expect(out).toBe(expected);
+  });
 });
 
 // formatWeeklyLookahead is what the 6am digest posts. Refactoring it to
