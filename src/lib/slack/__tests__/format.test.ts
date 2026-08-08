@@ -311,6 +311,40 @@ describe("formatWeeklyLookahead regression", () => {
     ]);
     expect(out.startsWith("*Week ahead* — 1 job")).toBe(true);
   });
+
+  // The two tests above compare formatWeeklyLookahead against formatScheduleDays,
+  // but formatWeeklyLookahead IS formatScheduleDays under the hood — both sides
+  // move together, so that comparison can never catch a change to the real
+  // output. This test pins the literal string instead, independent of
+  // formatScheduleDays entirely, because this text is what posts to a live
+  // company Slack channel every morning at 6am: a silent format change here is
+  // the actual regression this describe block exists to catch.
+  it("pins the exact rendered text, independent of formatScheduleDays", () => {
+    const days = [
+      { dateKey: "2026-08-10", rows: [row()] },
+      { dateKey: "2026-08-11", rows: [] },
+      { dateKey: "2026-08-12", rows: [row({ id: "job_2", customerName: "Ada Miller" })] },
+    ];
+    const expected = `*Week ahead* — 2 jobs
+
+
+
+*Mon Aug 10*
+• *1:30 PM* — Devon Robinson  ·  📞 (518) 555-0142
+     📍 123 Main St, Averill Park
+     🔧 Water Heater Repair
+     👤 Dan  ·  Scheduled
+
+*Tue Aug 11*
+No jobs
+
+*Wed Aug 12*
+• *1:30 PM* — Ada Miller  ·  📞 (518) 555-0142
+     📍 123 Main St, Averill Park
+     🔧 Water Heater Repair
+     👤 Dan  ·  Scheduled`;
+    expect(formatWeeklyLookahead(new Date("2026-08-10T12:00:00Z"), days)).toBe(expected);
+  });
 });
 
 describe("formatMoneySummary", () => {
