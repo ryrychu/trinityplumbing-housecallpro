@@ -31,7 +31,12 @@ export function parseCommand(text: string): Command {
   if (t === "money") return { kind: "money" };
 
   const dow = WEEKDAYS[t];
-  if (dow !== undefined) return { kind: "weekday", dow };
+  // typeof, not `!== undefined`: WEEKDAYS is an object literal and so inherits
+  // from Object.prototype, where "constructor", "toString", "valueOf" and
+  // "__proto__" all resolve to non-undefined values. Accepting those would
+  // return a weekday whose dow is a function, and the caller's date arithmetic
+  // would turn it into an Invalid Date.
+  if (typeof dow === "number") return { kind: "weekday", dow };
 
   // Unrecognized input returns help rather than an error — see the module note.
   return { kind: "help" };

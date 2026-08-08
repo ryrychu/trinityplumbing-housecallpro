@@ -44,4 +44,16 @@ describe("parseCommand", () => {
     expect(parseCommand("what's on for thursday")).toEqual({ kind: "help" });
     expect(parseCommand("asdf")).toEqual({ kind: "help" });
   });
+
+  it("treats inherited Object.prototype keys as unrecognized, not as weekdays", () => {
+    // WEEKDAYS is an object literal and inherits from Object.prototype. Property
+    // names like "constructor", "toString", "valueOf", and "__proto__" resolve to
+    // non-undefined values (functions or objects). Without a typeof check, parsing
+    // these would return { kind: "weekday", dow: [Function] }, which breaks Date
+    // arithmetic downstream and crashes instead of showing help text.
+    expect(parseCommand("constructor")).toEqual({ kind: "help" });
+    expect(parseCommand("toString")).toEqual({ kind: "help" });
+    expect(parseCommand("valueOf")).toEqual({ kind: "help" });
+    expect(parseCommand("__proto__")).toEqual({ kind: "help" });
+  });
 });
