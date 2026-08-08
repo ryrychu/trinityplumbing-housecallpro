@@ -2,6 +2,7 @@
 // This is the ONLY place cents become dollars.
 import type { TodayScheduleRow } from "@/lib/dashboard/queries";
 import type { PaidInvoiceLine, ApprovedEstimateLine } from "@/lib/notifications/detect";
+import type { EstimateHit, InvoiceHit } from "@/lib/mobile/money";
 
 const TZ = "America/New_York";
 
@@ -26,8 +27,10 @@ function dayLabel(instant: Date): string {
 }
 
 // "2026-07-27" -> "Mon Jul 27". Parsed as local noon so the label can never
-// slip a day from a timezone edge.
-function dayLabelFromKey(dateKey: string): string {
+// slip a day from a timezone edge. Exported because the slash commands build
+// single-day titles ("Tomorrow — Thu Aug 13") from the same label the day
+// headings use.
+export function dayLabelFromKey(dateKey: string): string {
   return dayLabel(new Date(`${dateKey}T12:00:00Z`));
 }
 
@@ -102,17 +105,40 @@ export function formatDailyDigest(now: Date, rows: TodayScheduleRow[]): string {
   return [header, "", body].join("\n");
 }
 
-export function formatWeeklyLookahead(
-  now: Date,
+// The one schedule renderer. The weekly digest, the week-ahead command and the
+// single-day commands all render through this, so they cannot drift apart.
+//
+// A single day omits the per-day heading: its title already names the date
+// ("Tomorrow — Thu Aug 13"), and repeating it directly underneath reads as a
+// formatting bug rather than as emphasis.
+export function formatScheduleDays(
+  title: string,
   days: Array<{ dateKey: string; rows: TodayScheduleRow[] }>
 ): string {
   const total = days.reduce((n, d) => n + d.rows.length, 0);
+  const header = `*${title}* — ${total} ${total === 1 ? "job" : "jobs"}`;
+
+  if (days.length === 1) {
+    const body = days[0].rows.length === 0 ? "No jobs" : days[0].rows.map(jobLines).join("\n\n");
+    return [header, "", body].join("\n\n");
+  }
+
   const sections = days.map((d) => {
     const heading = `*${dayLabelFromKey(d.dateKey)}*`;
     const body = d.rows.length === 0 ? "No jobs" : d.rows.map(jobLines).join("\n\n");
     return `${heading}\n${body}`;
   });
-  return [`*Week ahead* — ${total} ${total === 1 ? "job" : "jobs"}`, "", ...sections].join("\n\n");
+  return [header, "", ...sections].join("\n\n");
+}
+
+// `now` is unused but kept in the signature: this is what the 6am cron and the
+// /admin button call (src/lib/notifications/digest.ts), and changing its shape
+// would ripple into both for no benefit.
+export function formatWeeklyLookahead(
+  now: Date,
+  days: Array<{ dateKey: string; rows: TodayScheduleRow[] }>
+): string {
+  return formatScheduleDays("Week ahead", days);
 }
 
 export function formatPaidInvoices(lines: PaidInvoiceLine[]): string {
@@ -135,4 +161,56 @@ export function formatApprovedEstimates(lines: ApprovedEstimateLine[]): string {
     })
     .join("\n");
   return `${header}\n${body}`;
+}
+
+// How many lines of each list to print before collapsing the rest into a
+// count. The whole point of this message is to be readable on a phone; 25
+// unpaid invoices rendered in full is a wall nobody scrolls.
+const MONEY_LIST_LIMIT = 5;
+
+function moneyLines(
+  heading: string,
+  emptyText: string,
+  count: number,
+  totalCents: number,
+  suffix: string,
+  lines: string[]
+): string {
+  if (count === 0) return `*${heading}* — ${emptyText}`;
+  const shown = lines.slice(0, MONEY_LIST_LIMIT);
+  const rest = count - shown.length;
+  return [
+    `*${heading}* — ${count} · ${formatCents(totalCents)}${suffix}`,
+    ...shown,
+    ...(rest > 0 ? [`… and ${rest} more`] : []),
+  ].join("\n");
+}
+
+export function formatMoneySummary(estimates: EstimateHit[], invoices: InvoiceHit[]): string {
+  const estTotal = estimates.reduce((n, e) => n + (e.amountCents ?? 0), 0);
+  const invTotal = invoices.reduce((n, i) => n + (i.amountCents ?? 0), 0);
+  const overdue = invoices.filter((i) => i.overdueDays != null).length;
+
+  const estimateBlock = moneyLines(
+    "Open estimates",
+    "No open estimates",
+    estimates.length,
+    estTotal,
+    "",
+    estimates.map((e) => `• ${e.customerName ?? "Unknown customer"} — ${formatCents(e.amountCents)}`)
+  );
+
+  const invoiceBlock = moneyLines(
+    "Unpaid invoices",
+    "No unpaid invoices",
+    invoices.length,
+    invTotal,
+    overdue > 0 ? `  ·  ${overdue} overdue` : "",
+    invoices.map((i) => {
+      const late = i.overdueDays != null ? `  ·  ${i.overdueDays} days overdue` : "";
+      return `• ${i.customerName ?? "Unknown customer"} — ${formatCents(i.amountCents)}${late}`;
+    })
+  );
+
+  return ["*Money*", "", estimateBlock, "", invoiceBlock].join("\n");
 }

@@ -5,7 +5,11 @@ import {
   formatWeeklyLookahead,
   formatPaidInvoices,
   formatApprovedEstimates,
+  formatScheduleDays,
+  formatMoneySummary,
+  dayLabelFromKey,
 } from "../format";
+import type { TodayScheduleRow } from "@/lib/dashboard/queries";
 
 describe("formatCents", () => {
   it("renders cents as dollars — the money bug that matters most here", () => {
@@ -222,5 +226,129 @@ describe("formatApprovedEstimates", () => {
     expect(out).toContain("R. Hoffman");
     expect(out).toContain("$2,500.00");
     expect(out).toContain("Better");
+  });
+});
+
+function row(over: Partial<TodayScheduleRow> = {}): TodayScheduleRow {
+  return {
+    id: "job_1",
+    scheduledStart: "2026-08-13T17:30:00.000Z", // 1:30 PM Eastern
+    customerName: "Devon Robinson",
+    technicianName: "Dan",
+    zone: "East",
+    compass: "",
+    miles: 4,
+    driveMinutes: 9,
+    address: "123 Main St, Averill Park",
+    service: "Water Heater Repair",
+    customerPhone: "5185550142",
+    status: "Scheduled",
+    lat: 42.6,
+    lng: -73.5,
+    ...over,
+  };
+}
+
+describe("dayLabelFromKey", () => {
+  it("renders a date key as a short weekday label", () => {
+    expect(dayLabelFromKey("2026-08-13")).toBe("Thu Aug 13");
+  });
+});
+
+describe("formatScheduleDays", () => {
+  it("omits the per-day heading for a single day, since the title carries it", () => {
+    const out = formatScheduleDays("Tomorrow — Thu Aug 13", [
+      { dateKey: "2026-08-13", rows: [row()] },
+    ]);
+    expect(out).toContain("*Tomorrow — Thu Aug 13* — 1 job");
+    expect(out).not.toContain("*Thu Aug 13*\n");
+    expect(out).toContain("Devon Robinson");
+  });
+
+  it("renders a per-day heading for each day when there are several", () => {
+    const out = formatScheduleDays("Next week", [
+      { dateKey: "2026-08-10", rows: [row()] },
+      { dateKey: "2026-08-11", rows: [] },
+    ]);
+    expect(out).toContain("*Next week* — 1 job");
+    expect(out).toContain("*Mon Aug 10*");
+    expect(out).toContain("*Tue Aug 11*");
+    expect(out).toContain("No jobs");
+  });
+
+  it("pluralizes the job count", () => {
+    const out = formatScheduleDays("Next week", [
+      { dateKey: "2026-08-10", rows: [row(), row({ id: "job_2" })] },
+    ]);
+    expect(out).toContain("— 2 jobs");
+  });
+
+  it("says so plainly when a single day is empty", () => {
+    const out = formatScheduleDays("Thu Aug 13", [{ dateKey: "2026-08-13", rows: [] }]);
+    expect(out).toContain("— 0 jobs");
+    expect(out).toContain("No jobs");
+  });
+});
+
+// formatWeeklyLookahead is what the 6am digest posts. Refactoring it to
+// delegate must not change a single byte of that message.
+describe("formatWeeklyLookahead regression", () => {
+  it("renders exactly what formatScheduleDays renders with the 'Week ahead' title", () => {
+    const days = [
+      { dateKey: "2026-08-10", rows: [row()] },
+      { dateKey: "2026-08-11", rows: [] },
+      { dateKey: "2026-08-12", rows: [row({ id: "job_2", customerName: "Ada Miller" })] },
+    ];
+    expect(formatWeeklyLookahead(new Date("2026-08-10T12:00:00Z"), days)).toBe(
+      formatScheduleDays("Week ahead", days)
+    );
+  });
+
+  it("still opens with the Week ahead header and a total", () => {
+    const out = formatWeeklyLookahead(new Date("2026-08-10T12:00:00Z"), [
+      { dateKey: "2026-08-10", rows: [row()] },
+      { dateKey: "2026-08-11", rows: [] },
+    ]);
+    expect(out.startsWith("*Week ahead* — 1 job")).toBe(true);
+  });
+});
+
+describe("formatMoneySummary", () => {
+  const estimates = [
+    { id: "e1", customerId: "c1", customerName: "Devon Robinson", amountCents: 120000, status: "Scheduled" },
+    { id: "e2", customerId: "c2", customerName: "Ada Miller", amountCents: 45000, status: null },
+  ];
+  const invoices = [
+    { id: "i1", customerId: "c3", customerName: "Sam Patel", amountCents: 85000, status: "open", dueDate: "2026-07-27", overdueDays: 12 },
+    { id: "i2", customerId: "c4", customerName: "Rae Okafor", amountCents: 30000, status: "open", dueDate: "2026-08-20", overdueDays: null },
+  ];
+
+  it("totals estimates and invoices in dollars", () => {
+    const out = formatMoneySummary(estimates, invoices);
+    expect(out).toContain("$1,650.00"); // 120000 + 45000
+    expect(out).toContain("$1,150.00"); // 85000 + 30000
+  });
+
+  it("counts the overdue invoices separately", () => {
+    expect(formatMoneySummary(estimates, invoices)).toContain("1 overdue");
+  });
+
+  it("marks how many days an invoice is overdue", () => {
+    expect(formatMoneySummary(estimates, invoices)).toContain("12 days overdue");
+  });
+
+  it("handles a null amount without rendering NaN", () => {
+    const out = formatMoneySummary(
+      [{ id: "e3", customerId: null, customerName: null, amountCents: null, status: null }],
+      []
+    );
+    expect(out).not.toContain("NaN");
+    expect(out).toContain("Unknown customer");
+  });
+
+  it("says so plainly when there is nothing outstanding", () => {
+    const out = formatMoneySummary([], []);
+    expect(out).toContain("No open estimates");
+    expect(out).toContain("No unpaid invoices");
   });
 });
