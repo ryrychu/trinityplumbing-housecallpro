@@ -52,6 +52,27 @@ const DEFAULT_ATTACHMENT_REHOST_MAX_PER_RUN = 25;
 // staleness to ~47h. 20h leaves margin without ever double-running in a day.
 const DEFAULT_INVOICE_RECONCILE_HOURS = 20;
 
+// Estimates need a full pass for a different reason than invoices, and a much
+// more frequent one. They DO carry `updated_at` — but HCP does not touch it
+// when an option's approval_status changes. Confirmed on the live account
+// 2026-08-09 from estimate #937: approved by the customer Wed 2026-08-05
+// 3:40pm Eastern, copied to job #5190 the following day, while
+// sync_cursors.estimates stayed pinned at 2026-08-05T17:00:06Z (1:00pm
+// Eastern) through ~380 cron runs. The cursor holds the max `updated_at` the
+// sync has seen, so it would have advanced had either event touched it.
+//
+// An incremental pass sorted newest-first therefore stops above every
+// approved-but-unbumped estimate, permanently. That silently broke two things
+// at once: the approval was never detected for Slack, and the mirror kept the
+// stale pre-approval options, so isOpenEstimate() went on counting an estimate
+// that had already become a job.
+//
+// No cursor can track a field the source does not update, so a complete pass
+// is the only thing that can see an approval. Hourly, not 20-hourly like
+// invoices: this is the money alert Trinity acts on, and at ~950 estimates a
+// full pass is 19 API calls, roughly a third of the invoice reconcile's 58.
+const DEFAULT_ESTIMATE_RECONCILE_HOURS = 1;
+
 async function syncAllPages<T>(
   fetchPage: (page: number) => Promise<{ items: T[]; page: number; totalPages: number }>,
   table: string,
@@ -139,6 +160,19 @@ export async function GET(req: Request) {
   const shouldReconcileInvoices =
     Number.isNaN(invoicesLastRunMs) || Date.now() - invoicesLastRunMs >= reconcileHours * 3_600_000;
 
+  // Same elapsed-time gate for the estimate full pass (see the constant above
+  // for why a cursor cannot do this job). Tracked under its own `estimates_full`
+  // key so it stays independent of the `estimates` cursor, which the
+  // incremental runs in between still use and still advance normally.
+  const estimateReconcileHours = Number(
+    process.env.ESTIMATE_RECONCILE_HOURS ?? DEFAULT_ESTIMATE_RECONCILE_HOURS
+  );
+  const estimatesFullLastRun = lastSyncedAt.get("estimates_full");
+  const estimatesFullLastRunMs = estimatesFullLastRun ? Date.parse(estimatesFullLastRun) : NaN;
+  const shouldReconcileEstimates =
+    Number.isNaN(estimatesFullLastRunMs) ||
+    Date.now() - estimatesFullLastRunMs >= estimateReconcileHours * 3_600_000;
+
   // Employees (6 rows) stay a full resync; the big four sync incrementally,
   // sharing the geocode budget so a first backfill can't blow the timeout.
   await syncAllPages((p) => hcp.listEmployees(p), "technicians", mapEmployee, budget);
@@ -151,6 +185,28 @@ export async function GET(req: Request) {
   // sync just touched" rule.
   const touchedEstimates: unknown[] = [];
 
+  // Same idea for invoices, and for a sharper reason. The targeted paid-invoice
+  // poll below is a LATENCY optimization; it is not, and cannot be, the
+  // correctness guarantee, because its watermark can strand itself with no way
+  // back. Two ways that happens, both observed or reachable in production:
+  //
+  //   1. The watermark never bootstraps. `newPaidWatermark` starts at the old
+  //      value and only moves when it sees a truthy `paid_at`, so if page 1
+  //      ever comes back without one, null stays null and the poll re-issues
+  //      the identical query forever. Live on 2026-08-09: sync_cursors held
+  //      `invoices_paid.last_updated_at = null` while its `synced_at` tracked
+  //      every run — the poll had been running, and learning nothing, since
+  //      alerts were switched on.
+  //   2. Back-dated payments. `paid_at_min=<watermark>` cannot see an invoice
+  //      whose `paid_at` precedes a cursor the poll has already moved past —
+  //      a check collected Tuesday and entered Friday is invisible by design.
+  //
+  // The 20-hour reconcile is the only pass that sees EVERY invoice, so it is
+  // what makes paid-invoice alerts eventually-correct. notifications_sent
+  // dedupes the overlap with the poll exactly as it already does between the
+  // estimate webhook and the estimate safety net: whichever claims first posts.
+  const touchedInvoices: unknown[] = [];
+
   const results: IncrementalResult[] = [
     await syncResourceIncremental(supabase, "customers", (p) => hcp.listCustomers(p), mapCustomer, budget, cursors.get("customers") ?? null, rehostBudget),
     await syncResourceIncremental(supabase, "jobs", (p) => hcp.listJobs(p), mapJob, budget, cursors.get("jobs") ?? null, rehostBudget),
@@ -160,18 +216,39 @@ export async function GET(req: Request) {
       (p) => hcp.listEstimates(p),
       mapEstimate,
       budget,
-      cursors.get("estimates") ?? null,
+      // null on a reconcile run = full pass, so an approved estimate whose
+      // `updated_at` never moved is still seen. `maxUpdated` starts from
+      // nothing but ends at the true max across every estimate, so this
+      // leaves the `estimates` cursor exactly where an incremental run
+      // would have.
+      shouldReconcileEstimates ? null : (cursors.get("estimates") ?? null),
       undefined,
       (items) => touchedEstimates.push(...items)
     ),
     await syncResourceIncremental(supabase, "leads", (p) => hcp.listLeads(p), mapLead, budget, cursors.get("leads") ?? null),
   ];
 
+  // Marker row only — `last_updated_at` stays null, exactly like `invoices`.
+  // What gates the next full pass is `synced_at`, which the shared cursor
+  // upsert below stamps for every entry in `results`.
+  if (shouldReconcileEstimates) {
+    results.push({ resource: "estimates_full", newCursor: null, upserted: 0, pagesFetched: 0 });
+  }
+
   if (shouldReconcileInvoices) {
     // Always a full pass: the cursor is meaningless for invoices, and passing a
     // stale one would make the early-stop skip records unpredictably.
     results.push(
-      await syncResourceIncremental(supabase, "invoices", (p) => hcp.listInvoices(p), mapInvoice, budget, null)
+      await syncResourceIncremental(
+        supabase,
+        "invoices",
+        (p) => hcp.listInvoices(p),
+        mapInvoice,
+        budget,
+        null,
+        undefined,
+        (items) => touchedInvoices.push(...items)
+      )
     );
   }
 
@@ -219,6 +296,28 @@ export async function GET(req: Request) {
       // reach the results.push above, or the watermark advances on a run that
       // claimed and posted nothing.
       console.error("[cron] paid-invoice notification pass failed:", err);
+    }
+  }
+
+  // The correctness backstop for paid invoices (see `touchedInvoices` above).
+  // Runs only on a reconcile run — roughly one run in eighty — so the cost is
+  // one extra claim round trip per 20 hours, not per 15 minutes.
+  //
+  // Unlike the poll, this pass advances no cursor, so there is nothing a
+  // failure here could skip past: a throw just means the next reconcile tries
+  // again. That is the whole point of moving correctness off the watermark.
+  //
+  // Note this feeds EVERY invoice the reconcile touched (~2.9k), not just new
+  // ones. detectPaidInvoices filters to the ~2.2k paid, and claimMany collapses
+  // them into a single upsert whose `select` returns only the rows Postgres
+  // actually created — so the steady-state result is one round trip that
+  // returns nothing, and the Slack post is skipped entirely.
+  if (slackAlertsEnabled() && touchedInvoices.length > 0) {
+    try {
+      await notifyPaidInvoices(supabase, touchedInvoices);
+    } catch (err) {
+      // Same guarantee as every other notification pass: never fail the sync.
+      console.error("[cron] paid-invoice reconcile notification pass failed:", err);
     }
   }
 

@@ -82,6 +82,12 @@ anything. The original spec is
   channel, read in `src/lib/notifications/dispatch.ts`.
 - `SLACK_WEBHOOK_ESTIMATES` — Slack incoming webhook for the approved-estimate
   channel, read in `src/lib/notifications/dispatch.ts`.
+- `ESTIMATE_RECONCILE_HOURS` — how often `/api/cron/sync` does a **full**
+  estimate pass instead of an incremental one (default `1`). This is what
+  detects estimate approvals at all — see the DST/scheduling note below for
+  why a cursor cannot. Lower means faster alerts and more API calls (~19 per
+  full pass at present volume); raising it above a few hours means approvals
+  sit unreported for that long.
 - `SLACK_ALERTS_ENABLED` — master kill switch for all Slack output. Only the
   exact string `true` enables posting; unset, empty, or any other value (e.g.
   `false`, `1`) disables it. **Do not set this until you have applied and
@@ -134,6 +140,17 @@ Two behaviors worth understanding before touching this:
   which is wrong for half the year across DST — so the window check runs on
   every invocation instead. A missed 6:00 run self-heals on the next one,
   right up until the 12:00 cutoff.
+- **Paid-invoice alerts come from two passes, not one.** A targeted poll runs
+  every 15 minutes for latency, and the 20-hour full invoice reconcile feeds
+  the same notifier for correctness. Only the second is a guarantee: the
+  poll's `invoices_paid` watermark advances only to a `paid_at` it actually
+  saw on page 1, so a page with no usable `paid_at` leaves it stuck exactly
+  where it was, and `paid_at_min` makes a back-dated payment invisible once
+  the cursor is past it. Both were live: on 2026-08-09 the watermark was
+  still `null` while its `synced_at` tracked every run — the poll had been
+  running since alerts went on and had never advanced. `notifications_sent`
+  dedupes the overlap, so the reconcile posting what the poll missed can
+  never double-post what it caught.
 - **The Vercel cron is the scheduler.** `vercel.json` runs
   `GET /api/cron/sync` every 15 minutes (`*/15 * * * *`), which the account's
   Vercel Pro plan allows; the external scheduler that used to be required was
@@ -148,9 +165,17 @@ Two behaviors worth understanding before touching this:
   tripwire, and it was removed as noise — so a stalled scheduler now shows up
   as a *missing* 6 a.m. digest rather than a stale-looking one. That is still
   a real signal, since the digest sends every day including weekends and
-  empty days, but it needs someone to notice an absence. Estimate approvals,
-  by contrast, arrive by webhook and post almost instantly regardless of the
-  poller's health.
+  empty days, but it needs someone to notice an absence. Estimate approvals
+  depend on the cron too, and for a reason worth knowing: **HCP does not bump
+  an estimate's `updated_at` when an option's `approval_status` changes.**
+  Confirmed 2026-08-09 from estimate #937 — approved by the customer on
+  2026-08-05 at 3:40pm Eastern, copied to a job the next day, while
+  `sync_cursors.estimates` never moved off 2026-08-05T17:00:06Z. An
+  incremental pass sorted newest-first stops above such an estimate forever,
+  so no cursor can ever reach it. The hourly full estimate pass
+  (`ESTIMATE_RECONCILE_HOURS`) is what actually detects approvals; the webhook
+  is a latency optimization on top, and as of this writing it is not known to
+  fire for option-level approvals at all.
 
 ## Deploy
 

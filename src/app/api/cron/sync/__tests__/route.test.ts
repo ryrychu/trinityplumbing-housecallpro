@@ -15,6 +15,7 @@ const {
   claimMock,
   notifyPaidInvoicesMock,
   notifyApprovedEstimatesMock,
+  listEstimatesMock,
   postSlackMock,
   slackAlertsEnabledMock,
   getDashboardSnapshotMock,
@@ -32,6 +33,7 @@ const {
     // Shared reference (rather than a fresh vi.fn() per `new HousecallClient()`
     // call) so tests can assert on call args/count directly.
     listPaidInvoicesSinceMock: vi.fn().mockResolvedValue({ items: [], page: 1, totalPages: 1 }),
+    listEstimatesMock: vi.fn().mockResolvedValue({ items: [{ id: "es1" }], page: 1, totalPages: 1 }),
     claimMock: vi.fn().mockResolvedValue(true),
     notifyPaidInvoicesMock: vi.fn().mockResolvedValue(0),
     notifyApprovedEstimatesMock: vi.fn().mockResolvedValue(0),
@@ -52,7 +54,7 @@ vi.mock("@/lib/housecall/client", () => ({
       listCustomers: vi.fn().mockResolvedValue({ items: [{ id: "c1" }], page: 1, totalPages: 1 }),
       listEmployees: vi.fn().mockResolvedValue({ items: [{ id: "e1" }], page: 1, totalPages: 1 }),
       listJobs: vi.fn().mockResolvedValue({ items: [{ id: "j1", tags: [] }], page: 1, totalPages: 1 }),
-      listEstimates: vi.fn().mockResolvedValue({ items: [{ id: "es1" }], page: 1, totalPages: 1 }),
+      listEstimates: listEstimatesMock,
       listInvoices: vi.fn().mockResolvedValue({ items: [{ id: "i1" }], page: 1, totalPages: 1 }),
       listLeads: vi.fn().mockResolvedValue({ items: [{ id: "lead_1" }], page: 1, totalPages: 1 }),
       listPaidInvoicesSince: listPaidInvoicesSinceMock,
@@ -103,6 +105,7 @@ describe("GET /api/cron/sync", () => {
     getDashboardSnapshotMock.mockResolvedValue({ todaySchedule: [] });
     getWeekAheadScheduleMock.mockResolvedValue([]);
     listPaidInvoicesSinceMock.mockResolvedValue({ items: [], page: 1, totalPages: 1 });
+    listEstimatesMock.mockResolvedValue({ items: [{ id: "es1" }], page: 1, totalPages: 1 });
   });
 
   afterEach(() => {
@@ -245,6 +248,163 @@ describe("GET /api/cron/sync", () => {
         ([rows]) => Array.isArray(rows) && rows.some((r: { resource: string }) => r.resource === "invoices_paid")
       );
       expect(cursorCall).toBeUndefined();
+    });
+  });
+
+  // The targeted poll above is a LATENCY optimization, not the correctness
+  // guarantee — it can strand itself permanently. Live evidence (2026-08-09):
+  // sync_cursors.invoices_paid sat at null while its synced_at tracked every
+  // run, which is only reachable if page 1 kept coming back with no usable
+  // `paid_at`. `newPaidWatermark` starts at the old watermark and only moves
+  // when it sees a truthy paid_at, so null can never bootstrap itself: the
+  // poll re-issued the identical query every 15 minutes and learned nothing.
+  // Back-dated payments strand it the same way — `paid_at_min=<watermark>`
+  // cannot see an invoice paid before the cursor it already passed.
+  //
+  // The 20-hour reconcile is the only pass that sees EVERY invoice, so it is
+  // what makes paid-invoice alerts eventually-correct, exactly as
+  // `touchedEstimates` already does for approvals. notifications_sent dedupes
+  // the overlap with the poll, so whichever claims first posts.
+  describe("paid-invoice reconcile safety net", () => {
+    it("feeds the invoices the 20-hour reconcile touched into notifyPaidInvoices", async () => {
+      const res = await GET(authorizedRequest());
+
+      expect(res.status).toBe(200);
+      expect(notifyPaidInvoicesMock).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.arrayContaining([expect.objectContaining({ id: "i1" })])
+      );
+    });
+
+    // Same gate as every other notification pass: the rollout runbook deploys
+    // with alerts off for hours or days, and claiming during that window would
+    // permanently suppress the alerts it claimed.
+    it("does not run the reconcile notification pass when the kill switch is off", async () => {
+      slackAlertsEnabledMock.mockReturnValue(false);
+
+      await GET(authorizedRequest());
+
+      expect(notifyPaidInvoicesMock).not.toHaveBeenCalled();
+    });
+
+    it("does not fail the sync when the reconcile notification pass throws", async () => {
+      notifyPaidInvoicesMock.mockRejectedValue(new Error("db down"));
+
+      const res = await GET(authorizedRequest());
+
+      expect(res.status).toBe(200);
+    });
+
+    // On the ~79 runs out of every 80 that skip the reconcile, there are no
+    // touched invoices, so this pass must stay silent rather than re-posting
+    // the targeted poll's page on every single run.
+    it("does not run the reconcile notification pass on a run that skips the reconcile", async () => {
+      selectMock.mockResolvedValueOnce({
+        data: [{ resource: "invoices", last_updated_at: null, synced_at: new Date().toISOString() }],
+        error: null,
+      });
+
+      const res = await GET(authorizedRequest());
+
+      expect(await res.json()).toMatchObject({ invoicesReconciled: false });
+      // The targeted poll still runs, but its page is empty in this setup.
+      expect(notifyPaidInvoicesMock).not.toHaveBeenCalledWith(
+        expect.anything(),
+        expect.arrayContaining([expect.objectContaining({ id: "i1" })])
+      );
+    });
+  });
+
+  // Approving an estimate option does NOT bump the parent estimate's
+  // `updated_at` in HCP. Confirmed against the live account on 2026-08-09 from
+  // estimate #937: the customer approved it Wed 2026-08-05 3:40pm Eastern and
+  // it was copied to job #5190 the next day, yet sync_cursors.estimates stayed
+  // pinned at 2026-08-05T17:00:06Z (1:00pm Eastern) across ~380 cron runs. The
+  // cursor is the max `updated_at` the sync has seen, so it would have moved
+  // if either event had touched the field.
+  //
+  // That breaks the incremental sync's core assumption. Sorted newest-first and
+  // stopping at the cursor, an approved estimate whose `updated_at` never moved
+  // sits below the stop point forever: it never reaches `touchedEstimates`, so
+  // the approval is never detected, AND the mirror keeps the pre-approval
+  // options — which is why the dashboard's isOpenEstimate() went on listing an
+  // estimate that had already become a job.
+  //
+  // No cursor can track a field the source does not update, so correctness has
+  // to come from a periodic COMPLETE pass, exactly as it does for invoices.
+  describe("estimate full-reconcile pass", () => {
+    // An estimate older than the cursor is precisely the approved-but-unbumped
+    // case. The incremental pass must skip it; the reconcile must catch it.
+    const staleEstimate = { id: "es_approved", updated_at: "2026-01-01T00:00:00Z" };
+    const cursorRows = (estimatesFullSyncedAt: string | null) => ({
+      data: [
+        { resource: "estimates", last_updated_at: "2026-06-01T00:00:00Z", synced_at: null },
+        ...(estimatesFullSyncedAt
+          ? [{ resource: "estimates_full", last_updated_at: null, synced_at: estimatesFullSyncedAt }]
+          : []),
+      ],
+      error: null,
+    });
+
+    it("sees an approved estimate whose updated_at never moved, when the reconcile is due", async () => {
+      listEstimatesMock.mockResolvedValue({ items: [staleEstimate], page: 1, totalPages: 1 });
+      selectMock.mockResolvedValueOnce(cursorRows(null));
+
+      const res = await GET(authorizedRequest());
+
+      expect(res.status).toBe(200);
+      expect(notifyApprovedEstimatesMock).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.arrayContaining([expect.objectContaining({ id: "es_approved" })])
+      );
+    });
+
+    // The same estimate on a non-reconcile run: the incremental stop test
+    // correctly skips it, which is exactly why the reconcile has to exist.
+    it("skips it on an incremental-only run, and records the reconcile marker", async () => {
+      listEstimatesMock.mockResolvedValue({ items: [staleEstimate], page: 1, totalPages: 1 });
+      selectMock.mockResolvedValueOnce(cursorRows(new Date().toISOString()));
+
+      const res = await GET(authorizedRequest());
+
+      expect(res.status).toBe(200);
+      expect(notifyApprovedEstimatesMock).not.toHaveBeenCalledWith(
+        expect.anything(),
+        expect.arrayContaining([expect.objectContaining({ id: "es_approved" })])
+      );
+    });
+
+    it("records an estimates_full marker so the interval gate can advance", async () => {
+      selectMock.mockResolvedValueOnce(cursorRows(null));
+
+      await GET(authorizedRequest());
+
+      const cursorCall = upsertMock.mock.calls.find(
+        ([rows]) => Array.isArray(rows) && rows.some((r: { resource: string }) => r.resource === "estimates_full")
+      );
+      expect(cursorCall).toBeDefined();
+    });
+
+    // The reconcile must not clobber the real estimates cursor: passing null
+    // makes maxUpdated start from nothing, but it still ends at the true max
+    // across every estimate, so the incremental runs in between stay correct.
+    it("still reports the true max updated_at on the estimates cursor after a full pass", async () => {
+      listEstimatesMock.mockResolvedValue({
+        items: [staleEstimate, { id: "es_new", updated_at: "2026-07-01T00:00:00Z" }],
+        page: 1,
+        totalPages: 1,
+      });
+      selectMock.mockResolvedValueOnce(cursorRows(null));
+
+      await GET(authorizedRequest());
+
+      const cursorCall = upsertMock.mock.calls.find(
+        ([rows]) => Array.isArray(rows) && rows.some((r: { resource: string }) => r.resource === "estimates")
+      );
+      const row = (cursorCall as [Array<{ resource: string; last_updated_at: string | null }>])[0].find(
+        (r) => r.resource === "estimates"
+      );
+      expect(row?.last_updated_at).toBe("2026-07-01T00:00:00Z");
     });
   });
 

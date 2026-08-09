@@ -77,16 +77,27 @@ event subscriptions need checking.
 **Nothing to configure for invoices** — HCP has no invoice webhook, so paid
 invoices are polled through the API key you already have.
 
-## 6. Verify the estimate-option event name (open question)
+## 6. Verify the estimate-option event name (still open)
 
-Estimate approval lives per-option. If HCP delivers that as an
-`estimate_option.*` event rather than `estimate.updated`, the instant path will
-not fire — the cron pass still catches it within ~15 minutes, so nothing is
-lost, but you want to know which is happening.
+Estimate approval lives per-option, and the instant webhook path is **not**
+confirmed to fire for it. Estimate #937 was customer-approved on 2026-08-05 at
+3:40pm Eastern and never reached Slack, so either HCP sent an
+`estimate_option.*` event — which `syncOneRecord` rejects as an unknown
+resource, and the route returns early on that throw *before* reaching its
+`notifyApprovedEstimates` call — or it sent no estimate webhook at all.
+
+The earlier note here said the cron pass caught it "within ~15 minutes, so
+nothing is lost." **That was wrong**, and it is why the approval went missing:
+HCP does not bump the estimate's `updated_at` on approval, so the incremental
+cursor could never reach it. The hourly full estimate pass added on
+2026-08-09 is what closes that; this step now only buys back latency
+(≤1 hour → near-instant).
 
 - [ ] Approve one test estimate option in HCP
 - [ ] Check Vercel logs for `/api/webhooks/housecall` and note the event name
-- [ ] If it starts with `estimate_option`, report it — it is a small fix
+- [ ] Report the event name **and the payload's top-level keys** — the fix
+      differs depending on whether the body carries the full estimate or just
+      the option
 
 ## 7. Stand up the scheduler
 

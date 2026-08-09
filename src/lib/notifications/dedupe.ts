@@ -17,9 +17,18 @@ export type NotificationKind =
 
 // Batch, not per-row: the targeted paid-invoice poll can return up to 50
 // invoices in a single run (page_size=50); claiming them one at a time would
-// be 50 round trips where one upsert suffices. (The 20-hour full invoice
-// reconcile does NOT feed claimMany at all — it only upserts the `invoices`
-// table, never `notifications_sent` — so it is not the batching motivation.)
+// be 50 round trips where one upsert suffices.
+//
+// The 20-hour full invoice reconcile now feeds this too (the correctness
+// backstop in src/app/api/cron/sync/route.ts — the poll's watermark can
+// strand itself permanently, so it cannot be the only path). That pass hands
+// over every paid invoice in the account at once, ~2.2k of them, which is far
+// beyond the 50 this was sized for. It works because `ignoreDuplicates` makes
+// all but the genuinely new rows no-ops and `select` returns only what
+// Postgres actually created. If that single upsert ever grows past what
+// PostgREST will accept, chunk it here rather than at the call site — the
+// throw below is already safe (the reconcile pass logs and retries in 20
+// hours, advancing no cursor), so the failure mode is delay, not loss.
 export async function claimMany(
   supabase: SupabaseClient,
   kind: NotificationKind,
