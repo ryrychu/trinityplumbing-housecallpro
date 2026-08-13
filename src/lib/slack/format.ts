@@ -141,12 +141,50 @@ export function formatWeeklyLookahead(
   return formatScheduleDays("Week ahead", days);
 }
 
+// "Aug 12, 10:41 PM" for HCP's `paid_at`. Eastern, like every other timestamp
+// here: paid_at is a UTC instant, and an evening payment carries the FOLLOWING
+// day's UTC date — 2026-08-13T02:41:00Z is 10:41 PM on the 12th in Averill
+// Park — so slicing the ISO string would print the wrong day on every
+// after-8pm payment.
+//
+// No weekday, unlike dayLabel: these lines already sit under a bolded count
+// and repeat once per invoice, and "Wed" earns less than the ten columns it
+// costs on a phone.
+//
+// Returns null for a missing or unparseable instant. Intl throws a RangeError
+// on an Invalid Date, and a malformed timestamp must cost the reader a detail,
+// never the whole message.
+function paidAtLabel(iso: string | null): string | null {
+  if (!iso) return null;
+  const instant = new Date(iso);
+  if (Number.isNaN(instant.getTime())) return null;
+
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: TZ,
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  }).formatToParts(instant);
+  const get = (t: string) => parts.find((p) => p.type === t)?.value ?? "";
+  return `${get("month")} ${get("day")}, ${get("hour")}:${get("minute")} ${get("dayPeriod").toUpperCase()}`;
+}
+
 export function formatPaidInvoices(lines: PaidInvoiceLine[]): string {
   const header = `*${lines.length} ${lines.length === 1 ? "invoice paid" : "invoices paid"}*`;
   const body = lines
     .map((l) => {
       const number = l.invoiceNumber ? ` #${l.invoiceNumber}` : "";
-      return `• ${l.customerName ?? "Unknown customer"} — ${formatCents(l.amountCents)}${number}`;
+      const paid = paidAtLabel(l.paidAt);
+      // Always stamped when HCP gave a time, not only when it differs from
+      // today: this channel is read to reconcile against a bank deposit, and
+      // an alert can trail the payment by up to the 20-hour invoice reconcile
+      // (or arbitrarily, for a back-dated one). An absent stamp would then
+      // read as "paid just now", which is the error that costs someone real
+      // time to unpick.
+      const when = paid ? `  ·  ${paid}` : "";
+      return `• ${l.customerName ?? "Unknown customer"} — ${formatCents(l.amountCents)}${number}${when}`;
     })
     .join("\n");
   return `${header}\n${body}`;

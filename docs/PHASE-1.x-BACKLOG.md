@@ -226,6 +226,47 @@ filters work on the live account:**
 `sort_direction=desc` — this lets the cron detect newly-paid invoices with a
 single API call instead of the current 58-call full pass.
 
+## RESOLVED — invoices have no `customer` at all (2026-08-13)
+
+Trinity reported three consecutive paid-invoice messages — fourteen lines —
+where **every** line read "Unknown customer". This settles the open I4
+question, and settles it the pessimistic way.
+
+**A live invoice payload carries no `customer` key whatsoever.** Not a nested
+`first_name`/`last_name`/`company`, not even a bare `{id}`. The go-live Step 2
+key census already said as much (`id/items/taxes/amount/due_at/job_id/status/
+paid_at/invoice_date/service_date`), but `HcpInvoice` declared `customer?` and
+every fixture in `detect.test.ts` hand-wrote one, so the suite stayed green
+while production printed a placeholder on every line. This is the same failure
+mode as the go-live "test fixtures encoded invented values" finding above —
+a fixture asserting a shape nobody had seen.
+
+Consequences, both now fixed:
+
+- **Slack paid-invoice alerts.** `detect.ts` produced `customerName: null` AND
+  `customerId: null`, so `dispatch.ts`'s customers-table fallback had no id to
+  look up and passed the lines through untouched. Resolution now walks the link
+  the payload *does* carry: `job_id` → `jobs.customer_id` → `customers`
+  (item 4 above: invoices carry `job_id` directly).
+- **`invoices.customer_id` was null for all ~2.9k mirrored rows**, because
+  `mapInvoice` is a pure function of a payload with no customer in it. That is
+  why `/app/money`'s unpaid list showed "Unknown customer" too — the same root
+  cause, a second surface, not separately reported.
+  `src/lib/sync/invoiceCustomer.ts` now fills the column from the jobs mirror
+  before each upsert. **No migration or one-off backfill script is needed:**
+  the 20-hour invoice reconcile is a full pass (cursor `null`), so it
+  re-upserts every invoice and back-fills the column within one reconcile
+  cycle. Cost is one extra `jobs` lookup per 50-record page, ~58 per reconcile.
+
+Paid-invoice Slack lines now also carry `paid_at` rendered in Eastern
+("Aug 12, 10:41 PM"). An alert can trail the payment by up to the reconcile
+window, or arbitrarily for a back-dated one, so an unstamped line was being
+read as "just paid".
+
+**Rule this leaves behind:** an HCP field is real when a live payload or a
+recorded probe shows it, not when a type declares it. `HcpEstimate.customer`
+is real; `HcpInvoice.customer` never was.
+
 ## Housekeeping
 
 - Add an assertion test that pins each mapper's output keys to the migration's

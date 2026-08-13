@@ -9,6 +9,7 @@
 // alerts are turned on.
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { postSlack, slackAlertsEnabled } from "@/lib/slack/client";
+import { selectByIds } from "@/lib/supabase/selectByIds";
 import { formatPaidInvoices, formatApprovedEstimates } from "@/lib/slack/format";
 import { detectPaidInvoices, detectApprovedEstimates } from "./detect";
 import { claimMany } from "./dedupe";
@@ -16,57 +17,91 @@ import { claimMany } from "./dedupe";
 interface HasCustomerRef {
   customerName: string | null;
   customerId: string | null;
+  // Invoices only. Estimates carry a real `customer` and never need this hop,
+  // so it is optional rather than a field every caller has to invent.
+  jobId?: string | null;
 }
 
-// I4: detect.ts's nested-name read (customer.first_name/last_name/company) is
-// best-effort and unverified against a live payload; HcpInvoice/HcpEstimate
-// both type `customer` as `{ id }`-only elsewhere in the sync path. Rather
-// than trust the nested names, resolve any still-missing name from the
-// already-synced local `customers` table by id — the same source of truth
-// src/lib/dashboard/queries.ts's `fullName` pattern reads from. Kept here
-// (not in detect.ts) because it needs DB access; detect.ts stays pure.
+// Resolve a name for every line that still lacks one, walking as far down the
+// chain as that line's payload allows:
 //
-// Only queries for the subset that still needs it, and only once per batch
-// (deduped ids), so the common case — nested names present — never touches
-// the database.
+//   customerName (from the payload)             -- estimates: usually here
+//     -> customerId -> customers                -- an id-only customer
+//       -> jobId -> jobs.customer_id -> customers   -- INVOICES: always here
+//
+// The last hop is the one that matters in production. A live invoice payload
+// contains no `customer` key whatsoever (see detect.ts), so the first two
+// steps yield nothing and every line rendered "Unknown customer" — fourteen in
+// a row across three real Slack messages on 2026-08-13. `job_id` is the only
+// customer link HCP puts on an invoice, and both mirrors it needs (jobs,
+// customers) are synced earlier in the same cron run.
+//
+// Kept here rather than in detect.ts because it needs DB access; detect.ts
+// stays pure. Each hop runs at most one query per batch over deduped ids, and
+// only for the subset still missing a name — a batch that already has names
+// never touches the database.
 async function fillMissingCustomerNames<T extends HasCustomerRef>(
   supabase: SupabaseClient,
   lines: T[]
 ): Promise<T[]> {
-  const missingIds = Array.from(
-    new Set(
-      lines
-        .filter((l): l is T & { customerId: string } => l.customerName == null && !!l.customerId)
-        .map((l) => l.customerId)
-    )
+  const needsName = lines.filter((l) => l.customerName == null);
+  if (needsName.length === 0) return lines;
+
+  // Hop 1: lines that already name a customer id use it directly.
+  const idByLine = new Map<T, string>();
+  for (const l of needsName) {
+    if (l.customerId) idByLine.set(l, l.customerId);
+  }
+
+  // Hop 2: everything still unresolved goes through its job.
+  const jobIds = unique(
+    needsName.filter((l) => !idByLine.has(l)).map((l) => l.jobId ?? null)
   );
-  if (missingIds.length === 0) return lines;
+  if (jobIds.length > 0) {
+    const jobs = await selectByIds<{ id: string; customer_id: string | null }>(
+      supabase,
+      "jobs",
+      "id, customer_id",
+      jobIds
+    );
+    const customerIdByJob = new Map(jobs.map((j) => [j.id, j.customer_id]));
+    for (const l of needsName) {
+      if (idByLine.has(l) || !l.jobId) continue;
+      const customerId = customerIdByJob.get(l.jobId);
+      if (customerId) idByLine.set(l, customerId);
+    }
+  }
 
-  const { data, error } = await supabase
-    .from("customers")
-    .select("id, first_name, last_name, company")
-    .in("id", missingIds);
-  if (error || !data) return lines;
+  const customerIds = unique(Array.from(idByLine.values()));
+  if (customerIds.length === 0) return lines;
 
-  const byId = new Map(
-    (
-      data as Array<{
-        id: string;
-        first_name: string | null;
-        last_name: string | null;
-        company: string | null;
-      }>
-    ).map((c) => [c.id, c])
+  const customers = await selectByIds<{
+    id: string;
+    first_name: string | null;
+    last_name: string | null;
+    company: string | null;
+  }>(supabase, "customers", "id, first_name, last_name, company", customerIds);
+
+  // Matches the `fullName` pattern in src/lib/dashboard/queries.ts and
+  // customerNames() in src/lib/mobile/money.ts: person name first, company as
+  // the fallback for a commercial account filed with no contact name.
+  const nameById = new Map(
+    customers.map((c) => {
+      const person = [c.first_name, c.last_name].filter(Boolean).join(" ");
+      return [c.id, person || c.company || null];
+    })
   );
 
   return lines.map((l) => {
-    if (l.customerName != null || !l.customerId) return l;
-    const c = byId.get(l.customerId);
-    if (!c) return l;
-    const person = [c.first_name, c.last_name].filter(Boolean).join(" ");
-    const name = person || c.company || null;
+    const customerId = idByLine.get(l);
+    if (!customerId) return l;
+    const name = nameById.get(customerId);
     return name ? { ...l, customerName: name } : l;
   });
+}
+
+function unique(values: Array<string | null | undefined>): string[] {
+  return Array.from(new Set(values.filter((v): v is string => !!v)));
 }
 
 // Both notify* functions return the count of NEWLY CLAIMED items (i.e. rows

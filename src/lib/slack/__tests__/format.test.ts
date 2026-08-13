@@ -10,6 +10,7 @@ import {
   dayLabelFromKey,
 } from "../format";
 import type { TodayScheduleRow } from "@/lib/dashboard/queries";
+import type { PaidInvoiceLine } from "@/lib/notifications/detect";
 
 describe("formatCents", () => {
   it("renders cents as dollars — the money bug that matters most here", () => {
@@ -191,10 +192,21 @@ describe("formatWeeklyLookahead", () => {
 });
 
 describe("formatPaidInvoices", () => {
+  const line = (over: Partial<PaidInvoiceLine> = {}): PaidInvoiceLine => ({
+    id: "inv_1",
+    customerName: "Mary Kolakowski",
+    customerId: "cus_1",
+    jobId: null,
+    amountCents: 428000,
+    invoiceNumber: "1042",
+    paidAt: null,
+    ...over,
+  });
+
   it("lists each invoice with a dollar amount", () => {
     const out = formatPaidInvoices([
-      { id: "inv_1", customerName: "Mary Kolakowski", customerId: "cus_1", amountCents: 428000, invoiceNumber: "1042" },
-      { id: "inv_2", customerName: null, customerId: null, amountCents: null, invoiceNumber: null },
+      line(),
+      line({ id: "inv_2", customerName: null, customerId: null, amountCents: null, invoiceNumber: null }),
     ]);
     expect(out).toContain("2 invoices paid");
     expect(out).toContain("Mary Kolakowski");
@@ -205,15 +217,37 @@ describe("formatPaidInvoices", () => {
   });
 
   it("uses the singular heading for one and plural for many", () => {
-    const one = formatPaidInvoices([
-      { id: "a", customerName: "X", customerId: null, amountCents: 100, invoiceNumber: "1" },
-    ]);
-    const two = formatPaidInvoices([
-      { id: "a", customerName: "X", customerId: null, amountCents: 100, invoiceNumber: "1" },
-      { id: "b", customerName: "Y", customerId: null, amountCents: 200, invoiceNumber: "2" },
-    ]);
+    const one = formatPaidInvoices([line()]);
+    const two = formatPaidInvoices([line(), line({ id: "b" })]);
     expect(one).toContain("1 invoice paid");
     expect(two).toContain("2 invoices paid");
+  });
+
+  // Trinity reads this channel to reconcile against a bank deposit, and ten
+  // payments can land in one message. Eastern time, like every other timestamp
+  // this file renders — HCP sends paid_at as a UTC instant, and 02:41Z is the
+  // night BEFORE in Averill Park, so a naive slice of the ISO string would
+  // print the wrong day.
+  it("stamps each line with when the payment landed, in Eastern time", () => {
+    const out = formatPaidInvoices([
+      line({ customerName: "Devon Robinson", amountCents: 29592, invoiceNumber: "5143", paidAt: "2026-08-13T02:41:00Z" }),
+    ]);
+    expect(out).toContain("• Devon Robinson — $295.92 #5143  ·  Aug 12, 10:41 PM");
+  });
+
+  it("omits the stamp entirely when HCP sent no paid_at", () => {
+    const out = formatPaidInvoices([line({ paidAt: null })]);
+    expect(out).toBe("*1 invoice paid*\n• Mary Kolakowski — $4,280.00 #1042");
+  });
+
+  it("omits the stamp rather than throwing on an unparseable paid_at", () => {
+    const out = formatPaidInvoices([line({ paidAt: "not-a-date" })]);
+    expect(out).toBe("*1 invoice paid*\n• Mary Kolakowski — $4,280.00 #1042");
+  });
+
+  it("keeps the stamp on a line that has no invoice number", () => {
+    const out = formatPaidInvoices([line({ invoiceNumber: null, paidAt: "2026-08-13T02:41:00Z" })]);
+    expect(out).toContain("• Mary Kolakowski — $4,280.00  ·  Aug 12, 10:41 PM");
   });
 });
 

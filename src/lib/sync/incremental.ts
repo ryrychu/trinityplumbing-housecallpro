@@ -13,6 +13,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { buildGeocodeTargets } from "./geocodeSpecs";
 import { enrichRowsWithGeocode, type GeocodeBudget } from "@/lib/geo/geocode";
 import { syncAttachments, type RehostBudget } from "./attachments";
+import { fillInvoiceCustomerIds } from "./invoiceCustomer";
 
 export interface IncrementalResult {
   resource: string;
@@ -74,6 +75,14 @@ export async function syncResourceIncremental<T extends WithUpdatedAt>(
       const targets = buildGeocodeTargets(resource, fresh as unknown[], rows);
       if (targets.length > 0) {
         await enrichRowsWithGeocode(supabase, targets, budget);
+      }
+      // Invoices arrive with no customer on the payload at all, only a
+      // job_id — so their customer_id has to be resolved from the jobs mirror
+      // before the upsert, or the column stays null forever. Same in-place
+      // enrichment shape as the geocode step above. Jobs sync earlier in the
+      // cron run than invoices, so the mirror this reads is already current.
+      if (resource === "invoices") {
+        await fillInvoiceCustomerIds(supabase, rows);
       }
       const { error } = await supabase.from(resource).upsert(rows);
       if (error) {

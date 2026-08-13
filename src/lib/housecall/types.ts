@@ -65,20 +65,26 @@ export interface HcpEstimate {
 }
 
 // Confirmed against the live account (Task 0): invoices use `amount` (not
-// `total_amount`) and carry no top-level customer/job link — they associate
-// with a job via a shared `invoice_number`.
+// `total_amount`). The old note here — "carry no top-level customer/job link,
+// they associate with a job via a shared invoice_number" — was half wrong and
+// is corrected by docs/PHASE-1.x-BACKLOG.md item 4:
+//
+//   - `job_id` IS present and direct (e.g. "job_a955…"). It is the ONLY link
+//     an invoice has to a human, so it is how both the mirror
+//     (src/lib/sync/invoiceCustomer.ts) and the Slack paid-invoice alert
+//     (src/lib/notifications/dispatch.ts) reach a customer name.
+//   - `customer` is genuinely absent. The live key census is id/items/taxes/
+//     amount/due_at/job_id/status/paid_at/invoice_date/service_date.
+//
+// `customer` therefore stays declared but must be treated as never present on
+// this resource. It is NOT deleted because both readers accept it as a
+// shortcut when it appears, and because HcpEstimate's identical-looking
+// `customer` IS real — deleting one and not the other invites the confusion
+// that produced the "Unknown customer" bug in the first place.
 //
 // `paid_at`: read by the paid-invoice watermark (src/app/api/cron/sync/route.ts)
-// to advance sync_cursors["invoices_paid"]. Declaring it here (instead of the
-// route casting `unknown`) means the compiler protects the one field the
-// watermark depends on.
-//
-// `customer`/`invoice_number`: detect.ts's customerName() reads nested
-// first_name/last_name/company off `customer`, but this type previously
-// declared only `{ id: string }` — the shape `mapInvoice` actually reads.
-// Declared as optional here because it is unverified against a live payload
-// (I4 finding); detect.ts treats it as best-effort and falls back to a local
-// `customers` table lookup by id when these fields are absent.
+// to advance sync_cursors["invoices_paid"], and rendered on each Slack line so
+// a reconcile-run alert cannot be mistaken for a payment that just landed.
 export interface HcpInvoice {
   id: string;
   job_id?: string;

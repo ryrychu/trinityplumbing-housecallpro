@@ -207,6 +207,58 @@ describe("syncResourceIncremental", () => {
     expect(onTouched).not.toHaveBeenCalled();
   });
 
+  // Invoices are the one resource whose mapped row cannot know its own
+  // customer: the live payload has no `customer` object, only `job_id`. The
+  // sync resolves it from the already-synced jobs mirror before upserting, the
+  // same in-place enrichment shape buildGeocodeTargets/enrichRowsWithGeocode
+  // use for coordinates. Jobs sync earlier in the same cron run, so the mirror
+  // is fresh by the time invoices land.
+  it("fills invoices.customer_id from the jobs mirror before upserting", async () => {
+    const invoiceUpsert = vi.fn().mockResolvedValue({ error: null });
+    const localSupabase = {
+      from: vi.fn((table: string) => ({
+        upsert: invoiceUpsert,
+        select: () => ({
+          in: () =>
+            Promise.resolve({
+              data: table === "jobs" ? [{ id: "job_a", customer_id: "cus_1" }] : [],
+              error: null,
+            }),
+        }),
+      })),
+    } as unknown as SupabaseClient;
+
+    // Live invoices carry no updated_at at all — that absence is why the cron
+    // reconciles them on an elapsed-time gate instead of a cursor.
+    const invoiceMapper = (x: { id: string; job_id?: string }) => ({
+      id: x.id,
+      job_id: x.job_id ?? null,
+      customer_id: null,
+    });
+    const fetchPage = async (page: number) => ({
+      items: page === 1 ? [{ id: "inv_1", job_id: "job_a", updated_at: undefined }] : [],
+      page,
+      totalPages: 1,
+    });
+
+    await syncResourceIncremental(localSupabase, "invoices", fetchPage, invoiceMapper, { remaining: 0 }, null);
+
+    const rows = invoiceUpsert.mock.calls[0][0] as Array<{ customer_id: string | null }>;
+    expect(rows[0].customer_id).toBe("cus_1");
+  });
+
+  it("does not run the invoice customer lookup for other resources", async () => {
+    const selectSpy = vi.fn();
+    const localSupabase = {
+      from: vi.fn(() => ({ upsert: vi.fn().mockResolvedValue({ error: null }), select: selectSpy })),
+    } as unknown as SupabaseClient;
+    const fetchPage = pager([[{ id: "j1", updated_at: "2026-07-23T00:00:00Z" }]]);
+
+    await syncResourceIncremental(localSupabase, "leads", fetchPage, identityMapper, { remaining: 0 }, null);
+
+    expect(selectSpy).not.toHaveBeenCalled();
+  });
+
   it("does nothing to upsert when the first record is already older than the cursor", async () => {
     const fetchPage = pager([[{ id: "j1", updated_at: "2026-07-01T00:00:00Z" }]]);
     const cursor = "2026-07-20T00:00:00Z";

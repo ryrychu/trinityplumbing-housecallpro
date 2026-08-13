@@ -30,8 +30,46 @@ describe("detectPaidInvoices", () => {
         id: "inv_1",
         customerName: "Mary Kolakowski",
         customerId: "cus_1",
+        jobId: null,
         amountCents: 428000,
         invoiceNumber: "1042",
+        paidAt: null,
+      },
+    ]);
+  });
+
+  // THE live shape, and the one no fixture above had: the real HCP invoice
+  // payload carries NO `customer` object at all. Its only link to a human is
+  // `job_id` (docs/PHASE-1.x-BACKLOG.md item 4: "Invoices carry job_id
+  // directly … the earlier 'invoices carry no job_id' note was wrong"), and
+  // the go-live Step 2 key census (id/items/taxes/amount/due_at/job_id/status/
+  // paid_at/invoice_date/service_date) lists no customer key.
+  //
+  // Every fixture in this file used to hand-write a `customer` that production
+  // never sends, so the suite passed green while all fourteen lines of a real
+  // Slack message read "Unknown customer". Both fields below exist so
+  // dispatch.ts can walk job_id -> jobs.customer_id -> customers, and so the
+  // message can say when the money actually landed.
+  it("carries job_id and paid_at from a live-shaped payload with no customer object", () => {
+    const out = detectPaidInvoices([
+      {
+        id: "inv_live",
+        status: "paid",
+        amount: 29592,
+        invoice_number: "5143",
+        job_id: "job_a955",
+        paid_at: "2026-08-13T02:41:00Z",
+      },
+    ]);
+    expect(out).toEqual([
+      {
+        id: "inv_live",
+        customerName: null,
+        customerId: null,
+        jobId: "job_a955",
+        amountCents: 29592,
+        invoiceNumber: "5143",
+        paidAt: "2026-08-13T02:41:00Z",
       },
     ]);
   });
@@ -49,7 +87,15 @@ describe("detectPaidInvoices", () => {
   it("survives a record with no customer and no amount", () => {
     const out = detectPaidInvoices([{ id: "inv_2", status: "paid" }]);
     expect(out).toEqual([
-      { id: "inv_2", customerName: null, customerId: null, amountCents: null, invoiceNumber: null },
+      {
+        id: "inv_2",
+        customerName: null,
+        customerId: null,
+        jobId: null,
+        amountCents: null,
+        invoiceNumber: null,
+        paidAt: null,
+      },
     ]);
   });
 
@@ -61,7 +107,15 @@ describe("detectPaidInvoices", () => {
       { id: "inv_10", status: "paid", customer: { id: "cus_only_id" } },
     ]);
     expect(out).toEqual([
-      { id: "inv_10", customerName: null, customerId: "cus_only_id", amountCents: null, invoiceNumber: null },
+      {
+        id: "inv_10",
+        customerName: null,
+        customerId: "cus_only_id",
+        jobId: null,
+        amountCents: null,
+        invoiceNumber: null,
+        paidAt: null,
+      },
     ]);
   });
 
@@ -82,8 +136,10 @@ describe("detectPaidInvoices", () => {
         id: "inv_5",
         customerName: "Mary Kolakowski",
         customerId: "cus_1",
+        jobId: null,
         amountCents: null,
         invoiceNumber: null,
+        paidAt: null,
       },
     ]);
   });

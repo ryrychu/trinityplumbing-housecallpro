@@ -18,8 +18,18 @@ export interface PaidInvoiceLine {
   // access can fall back to a local-table lookup when customerName is null —
   // see dispatch.ts's fillMissingCustomerNames. detect.ts stays pure/no-I/O.
   customerId: string | null;
+  // The ONLY customer link a live invoice actually carries (see the note on
+  // RawCustomer below). dispatch.ts walks it to jobs.customer_id and on to
+  // `customers`; without it every line in this channel reads "Unknown
+  // customer", which is exactly what Trinity saw in production.
+  jobId: string | null;
   amountCents: number | null;
   invoiceNumber: string | null;
+  // HCP's own timestamp for when the payment landed, as a UTC instant. Not the
+  // moment this notification fired: the 20-hour reconcile and back-dated
+  // payments both post invoices whose money arrived days earlier, and that gap
+  // is the whole reason the message states the date instead of implying "now".
+  paidAt: string | null;
 }
 
 export interface ApprovedEstimateLine {
@@ -30,14 +40,21 @@ export interface ApprovedEstimateLine {
   optionName: string | null;
 }
 
-// I4: HcpInvoice/HcpEstimate declare `customer?: { id: string, ... }` — the
-// nested first_name/last_name/company below are unverified against a live
-// payload (every existing test uses a hand-written fixture with them; if the
-// live shape really is `{id}` only, customerName() below always returns
-// null). Reading `id` here is what lets dispatch.ts fall back to a local
-// `customers` table lookup instead of every line silently reading "Unknown
-// customer" — the one piece of information the paid-invoice channel exists
-// to report.
+// SETTLED (2026-08-13, from production): a live INVOICE payload carries no
+// `customer` key at all — not a nested name, not even an id. The go-live
+// Step 2 key census is id/items/taxes/amount/due_at/job_id/status/paid_at/
+// invoice_date/service_date, and docs/PHASE-1.x-BACKLOG.md item 4 confirms
+// `job_id` is the link that IS present. So for invoices both reads below
+// return null and `jobId` is what dispatch.ts resolves through.
+//
+// This is the I4 risk landing exactly as predicted: every fixture in
+// detect.test.ts hand-wrote a `customer` production never sends, so the suite
+// stayed green while all fourteen lines of a real paid-invoice message read
+// "Unknown customer".
+//
+// Kept, not deleted, because ESTIMATES are a different payload and do carry
+// `customer` (mapEstimate reads customer.id live), and because a `{id}`-only
+// invoice would still be rescued by the customerId path in dispatch.ts.
 interface RawCustomer {
   id?: string | null;
   first_name?: string | null;
@@ -76,6 +93,8 @@ export function detectPaidInvoices(invoices: unknown[]): PaidInvoiceLine[] {
       status?: string | null;
       amount?: number | null;
       invoice_number?: string | null;
+      job_id?: string | null;
+      paid_at?: string | null;
       customer?: RawCustomer;
     };
     if (!inv?.id) continue;
@@ -85,9 +104,11 @@ export function detectPaidInvoices(invoices: unknown[]): PaidInvoiceLine[] {
       id: inv.id,
       customerName: customerName(inv.customer),
       customerId: inv.customer?.id ?? null,
+      jobId: inv.job_id ?? null,
       // Live API: the invoice total field is `amount`, in cents.
       amountCents: inv.amount ?? null,
       invoiceNumber: inv.invoice_number ?? null,
+      paidAt: inv.paid_at ?? null,
     });
   }
 
