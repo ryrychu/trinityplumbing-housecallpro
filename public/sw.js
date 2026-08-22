@@ -1,5 +1,12 @@
 // Scoped to /app/ — the desktop dashboard at /dashboard is deliberately NOT
 // controlled by this worker and keeps its normal server-rendered behaviour.
+//
+// This is intentionally NARROWER than the manifest's "scope": "/", and the two
+// are not the same knob. Manifest scope decides which pages Chrome will offer
+// to install and which URLs stay inside the installed window; worker scope
+// decides which requests this file gets to answer. Widening the manifest so
+// the dashboard is installable does not put the dashboard offline, and it must
+// not — none of the caching below is written for it.
 const VERSION = "v1";
 const SHELL_CACHE = `trinity-shell-${VERSION}`;
 const DATA_CACHE = `trinity-data-${VERSION}`;

@@ -3,7 +3,7 @@
   "short_name": "Trinity Ops",
   "description": "Schedule, customers, estimates and invoices for Trinity Plumbing & Drains.",
   "start_url": "/app/today",
-  "scope": "/app/",
+  "scope": "/",
   "display": "standalone",
   "orientation": "portrait",
   "background_color": "#121212",

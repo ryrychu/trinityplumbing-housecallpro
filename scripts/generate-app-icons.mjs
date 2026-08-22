@@ -1,4 +1,5 @@
-// Generates the installable PWA icon set from the real Trinity logo.
+// Generates the installable PWA icon set, and the favicon, from the real
+// Trinity logo.
 //
 //   node scripts/generate-app-icons.mjs
 //
@@ -19,6 +20,8 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(__dirname, "..", "public");
 const outDir = path.join(publicDir, "icons");
 const logoPath = path.join(publicDir, "trinity-logo.svg");
+// Next.js serves this at /favicon.ico by the app-router file convention.
+const faviconPath = path.join(__dirname, "..", "src", "app", "favicon.ico");
 
 const BG = [0x12, 0x12, 0x12]; // tailwind.config.ts surface.page
 
@@ -27,6 +30,10 @@ const BG = [0x12, 0x12, 0x12]; // tailwind.config.ts surface.page
 // "safe zone" circle Android is allowed to crop to, with room to spare.
 const PLAIN_COVERAGE = 0.86;
 const MASKABLE_COVERAGE = 0.75;
+// Favicons are tiny and conventionally bleed to the edge; the margin the tile
+// icons get would only cost pixels the triquetra needs to stay legible at 16px.
+const FAVICON_COVERAGE = 0.96;
+const FAVICON_SIZES = [16, 32, 48, 256];
 
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
@@ -91,6 +98,36 @@ function encodePNG(width, height, rgbPixels) {
     pngChunk("IDAT", idat),
     pngChunk("IEND", Buffer.alloc(0)),
   ]);
+}
+
+// ICO container around already-encoded PNGs. PNG-encoded entries are the
+// Vista-era extension to the format rather than the original BMP payload:
+// every browser this app targets decodes them, and it means the favicon comes
+// off the same encoder as the PWA icons instead of needing a second one.
+function encodeICO(images) {
+  const header = Buffer.alloc(6);
+  header.writeUInt16LE(0, 0); // reserved
+  header.writeUInt16LE(1, 2); // resource type: 1 = icon
+  header.writeUInt16LE(images.length, 4);
+
+  const directory = Buffer.alloc(images.length * 16);
+  let offset = header.length + directory.length;
+  images.forEach(({ size, png }, i) => {
+    const entry = i * 16;
+    // A single byte per axis, so 256 is stored as 0 -- the format's way of
+    // spelling its own maximum.
+    directory[entry] = size >= 256 ? 0 : size;
+    directory[entry + 1] = size >= 256 ? 0 : size;
+    directory[entry + 2] = 0; // palette entries (0 = not paletted)
+    directory[entry + 3] = 0; // reserved
+    directory.writeUInt16LE(1, entry + 4); // colour planes
+    directory.writeUInt16LE(32, entry + 6); // bits per pixel
+    directory.writeUInt32LE(png.length, entry + 8);
+    directory.writeUInt32LE(offset, entry + 12);
+    offset += png.length;
+  });
+
+  return Buffer.concat([header, directory, ...images.map((image) => image.png)]);
 }
 
 function splitChunks(png) {
@@ -319,3 +356,16 @@ for (const [filename, size, coverage] of ICONS) {
   writeFileSync(path.join(outDir, filename), png);
   console.log(`wrote ${filename} (${size}x${size}, ${png.length} bytes)`);
 }
+
+// The favicon is not decoration here. Chrome falls back to it whenever the
+// page being installed from does not link the manifest, and only /app/* links
+// it -- so an install started from /, /dashboard or /dispatch gets the
+// favicon, which until now was the create-next-app Vercel triangle.
+const favicon = encodeICO(
+  FAVICON_SIZES.map((size) => ({
+    size,
+    png: encodePNG(size, size, drawTile(logo, size, FAVICON_COVERAGE)),
+  })),
+);
+writeFileSync(faviconPath, favicon);
+console.log(`wrote src/app/favicon.ico (${FAVICON_SIZES.join("/")}, ${favicon.length} bytes)`);

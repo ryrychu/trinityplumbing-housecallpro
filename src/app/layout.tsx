@@ -39,6 +39,23 @@ const geistMono = localFont({
 export const metadata: Metadata = {
   title: "Trinity Plumbing — Operations",
   description: "Operations dashboard for Trinity Plumbing & Drains.",
+  // Declared at the root, not just under /app/*, because / redirects to
+  // /dashboard — so the dashboard is the page a visitor is actually sitting on
+  // when they hit install. A page that links no manifest is installed by
+  // Chrome as a plain shortcut named off the title and iconed off favicon.ico,
+  // which is exactly what produced a Vercel-triangle "app" on the home screen.
+  // Pairs with "scope": "/" in the manifest: Chrome only treats the manifest
+  // as this page's app if the page is inside its scope.
+  manifest: "/manifest.webmanifest",
+  // Chrome still falls back to page-level icons for a shortcut install (an old
+  // browser, or a manifest that fails to load), so these stay as the backstop.
+  icons: {
+    icon: [
+      { url: "/icons/icon-192.png", sizes: "192x192", type: "image/png" },
+      { url: "/icons/icon-512.png", sizes: "512x512", type: "image/png" },
+    ],
+    apple: "/icons/apple-touch-icon.png",
+  },
 };
 
 export default function RootLayout({

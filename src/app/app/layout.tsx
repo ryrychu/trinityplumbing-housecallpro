@@ -6,7 +6,9 @@ import { AppScrollArea } from "@/components/mobile/AppScrollArea";
 
 export const metadata: Metadata = {
   title: "Trinity Ops",
-  manifest: "/manifest.webmanifest",
+  // The manifest link moved up to the root layout so /dashboard advertises it
+  // too — it is inherited here, not dropped. Declaring it in both places would
+  // just be two copies of one URL free to drift apart.
   appleWebApp: {
     capable: true,
     title: "Trinity Ops",
