@@ -292,7 +292,7 @@ In the same Slack app: **Slash Commands → Create New Command**.
 - **Command:** `/trinity`
 - **Request URL:** `https://<your-vercel-domain>/api/slack/command`
 - **Short description:** `Schedule and money, on demand`
-- **Usage hint:** `today | tomorrow | week | next week | thursday | money`
+- **Usage hint:** `today | tomorrow | week | next week | thursday | money | declined`
 
 Reinstall the app to the workspace if Slack asks.
 
@@ -353,3 +353,55 @@ the next deploy/redeploy — no code change and no database change required.
 The dedupe ledger (`notifications_sent`) is unaffected either way, so
 disabling and re-enabling later does not risk re-notifying anything already
 claimed.
+
+---
+
+## Turned-down calls — `/trinity declined`
+
+Ella logs each call Trinity turns down: crew too busy, or a contract customer
+too far away. Every Monday morning the schedule channel gets last week's total
+(busy and distance split), checked against the 15-a-week hiring line, plus the
+4-week average and month to date. Totals only: no notes, numbers or names.
+
+A repeat caller counts once per Mon–Sun week (Eastern), matched on a salted
+hash of their phone number. The number itself is never stored. Calls logged
+without a number always count on their own.
+
+No new Slack app setup: it rides on the existing `/trinity` command (same
+signing secret, same "anyone in the workspace" access) and posts through the
+existing `SLACK_WEBHOOK_SCHEDULE` webhook. No bot token, no new scopes, and it
+never reads channel history.
+
+### Go-live (Ryan)
+
+1. **Run the migration.** Supabase → SQL editor → paste
+   `supabase/migrations/0007_declined_calls.sql` → Run. Check it took:
+   `select count(*) from declined_calls;` returns `0`.
+2. **Set the salt** in Vercel (Production), once, and never change it:
+   ```bash
+   node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"
+   vercel env add DECLINED_PHONE_SALT
+   ```
+   Without it, an entry that includes a phone number is refused (entries
+   without a number still log).
+3. **Flip the switch:** `vercel env add SLACK_DECLINED_ENABLED` with the value
+   `true` (exactly). Leave `SLACK_ALERTS_ENABLED` and `SLACK_COMMANDS_ENABLED`
+   as they are; both must already be `true`, as they are for the digests and
+   `/trinity`.
+4. **Redeploy**, then try `/trinity declined busy test`, `/trinity declined week`
+   and `/trinity declined undo` to remove the test entry.
+5. The first report posts the next Monday between 6am and noon Eastern, once
+   (ledger kind `declined_weekly` in `notifications_sent`, keyed by the
+   reported week's Monday).
+
+**Rollback:** set `SLACK_DECLINED_ENABLED` to anything but `true` and redeploy.
+The command then replies "not switched on yet" and the Monday post stops. The
+table and its rows stay.
+
+### How to use it (Ella)
+
+- Turned someone down because the crew is full: `/trinity declined busy`
+- Turned down a contract customer because it's too far: `/trinity declined distance`
+- Add their number and a short note if you have them: `/trinity declined busy 518-555-0100 wanted Tuesday`
+- Made a mistake? `/trinity declined undo` removes the last one you logged.
+- `/trinity declined week` shows this week and last week. Only you see the replies.

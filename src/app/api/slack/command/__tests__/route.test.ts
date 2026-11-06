@@ -138,6 +138,25 @@ describe("POST /api/slack/command", () => {
     });
   });
 
+  // /trinity declined needs to know who logged the call (and whose entry
+  // `undo` removes). Slack's signed user_id is the only source of that.
+  describe("declined", () => {
+    it("passes the Slack user id through with the parsed command", async () => {
+      await POST(slackRequest("declined busy 518-555-0100 wanted Tuesday"));
+      expect(renderCommandMock).toHaveBeenCalledWith(
+        { kind: "declinedLog", reason: "busy", phone: "5185550100", note: "wanted Tuesday", userId: "U123" },
+        expect.any(Date)
+      );
+      expect(postMock).toHaveBeenCalledWith(RESPONSE_URL, "*Week ahead* — 9 jobs");
+    });
+
+    it("rejects an unsigned declined request before anything is logged", async () => {
+      const res = await POST(slackRequest("declined busy", { secret: "not-the-secret" }));
+      expect(res.status).toBe(401);
+      expect(renderCommandMock).not.toHaveBeenCalled();
+    });
+  });
+
   describe("failures", () => {
     // A raw Supabase error can carry customer rows. It must never reach Slack.
     it("posts a plain apology and never the raw error", async () => {

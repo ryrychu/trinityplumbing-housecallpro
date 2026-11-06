@@ -8,6 +8,7 @@ import { syncResourceIncremental, type IncrementalResult } from "@/lib/sync/incr
 import { type RehostBudget } from "@/lib/sync/attachments";
 import { notifyPaidInvoices, notifyApprovedEstimates } from "@/lib/notifications/dispatch";
 import { claim } from "@/lib/notifications/dedupe";
+import { runDeclinedReportPass } from "@/lib/declined/declined";
 import {
   isDailyDigestDue,
   isWeeklyLookaheadDue,
@@ -396,6 +397,15 @@ export async function GET(req: Request) {
   // Skipped entirely on a forced run, which has already posted above.
   if (!force && slackAlertsEnabled()) {
     const now = new Date();
+
+    // Last week's turned-down calls, Monday morning. Its own switch
+    // (SLACK_DECLINED_ENABLED) and its own claim, checked inside.
+    try {
+      await runDeclinedReportPass(supabase, now);
+    } catch (err) {
+      // A Slack/database problem must never fail the sync the dashboard depends on.
+      console.error("[cron] declined-calls report pass failed:", err);
+    }
 
     // Split from the daily digest below into its own try/catch: sharing one
     // try meant a throw from getWeekAheadSchedule AFTER claim('weekly_lookahead')

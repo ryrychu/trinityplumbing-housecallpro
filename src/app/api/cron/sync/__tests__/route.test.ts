@@ -81,6 +81,13 @@ vi.mock("@/lib/dashboard/queries", () => ({
   getWeekAheadSchedule: getWeekAheadScheduleMock,
 }));
 
+const { runDeclinedReportPassMock } = vi.hoisted(() => ({
+  runDeclinedReportPassMock: vi.fn().mockResolvedValue(false),
+}));
+vi.mock("@/lib/declined/declined", () => ({
+  runDeclinedReportPass: runDeclinedReportPassMock,
+}));
+
 import { GET } from "../route";
 
 function authorizedRequest(): Request {
@@ -525,6 +532,29 @@ describe("GET /api/cron/sync", () => {
       const res = await GET(authorizedRequest());
 
       expect(res.status).toBe(200);
+    });
+
+    // The pass gates itself (SLACK_DECLINED_ENABLED, Monday morning, claim);
+    // the route only has to call it and survive it.
+    it("runs the turned-down calls report pass and still posts the digests when it throws", async () => {
+      vi.setSystemTime(new Date("2026-07-27T10:00:00Z")); // Mon 06:00 EDT
+      runDeclinedReportPassMock.mockRejectedValueOnce(new Error("declined_calls missing"));
+
+      const res = await GET(authorizedRequest());
+
+      expect(res.status).toBe(200);
+      expect(runDeclinedReportPassMock).toHaveBeenCalledWith(expect.anything(), new Date("2026-07-27T10:00:00Z"));
+      expect(postSlackMock.mock.calls.some(([, text]) => String(text).includes("Week ahead"))).toBe(true);
+      expect(postSlackMock.mock.calls.some(([, text]) => String(text).includes("Today —"))).toBe(true);
+    });
+
+    it("does not run the turned-down calls report when Slack alerts are disabled", async () => {
+      slackAlertsEnabledMock.mockReturnValue(false);
+      vi.setSystemTime(new Date("2026-07-27T10:00:00Z"));
+
+      await GET(authorizedRequest());
+
+      expect(runDeclinedReportPassMock).not.toHaveBeenCalled();
     });
   });
 

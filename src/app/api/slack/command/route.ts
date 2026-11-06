@@ -80,7 +80,7 @@ export async function POST(req: Request) {
 
   const params = new URLSearchParams(rawBody);
   const responseUrl = params.get("response_url");
-  const cmd = parseCommand(params.get("text") ?? "");
+  const cmd = parseCommand(params.get("text") ?? "", params.get("user_id"));
 
   if (!responseUrl) {
     // Nowhere to send the real answer, so answer inline. Reachable in normal

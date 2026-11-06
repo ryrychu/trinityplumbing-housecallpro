@@ -11,10 +11,13 @@ import { localDateKey } from "@/lib/notifications/schedule";
 import { getScheduleDays } from "@/lib/dashboard/queries";
 import { renderDigest } from "@/lib/notifications/digest";
 import { listOpenEstimates, listUnpaidInvoices } from "@/lib/mobile/money";
+import { parseDeclined, type DeclinedCommand } from "@/lib/declined/parse";
+import { renderDeclined } from "@/lib/declined/declined";
 
 export type Command =
   | { kind: "today" | "tomorrow" | "week" | "nextWeek" | "money" | "help" }
-  | { kind: "weekday"; dow: number };
+  | { kind: "weekday"; dow: number }
+  | DeclinedCommand;
 
 // 0 = Sunday, matching localParts().dow in src/lib/dashboard/week.ts.
 const WEEKDAYS: Record<string, number> = {
@@ -27,7 +30,11 @@ const WEEKDAYS: Record<string, number> = {
   saturday: 6, sat: 6,
 };
 
-export function parseCommand(text: string): Command {
+export function parseCommand(text: string, userId: string | null = null): Command {
+  // Checked before lowercasing: the note after "declined busy" keeps its case.
+  const declined = text.trim().match(/^declined(?:\s+|$)([\s\S]*)$/i);
+  if (declined) return parseDeclined(declined[1], userId);
+
   const t = text.trim().toLowerCase().replace(/\s+/g, " ");
 
   if (t === "" || t === "help") return { kind: "help" };
@@ -67,6 +74,12 @@ export function resolveWindow(
   const { y, m0, d, dow } = localParts(now);
 
   switch (cmd.kind) {
+    case "declinedLog":
+    case "declinedUndo":
+    case "declinedWeek":
+    case "declinedUsage":
+      return null;
+
     case "help":
     case "money":
       return null;
@@ -112,6 +125,7 @@ export const HELP_TEXT = [
   "`/trinity next week` — next Monday to Sunday",
   "`/trinity thursday` — the next Thursday (any weekday works)",
   "`/trinity money` — open estimates and unpaid invoices",
+  "`/trinity declined` — log a call we turned down (too busy or too far)",
 ].join("\n");
 
 export async function renderCommand(cmd: Command, now: Date): Promise<string> {
@@ -123,6 +137,15 @@ export async function renderCommand(cmd: Command, now: Date): Promise<string> {
       listUnpaidInvoices(now),
     ]);
     return formatMoneySummary(estimates, invoices);
+  }
+
+  if (
+    cmd.kind === "declinedLog" ||
+    cmd.kind === "declinedUndo" ||
+    cmd.kind === "declinedWeek" ||
+    cmd.kind === "declinedUsage"
+  ) {
+    return renderDeclined(cmd, now);
   }
 
   // today and week go through renderDigest so a command and the 6am post are
