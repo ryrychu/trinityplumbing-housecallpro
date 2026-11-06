@@ -12,10 +12,11 @@
 // message link that unfurls the original counts the same way.
 //
 // Nothing read here is stored or logged. The phone number is turned into the
-// same salted hash /trinity declined uses, only in memory, and the text is
-// dropped.
+// same salted hash /trinity declined uses, and a one-line summary is built for
+// the Monday post, both in memory only.
 import { findPhone } from "./parse";
 import { hashPhone } from "./phone";
+import { summarizeCall } from "./summary";
 import type { DeclinedRow } from "./tally";
 import type { SlackAttachment, SlackMessage } from "@/lib/slack/web";
 
@@ -60,6 +61,20 @@ export function sharedText(msg: SlackMessage): string {
   return parts.join("\n");
 }
 
+/**
+ * The forwarded original as written, line breaks intact: the attachment text
+ * when there is one, else the original's blocks.
+ */
+export function originalText(msg: SlackMessage): string {
+  for (const a of sharedAttachments(msg)) {
+    if (a.text) return a.text;
+    const parts: string[] = [];
+    for (const mb of a.message_blocks ?? []) blockText(mb.message?.blocks, parts);
+    if (parts.length) return parts.join("");
+  }
+  return "";
+}
+
 /** Slack ts ("1730520000.123456") to ISO. */
 export function tsToIso(ts: string): string {
   return new Date(Math.round(Number(ts) * 1000)).toISOString();
@@ -69,6 +84,7 @@ export function tsToIso(ts: string): string {
  * The channel's declined calls as tally rows. The time is when it was shared
  * into #declined-calls (the message's own ts), not when the caller rang.
  * No salt: a share still counts, just without repeat-caller matching.
+ * `label` is the one-line summary for the Monday list (in memory only).
  */
 export function channelRows(messages: SlackMessage[], salt: string | undefined): DeclinedRow[] {
   return messages.filter(isDeclinedShare).map((msg) => {
@@ -77,6 +93,7 @@ export function channelRows(messages: SlackMessage[], salt: string | undefined):
       created_at: tsToIso(msg.ts),
       reason: null,
       phone_hash: phone && salt ? hashPhone(phone, salt) : null,
+      label: summarizeCall(originalText(msg)),
     };
   });
 }

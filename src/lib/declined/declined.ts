@@ -10,7 +10,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { getSupabaseServerClient } from "@/lib/supabase/client";
 import { claim } from "@/lib/notifications/dedupe";
 import { isWeeklyLookaheadDue } from "@/lib/notifications/schedule";
-import { fetchChannelHistory, postMessage } from "@/lib/slack/web";
+import { fetchChannelHistory, postMessage, SlackApiError } from "@/lib/slack/web";
 import { channelRows } from "./channel";
 import { hashPhone } from "./phone";
 import type { DeclinedCommand, DeclinedReason } from "./parse";
@@ -58,10 +58,13 @@ export type StoredRow = DeclinedRow & {
 
 export type NewRow = Omit<StoredRow, "id">;
 
+/** What the reports read back: enough to count, plus the note for the Monday list. */
+export type CommandRow = DeclinedRow & { note?: string | null };
+
 /** The few reads and writes this feature needs; swapped for an in-memory one in tests. */
 export interface DeclinedStore {
   insert(row: NewRow): Promise<void>;
-  listSince(fromIso: string, toIso: string): Promise<DeclinedRow[]>;
+  listSince(fromIso: string, toIso: string): Promise<CommandRow[]>;
   /** Deletes and returns the user's most recent row, or null if they have none. */
   deleteLatestBy(userId: string): Promise<StoredRow | null>;
 }
@@ -76,12 +79,12 @@ export function supabaseDeclinedStore(supabase: SupabaseClient): DeclinedStore {
     async listSince(fromIso, toIso) {
       const { data, error } = await supabase
         .from("declined_calls")
-        .select("created_at, reason, phone_hash")
+        .select("created_at, reason, phone_hash, note")
         .gte("created_at", fromIso)
         .lt("created_at", toIso)
         .order("created_at", { ascending: true });
       if (error) throw new Error(`[declined] read failed: ${error.message}`);
-      return (data ?? []) as DeclinedRow[];
+      return (data ?? []) as CommandRow[];
     },
 
     async deleteLatestBy(userId) {
@@ -113,19 +116,51 @@ export interface ChannelSource {
   rowsBetween(fromIso: string, toIso: string): Promise<DeclinedRow[]>;
 }
 
-const NOT_CONFIGURED = "SLACK_BOT_TOKEN or SLACK_DECLINED_CHANNEL_ID is not set";
-
-function channelConfig(): { token: string; channel: string } | null {
+function channelConfig(): { token: string; channel: string } {
   const token = process.env.SLACK_BOT_TOKEN;
   const channel = process.env.SLACK_DECLINED_CHANNEL_ID;
-  return token && channel ? { token, channel } : null;
+  // Codes of our own, shaped like Slack's, so one table explains every failure.
+  if (!token) throw new SlackApiError("config", "token_not_set");
+  if (!token.startsWith("xoxb-")) throw new SlackApiError("config", "token_not_bot");
+  if (!channel) throw new SlackApiError("config", "channel_not_set");
+  return { token, channel };
+}
+
+const FIXES: Record<string, string> = {
+  token_not_set: "SLACK_BOT_TOKEN is not set. Add the Bot User OAuth Token (xoxb-…) in Vercel and redeploy.",
+  token_not_bot:
+    "SLACK_BOT_TOKEN is not a bot token. Use the Bot User OAuth Token, which starts with xoxb-, and redeploy.",
+  channel_not_set: "SLACK_DECLINED_CHANNEL_ID is not set. Add the channel ID (C…) of #declined-calls in Vercel and redeploy.",
+  not_in_channel: "The bot isn't in #declined-calls. In that channel, type /invite @ and pick the Trinity app.",
+  missing_scope:
+    "The app is missing a permission. Add it under OAuth & Permissions → Bot Token Scopes, reinstall the app, and update SLACK_BOT_TOKEN if it changed.",
+  invalid_auth: "Slack doesn't accept SLACK_BOT_TOKEN. Copy the current Bot User OAuth Token into Vercel and redeploy.",
+  not_authed: "Slack received no token. Check SLACK_BOT_TOKEN in Vercel and redeploy.",
+  token_revoked: "SLACK_BOT_TOKEN was revoked. Reinstall the app, copy the new Bot User OAuth Token into Vercel, redeploy.",
+  token_expired: "SLACK_BOT_TOKEN has expired. Reinstall the app, copy the new Bot User OAuth Token into Vercel, redeploy.",
+  account_inactive: "The app's bot user is deactivated. Reinstall the app and update SLACK_BOT_TOKEN.",
+  channel_not_found:
+    "Slack can't find that channel. Check SLACK_DECLINED_CHANNEL_ID (C…, from the channel's About tab). If the channel is private, invite the bot and add groups:history.",
+  ratelimited: "Slack is rate-limiting the read. Try again in a minute.",
+};
+
+/**
+ * One line for the person who ran the command: Slack's error code and how to
+ * fix it. Error codes and scope names only; never the token or message text.
+ */
+export function describeChannelError(err: unknown): string {
+  if (!(err instanceof SlackApiError)) return "Couldn't reach Slack (network or timeout). Try again in a moment.";
+  const code = /^[a-z0-9_]+$/i.test(err.code) ? err.code : "unknown_error";
+  const needed = err.needed && /^[a-z0-9_:.,]+$/i.test(err.needed) ? err.needed : null;
+  const label = needed ? `${code} (needs ${needed})` : code;
+  const fix = FIXES[code] ?? (code.startsWith("http_5") ? "Slack had a server error. Try again in a moment." : "See the Slack API docs for this code.");
+  return `${label}: ${fix}`;
 }
 
 export function slackChannelSource(): ChannelSource {
   return {
     async rowsBetween(fromIso, toIso) {
       const cfg = channelConfig();
-      if (!cfg) throw new Error(NOT_CONFIGURED);
       const from = Date.parse(fromIso);
       const to = Date.parse(toIso);
       const messages = await fetchChannelHistory(cfg.token, cfg.channel, Math.floor(from / 1000), Math.ceil(to / 1000));
@@ -143,8 +178,21 @@ function defaultDeps(): Deps {
   return { store: supabaseDeclinedStore(getSupabaseServerClient()), channel: slackChannelSource() };
 }
 
-export const CHANNEL_UNAVAILABLE =
-  "_Couldn't read #declined-calls just now, so this counts /trinity entries only._";
+export function channelUnavailable(err: unknown): string {
+  return `_Couldn't read #declined-calls, so this counts /trinity entries only._\n${describeChannelError(err)}`;
+}
+
+function escapeMrkdwn(text: string): string {
+  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+/** Gives /trinity entries their line in the Monday list. */
+export function labelCommandRows(rows: CommandRow[]): DeclinedRow[] {
+  return rows.map(({ note, ...row }) => ({
+    ...row,
+    label: `Logged with /trinity: ${row.reason ?? "declined"}${note ? ` — ${escapeMrkdwn(note)}` : ""}`,
+  }));
+}
 
 /**
  * Command entries plus channel forwards. For an interactive reply a channel
@@ -156,15 +204,17 @@ async function combinedRows(
   fromIso: string,
   toIso: string
 ): Promise<{ rows: DeclinedRow[]; note: string | null }> {
+  let failure: unknown = null;
   const [own, shared] = await Promise.all([
     deps.store.listSince(fromIso, toIso),
     deps.channel.rowsBetween(fromIso, toIso).catch((err) => {
       // The error message only: Slack error codes, never message text.
       console.error("[declined] channel read failed:", err instanceof Error ? err.message : String(err));
+      failure = err;
       return null;
     }),
   ]);
-  return shared ? { rows: [...own, ...shared], note: null } : { rows: own, note: CHANNEL_UNAVAILABLE };
+  return shared ? { rows: [...own, ...shared], note: null } : { rows: own, note: channelUnavailable(failure) };
 }
 
 function withNote(lines: string[], note: string | null): string {
@@ -244,7 +294,6 @@ function defaultReportDeps(supabase: SupabaseClient): ReportDeps {
     channel: slackChannelSource(),
     post: async (text) => {
       const cfg = channelConfig();
-      if (!cfg) throw new Error(NOT_CONFIGURED);
       await postMessage(cfg.token, cfg.channel, text);
     },
   };
@@ -269,15 +318,17 @@ export async function runDeclinedReportPass(
 ): Promise<boolean> {
   if (!declinedEnabled()) return false;
   if (!isWeeklyLookaheadDue(now)) return false;
-  if (!channelConfig()) {
-    console.warn(`[declined] weekly report skipped: ${NOT_CONFIGURED}`);
+  try {
+    channelConfig();
+  } catch (err) {
+    console.warn(`[declined] weekly report skipped: ${err instanceof Error ? err.message : String(err)}`);
     return false;
   }
 
   const from = reportWindowStart(now);
   const to = now.toISOString();
   const [own, shared] = await Promise.all([deps.store.listSince(from, to), deps.channel.rowsBetween(from, to)]);
-  const text = formatWeeklyReport([...own, ...shared], now);
+  const text = formatWeeklyReport([...labelCommandRows(own), ...shared], now);
 
   const reported = weekKey(weekBefore(thisWeek(now)));
   if (!(await claim(supabase, "declined_weekly", reported))) return false;

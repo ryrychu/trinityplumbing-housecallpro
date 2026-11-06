@@ -39,9 +39,27 @@ export type SlackAttachment = {
   message_blocks?: Array<{ message?: { blocks?: unknown[] } }>;
 };
 
+/**
+ * A Slack Web API failure, by Slack's error code ("not_in_channel",
+ * "missing_scope", "ratelimited", "http_502" …). `needed` is the scope Slack
+ * says is missing, on missing_scope. Neither ever holds the token or any
+ * message text, so both are safe to show the person who ran the command.
+ */
+export class SlackApiError extends Error {
+  constructor(
+    readonly method: string,
+    readonly code: string,
+    readonly needed?: string
+  ) {
+    super(`[slack] ${method} failed: ${code}${needed ? ` (needs ${needed})` : ""}`);
+    this.name = "SlackApiError";
+  }
+}
+
 type SlackResponse = {
   ok: boolean;
   error?: string;
+  needed?: string;
   messages?: SlackMessage[];
   has_more?: boolean;
   response_metadata?: { next_cursor?: string };
@@ -67,13 +85,11 @@ async function call(
     signal: AbortSignal.timeout(TIMEOUT_MS),
   });
 
-  if (res.status === 429) {
-    throw new Error(`[slack] ${method} rate limited (retry after ${res.headers.get("retry-after") ?? "?"}s)`);
-  }
-  if (!res.ok) throw new Error(`[slack] ${method} failed: HTTP ${res.status}`);
+  if (res.status === 429) throw new SlackApiError(method, "ratelimited");
+  if (!res.ok) throw new SlackApiError(method, `http_${res.status}`);
 
   const data = (await res.json()) as SlackResponse;
-  if (!data.ok) throw new Error(`[slack] ${method} failed: ${data.error ?? "unknown_error"}`);
+  if (!data.ok) throw new SlackApiError(method, data.error ?? "unknown_error", data.needed);
   return data;
 }
 
@@ -105,7 +121,7 @@ export async function fetchChannelHistory(
     cursor = data.response_metadata?.next_cursor || undefined;
     if (!data.has_more || !cursor) return out;
   }
-  throw new Error(`[slack] conversations.history: more than ${MAX_PAGES} pages`);
+  throw new SlackApiError("conversations.history", "too_many_pages");
 }
 
 export async function postMessage(token: string, channel: string, text: string): Promise<void> {

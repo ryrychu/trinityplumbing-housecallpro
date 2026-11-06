@@ -23,6 +23,8 @@ export type DeclinedRow = {
   /** null for a #declined-calls forward. */
   reason: DeclinedReason | null;
   phone_hash: string | null;
+  /** One-line description for the Monday list. Built in memory, never stored. */
+  label?: string;
 };
 
 /** busy and distance count command entries only; the rest are channel forwards. */
@@ -134,27 +136,60 @@ export function reportWindowStart(now: Date): string {
   return Date.parse(month) < Date.parse(w.startIso) ? month : w.startIso;
 }
 
+/** At most this many calls are listed in the Monday post; the rest are summed up. */
+export const LIST_MAX = 25;
+
+function times(n: number): string {
+  return n === 2 ? "called twice" : `called ${n} times`;
+}
+
 /**
- * The Monday post to #declined-calls. Totals only: no names, numbers, notes or
- * who logged what.
+ * One bullet per counted call, oldest first, with repeat callers (same phone
+ * hash, same week) folded into their first entry. Same grouping as tally(),
+ * so the list length always equals the total.
+ */
+export function callLines(rows: DeclinedRow[]): string[] {
+  const sorted = [...rows].sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at));
+  const entries: Array<{ label: string; count: number }> = [];
+  const byKey = new Map<string, { label: string; count: number }>();
+
+  for (const row of sorted) {
+    const key = row.phone_hash ? `${mondayDateKey(new Date(row.created_at))}:${row.phone_hash}` : null;
+    const existing = key ? byKey.get(key) : undefined;
+    if (existing) {
+      existing.count += 1;
+      continue;
+    }
+    const entry = { label: row.label ?? "(no details)", count: 1 };
+    entries.push(entry);
+    if (key) byKey.set(key, entry);
+  }
+
+  const lines = entries.map((e) => `• ${e.label}${e.count > 1 ? ` (${times(e.count)})` : ""}`);
+  if (lines.length <= LIST_MAX) return lines;
+  return [...lines.slice(0, LIST_MAX), `… and ${lines.length - LIST_MAX} more`];
+}
+
+/**
+ * The Monday post to #declined-calls, in the estimates-channel style: a bold
+ * count, one line per call, then the totals. Customer details are fine here
+ * (Dave's call); they come from the forwarded messages, in memory only.
  */
 export function formatWeeklyReport(rows: DeclinedRow[], now: Date): string {
   const last = weekBefore(thisWeek(now));
   const weeks: Range[] = [last];
   while (weeks.length < 4) weeks.push(weekBefore(weeks[weeks.length - 1]));
 
-  const lastTally = tally(inRange(rows, last));
+  const lastRows = inRange(rows, last);
+  const lastTally = tally(lastRows);
   const average = weeks.reduce((n, w) => n + tally(inRange(rows, w)).total, 0) / weeks.length;
   const mtd = tally(inRange(rows, monthToDate(now)));
 
   return [
-    `*Last week (${weekLabel(last)}): ${calls(lastTally.total)}.* ${thresholdLine(lastTally.total)}`,
-    commandLine(lastTally),
-    `4-week average: ${average.toFixed(1)} a week.`,
-    `${monthName(now)} so far: ${mtd.total}.`,
-  ]
-    .filter((line): line is string => line !== null)
-    .join("\n");
+    `*${calls(lastTally.total)} last week (${weekLabel(last)})*`,
+    ...callLines(lastRows),
+    `${thresholdLine(lastTally.total)} 4-week average: ${average.toFixed(1)} a week. ${monthName(now)} so far: ${mtd.total}.`,
+  ].join("\n");
 }
 
 /** `/trinity declined week`: this week so far, and last week in full. */

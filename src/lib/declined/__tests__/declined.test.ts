@@ -9,7 +9,8 @@ vi.mock("@/lib/supabase/client", () => ({
     throw new Error("tests must not reach Supabase");
   },
 }));
-vi.mock("@/lib/slack/web", () => ({
+vi.mock("@/lib/slack/web", async (importOriginal) => ({
+  SlackApiError: (await importOriginal<typeof import("@/lib/slack/web")>()).SlackApiError,
   fetchChannelHistory: () => {
     throw new Error("tests must not reach Slack");
   },
@@ -24,7 +25,7 @@ import {
   hashPhone,
   DISABLED_TEXT,
   USAGE_TEXT,
-  CHANNEL_UNAVAILABLE,
+  describeChannelError,
   type ChannelSource,
   type DeclinedStore,
   type StoredRow,
@@ -32,7 +33,7 @@ import {
 import { parseDeclined } from "../parse";
 import { channelRows } from "../channel";
 import type { DeclinedRow } from "../tally";
-import type { SlackMessage } from "@/lib/slack/web";
+import { SlackApiError, type SlackMessage } from "@/lib/slack/web";
 import { forwarded, plain } from "./fixtures";
 
 const SALT = "test-salt";
@@ -47,7 +48,7 @@ function memoryStore(initial: StoredRow[] = []) {
     listSince: vi.fn(async (from, to) =>
       rows
         .filter((r) => r.created_at >= from && r.created_at < to)
-        .map(({ created_at, reason, phone_hash }) => ({ created_at, reason, phone_hash }))
+        .map(({ created_at, reason, phone_hash, note }) => ({ created_at, reason, phone_hash, note }))
     ),
     deleteLatestBy: vi.fn(async (userId) => {
       const mine = rows
@@ -71,9 +72,9 @@ function channelOf(messages: SlackMessage[]): ChannelSource {
   };
 }
 
-const brokenChannel = (): ChannelSource => ({
+const brokenChannel = (err: unknown = new SlackApiError("conversations.history", "not_in_channel")): ChannelSource => ({
   rowsBetween: vi.fn(async () => {
-    throw new Error("[slack] conversations.history failed: not_in_channel");
+    throw err;
   }),
 });
 
@@ -156,7 +157,7 @@ describe("renderDeclined", () => {
     const m = memoryStore();
     const text = await renderDeclined(log("busy"), THURSDAY, { store: m.store, channel: brokenChannel() });
     expect(text).toContain("Logged");
-    expect(text).toContain(CHANNEL_UNAVAILABLE);
+    expect(text).toContain("Couldn't read #declined-calls, so this counts /trinity entries only.");
     expect(m.rows).toHaveLength(1);
   });
 
@@ -200,7 +201,7 @@ describe("renderDeclined", () => {
   it("`week` falls back to /trinity entries, and says so, when the channel can't be read", async () => {
     const m = memoryStore();
     const text = await renderDeclined(parseDeclined("week", "U_ELLAH"), THURSDAY, { store: m.store, channel: brokenChannel() });
-    expect(text).toContain(CHANNEL_UNAVAILABLE);
+    expect(text).toContain("Couldn't read #declined-calls, so this counts /trinity entries only.");
   });
 });
 
@@ -241,7 +242,14 @@ describe("runDeclinedReportPass", () => {
     expect(await runDeclinedReportPass(supabase, MONDAY_7AM, r.deps)).toBe(true);
     expect(claimMock).toHaveBeenCalledWith(supabase, "declined_weekly", "2026-11-02");
     expect(r.post).toHaveBeenCalledTimes(1);
-    expect(r.post.mock.calls[0][0]).toContain("*Last week (Nov 2–8): 2 calls declined.* Under 15 for the week (13 short).");
+    expect(r.post.mock.calls[0][0]).toBe(
+      [
+        "*2 calls declined last week (Nov 2–8)*",
+        "• (518) 555-0101: Caller A (called twice)",
+        "• Caller B, no number",
+        "Under 15 for the week (13 short). 4-week average: 0.5 a week. November so far: 2.",
+      ].join("\n")
+    );
   });
 
   it("does not post twice once the week is claimed", async () => {
@@ -289,5 +297,82 @@ describe("runDeclinedReportPass", () => {
     expect(r.deps.channel.rowsBetween).not.toHaveBeenCalled();
     expect(claimMock).not.toHaveBeenCalled();
     expect(r.post).not.toHaveBeenCalled();
+  });
+});
+
+describe("diagnostics in the /trinity declined week reply", () => {
+  const THU = new Date("2026-11-05T15:00:00Z");
+  beforeEach(() => {
+    process.env.SLACK_DECLINED_ENABLED = "true";
+    vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+  afterEach(() => {
+    delete process.env.SLACK_DECLINED_ENABLED;
+    vi.restoreAllMocks();
+  });
+
+  it("shows Slack's error code and a fix, never the token", async () => {
+    process.env.SLACK_BOT_TOKEN = "xoxb-secret-should-not-appear";
+    const m = memoryStore();
+    const text = await renderDeclined(parseDeclined("week", "U_ELLAH"), THU, {
+      store: m.store,
+      channel: brokenChannel(new SlackApiError("conversations.history", "not_in_channel")),
+    });
+    expect(text).toContain("This week so far (Nov 2–8): 0 calls declined.");
+    expect(text).toContain("not_in_channel: The bot isn't in #declined-calls.");
+    expect(text).not.toContain("xoxb-");
+    delete process.env.SLACK_BOT_TOKEN;
+  });
+
+  it.each([
+    [new SlackApiError("config", "token_not_set"), "token_not_set: SLACK_BOT_TOKEN is not set."],
+    [new SlackApiError("config", "token_not_bot"), "token_not_bot: SLACK_BOT_TOKEN is not a bot token."],
+    [new SlackApiError("config", "channel_not_set"), "channel_not_set: SLACK_DECLINED_CHANNEL_ID is not set."],
+    [new SlackApiError("conversations.history", "not_in_channel"), "not_in_channel: The bot isn't in #declined-calls."],
+    [new SlackApiError("conversations.history", "missing_scope", "groups:history"), "missing_scope (needs groups:history): The app is missing a permission."],
+    [new SlackApiError("conversations.history", "invalid_auth"), "invalid_auth: Slack doesn't accept SLACK_BOT_TOKEN."],
+    [new SlackApiError("conversations.history", "token_revoked"), "token_revoked: SLACK_BOT_TOKEN was revoked."],
+    [new SlackApiError("conversations.history", "channel_not_found"), "channel_not_found: Slack can't find that channel."],
+    [new SlackApiError("conversations.history", "ratelimited"), "ratelimited: Slack is rate-limiting the read."],
+    [new SlackApiError("conversations.history", "http_503"), "http_503: Slack had a server error."],
+    [new SlackApiError("conversations.history", "something_new"), "something_new: See the Slack API docs"],
+    [new Error("fetch failed"), "Couldn't reach Slack (network or timeout)."],
+  ])("explains %s", (err, expected) => {
+    expect(describeChannelError(err)).toContain(expected);
+  });
+
+  it("drops anything in a code or scope that isn't code-shaped", () => {
+    const text = describeChannelError(new SlackApiError("x", "bad <@U1> code", "scope <evil>"));
+    expect(text).toMatch(/^unknown_error: /);
+    expect(text).not.toContain("<");
+  });
+
+  it("reads the env: a missing token, a user token and a missing channel id each name themselves", async () => {
+    const { slackChannelSource } = await import("../declined");
+    const read = () => slackChannelSource().rowsBetween("2026-11-02T05:00:00Z", "2026-11-09T05:00:00Z");
+
+    delete process.env.SLACK_BOT_TOKEN;
+    await expect(read()).rejects.toMatchObject({ code: "token_not_set" });
+    process.env.SLACK_BOT_TOKEN = "xoxp-user-token";
+    await expect(read()).rejects.toMatchObject({ code: "token_not_bot" });
+    process.env.SLACK_BOT_TOKEN = "xoxb-test-not-real";
+    delete process.env.SLACK_DECLINED_CHANNEL_ID;
+    await expect(read()).rejects.toMatchObject({ code: "channel_not_set" });
+    delete process.env.SLACK_BOT_TOKEN;
+  });
+});
+
+describe("labelCommandRows", () => {
+  it("shows /trinity entries as 'Logged with /trinity: <reason>', with the note if any", async () => {
+    const { labelCommandRows } = await import("../declined");
+    const rows = labelCommandRows([
+      { created_at: "2026-11-04T15:00:00.000Z", reason: "busy", phone_hash: null, note: null },
+      { created_at: "2026-11-04T16:00:00.000Z", reason: "distance", phone_hash: null, note: "Saratoga contract <ask Dave>" },
+    ]);
+    expect(rows.map((r) => r.label)).toEqual([
+      "Logged with /trinity: busy",
+      "Logged with /trinity: distance — Saratoga contract &lt;ask Dave&gt;",
+    ]);
+    expect(rows[0]).not.toHaveProperty("note");
   });
 });

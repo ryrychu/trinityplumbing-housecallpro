@@ -101,34 +101,69 @@ describe("monthToDate", () => {
 });
 
 describe("formatWeeklyReport", () => {
-  function lastWeek(n: number, reason: "busy" | "distance" | null = null): DeclinedRow[] {
-    return Array.from({ length: n }, (_, i) => row("2026-11-04T15:00:00Z", reason, `p${i}`));
+  function lastWeek(n: number): DeclinedRow[] {
+    return Array.from({ length: n }, (_, i) => ({ ...row("2026-11-04T15:00:00Z", null, `p${i}`), label: `Caller ${i + 1}` }));
   }
 
-  it("reads simply for Dave", () => {
-    expect(formatWeeklyReport(lastWeek(8), MONDAY_MORNING)).toBe(
+  it("lists each call, then the totals on one line", () => {
+    expect(formatWeeklyReport(lastWeek(3), MONDAY_MORNING)).toBe(
       [
-        "*Last week (Nov 2–8): 8 calls declined.* Under 15 for the week (7 short).",
-        "4-week average: 2.0 a week.",
-        "November so far: 8.",
+        "*3 calls declined last week (Nov 2–8)*",
+        "• Caller 1",
+        "• Caller 2",
+        "• Caller 3",
+        "Under 15 for the week (12 short). 4-week average: 0.8 a week. November so far: 3.",
       ].join("\n")
     );
   });
 
+  it("with no calls, says 0 and lists nothing", () => {
+    expect(formatWeeklyReport([], MONDAY_MORNING)).toBe(
+      ["*0 calls declined last week (Nov 2–8)*", "Under 15 for the week (15 short). 4-week average: 0.0 a week. November so far: 0."].join("\n")
+    );
+  });
+
+  it("says 1 call, not 1 calls", () => {
+    expect(formatWeeklyReport(lastWeek(1), MONDAY_MORNING)).toContain("*1 call declined last week (Nov 2–8)*");
+  });
+
   it("at 14 says under", () => {
     const text = formatWeeklyReport(lastWeek(14), MONDAY_MORNING);
-    expect(text).toContain("14 calls declined.* Under 15 for the week (1 short).");
+    expect(text).toContain("Under 15 for the week (1 short).");
     expect(text).not.toContain("At or over");
   });
 
   it.each([15, 16])("at %i says at or over 15", (n) => {
-    expect(formatWeeklyReport(lastWeek(n), MONDAY_MORNING)).toContain(`${n} calls declined.* At or over 15 for the week`);
+    const text = formatWeeklyReport(lastWeek(n), MONDAY_MORNING);
+    expect(text).toContain(`*${n} calls declined last week (Nov 2–8)*`);
+    expect(text).toContain("At or over 15 for the week");
   });
 
-  it("adds the busy/distance line only when /trinity entries were counted", () => {
-    const text = formatWeeklyReport([...lastWeek(5), row("2026-11-05T15:00:00Z", "busy"), row("2026-11-05T16:00:00Z", "distance")], MONDAY_MORNING);
-    expect(text).toContain("7 calls declined.");
-    expect(text).toContain("Includes 2 logged with /trinity declined (busy 1, distance 1).");
+  it("shows a repeat caller once, with how many times they called", () => {
+    const rows = [
+      { ...row("2026-11-03T15:00:00Z", null, "same"), label: "Patty, Hillsdale: barn plumbing before winter" },
+      { ...row("2026-11-04T15:00:00Z", null, "same"), label: "Patty again" },
+      { ...row("2026-11-05T15:00:00Z", "busy", "same"), label: "Logged with /trinity: busy" },
+      { ...row("2026-11-05T16:00:00Z", null, "other"), label: "Jane Doe, Rensselaer: no hot water" },
+      { ...row("2026-11-06T16:00:00Z", null, "other"), label: "Jane Doe" },
+    ];
+    const text = formatWeeklyReport(rows, MONDAY_MORNING);
+    expect(text).toContain("*2 calls declined last week (Nov 2–8)*");
+    expect(text).toContain("• Patty, Hillsdale: barn plumbing before winter (called 3 times)");
+    expect(text).toContain("• Jane Doe, Rensselaer: no hot water (called twice)");
+    expect(text).not.toContain("Patty again");
+  });
+
+  it("caps the list at 25 lines with a count of the rest", () => {
+    const text = formatWeeklyReport(lastWeek(30), MONDAY_MORNING);
+    const bullets = text.split("\n").filter((l) => l.startsWith("• "));
+    expect(bullets).toHaveLength(25);
+    expect(text).toContain("• Caller 25\n… and 5 more\n");
+    expect(text).toContain("*30 calls declined last week (Nov 2–8)*");
+  });
+
+  it("falls back to (no details) for a row without a label", () => {
+    expect(formatWeeklyReport([row("2026-11-04T15:00:00Z")], MONDAY_MORNING)).toContain("• (no details)");
   });
 
   it("shows the 4-week average separately from the single week", () => {
@@ -152,9 +187,5 @@ describe("formatWeeklyReport", () => {
       row("2026-11-09T11:00:00Z"), // this morning, 6am
     ];
     expect(formatWeeklyReport(rows, MONDAY_MORNING)).toContain("November so far: 5.");
-  });
-
-  it("says 1 call, not 1 calls", () => {
-    expect(formatWeeklyReport(lastWeek(1), MONDAY_MORNING)).toContain("1 call declined.");
   });
 });

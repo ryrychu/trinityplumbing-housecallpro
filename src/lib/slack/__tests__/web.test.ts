@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { fetchChannelHistory, postMessage } from "../web";
+import { fetchChannelHistory, postMessage, SlackApiError } from "../web";
 
 const TOKEN = "xoxb-test-not-real";
 const fetchMock = vi.fn();
@@ -49,19 +49,26 @@ describe("fetchChannelHistory", () => {
     expect((err as Error).message).not.toContain(TOKEN);
   });
 
+  it("carries Slack's error code and the missing scope as data", async () => {
+    fetchMock.mockResolvedValueOnce(json({ ok: false, error: "missing_scope", needed: "groups:history", provided: "chat:write" }));
+    const err = await fetchChannelHistory(TOKEN, "C_DECLINED", 0, 1).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(SlackApiError);
+    expect(err).toMatchObject({ code: "missing_scope", needed: "groups:history" });
+  });
+
   it("throws when rate limited", async () => {
     fetchMock.mockResolvedValueOnce(json({ ok: false, error: "ratelimited" }, 429, { "Retry-After": "30" }));
-    await expect(fetchChannelHistory(TOKEN, "C_DECLINED", 0, 1)).rejects.toThrow(/rate limited/);
+    await expect(fetchChannelHistory(TOKEN, "C_DECLINED", 0, 1)).rejects.toThrow(/ratelimited/);
   });
 
   it("throws on an HTTP failure", async () => {
     fetchMock.mockResolvedValueOnce(new Response("bad gateway", { status: 502 }));
-    await expect(fetchChannelHistory(TOKEN, "C_DECLINED", 0, 1)).rejects.toThrow(/HTTP 502/);
+    await expect(fetchChannelHistory(TOKEN, "C_DECLINED", 0, 1)).rejects.toThrow(/http_502/);
   });
 
   it("gives up on a cursor that never ends", async () => {
     fetchMock.mockImplementation(async () => json({ ok: true, messages: [], has_more: true, response_metadata: { next_cursor: "again" } }));
-    await expect(fetchChannelHistory(TOKEN, "C_DECLINED", 0, 1)).rejects.toThrow(/pages/);
+    await expect(fetchChannelHistory(TOKEN, "C_DECLINED", 0, 1)).rejects.toThrow(/too_many_pages/);
   });
 });
 

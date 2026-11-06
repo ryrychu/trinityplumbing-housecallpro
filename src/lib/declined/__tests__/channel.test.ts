@@ -71,10 +71,16 @@ describe("sharedText", () => {
 });
 
 describe("channelRows", () => {
-  it("keeps only the time and a salted hash, never the text or the number", () => {
+  it("keeps the time, a salted hash and a one-line label for the Monday list", () => {
     const rows = channelRows([forwarded(AT, SAMPLE_CALL)], SALT);
-    expect(rows).toEqual([{ created_at: "2026-11-04T15:00:00.000Z", reason: null, phone_hash: hashPhone("5185550142", SALT) }]);
-    expect(JSON.stringify(rows)).not.toMatch(/Pat|Sample|555|0142/);
+    expect(rows).toEqual([
+      {
+        created_at: "2026-11-04T15:00:00.000Z",
+        reason: null,
+        phone_hash: hashPhone("5185550142", SALT),
+        label: "(518) 555-0142: Pat Example, 12 Sample St, Testville",
+      },
+    ]);
   });
 
   it("counts one forward per message and skips everything else", () => {

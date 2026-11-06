@@ -48,7 +48,7 @@ export function findPhone(text: string): string | null {
   return match ? normalizePhone(match[0]) : null;
 }
 
-function scrubPhones(text: string): string {
+export function scrubPhones(text: string): string {
   return text
     .replace(new RegExp(PHONE_RE.source, "g"), " ")
     .replace(LOCAL_PHONE_RE, " ");

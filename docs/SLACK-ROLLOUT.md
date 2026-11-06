@@ -360,13 +360,25 @@ claimed.
 
 When Trinity turns a call down (crew too busy, or a contract customer too far
 away), Ellah forwards the original message from #calls into #declined-calls.
-The bot counts those forwards. Every Monday morning it posts last week's total
-in #declined-calls, checked against the 15-a-week hiring line, with the 4-week
-average and the month so far:
+The bot counts those forwards. Every Monday morning it posts last week's calls
+in #declined-calls, one line each (like the estimates channel), then the total
+against the 15-a-week hiring line, the 4-week average and the month so far:
 
-> **Last week (Nov 2–8): 8 calls declined.** Under 15 for the week (7 short).
-> 4-week average: 6.5 a week.
-> November so far: 3.
+> **5 calls declined last week (Nov 2–8)**
+> • Sandra Sample, Rensselaer: sump pump stopped, pit nearly overflowing
+> • Patty, Hillsdale: barn plumbing before winter (called twice)
+> • Logged with /trinity: distance — Saratoga contract
+> • (518) 555-0167: no details
+> • Jordan Example: Water heater leaking in the basement
+> Under 15 for the week (10 short). 4-week average: 1.3 a week. November so far: 5.
+
+Each line is picked out of the forwarded message: the name (a short Title Case
+line), the town (from an address like "12 Main St, Rensselaer, NY 12144") and
+the first sentence of the note, minus @mentions and "Cx called because". It
+never guesses: no address means no town, no name means the phone number, and
+nothing usable means "(no details)". A repeat caller shows once with "(called
+twice)". The list stops at 25 with "… and N more". Customer details in this
+post are fine by Dave; it goes only to #declined-calls.
 
 **What counts:** one forwarded (or shared) message posted in #declined-calls is
 one declined call, timed by when it was forwarded, Mon–Sun Eastern. Typed
@@ -375,9 +387,10 @@ joins and leaves, and anything inside a thread. If the same phone number is
 forwarded twice in a week it counts once.
 
 **Nothing is stored from the channel.** The bot reads the last five weeks of
-#declined-calls when it needs a number, counts, and keeps nothing: no text,
-names, addresses or numbers, in the database or in logs. A phone number is
-only turned into a salted hash in memory to spot repeats.
+#declined-calls when it needs them, builds the count and the Monday lines in
+memory, and keeps nothing: no text, names, addresses or numbers, in the
+database or in logs. A phone number is only turned into a salted hash in memory
+to spot repeats.
 
 `/trinity declined busy|distance` still works as a backup (see the usage text
 in Slack). Those entries are stored in `declined_calls`, added to the forwards,
@@ -412,9 +425,15 @@ The `declined_calls` table (migration 0007), `DECLINED_PHONE_SALT` and
    vercel env add SLACK_BOT_TOKEN            # the xoxb- token
    vercel env add SLACK_DECLINED_CHANNEL_ID  # the C… id
    ```
-7. Check: `/trinity declined week` should show this week's forwards. If it ends
-   with "Couldn't read #declined-calls", the function logs name Slack's error
-   code (`not_in_channel` means step 4, `missing_scope` means steps 1–2).
+7. Check: `/trinity declined week` should show this week's forwards. If it
+   can't read the channel, the reply (only you see it) ends with Slack's error
+   code and the fix, for example:
+   - `token_not_set` / `channel_not_set`: the Vercel variable is missing (step 6).
+   - `token_not_bot`: that's not the `xoxb-` Bot User OAuth Token (step 3).
+   - `not_in_channel`: invite the bot (step 4).
+   - `missing_scope (needs groups:history)`: add that scope and reinstall (steps 1–2).
+   - `invalid_auth` / `token_revoked`: copy the current token again (step 3).
+   - `channel_not_found`: wrong channel ID, or a private channel the bot can't see (steps 4–5).
 
 The first summary posts the next Monday between 6am and noon Eastern, once
 (`declined_weekly` in `notifications_sent`). It needs `SLACK_ALERTS_ENABLED=true`
