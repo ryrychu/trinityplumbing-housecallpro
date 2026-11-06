@@ -397,6 +397,12 @@ in Slack). Those entries are stored in `declined_calls`, added to the forwards,
 and a number logged both ways counts once. They are the only ones with a
 busy/distance reason; forwards are just "declined".
 
+**Preview it any time:** `/trinity declined preview` shows the Monday post for
+this week so far (Monday to now), headed "Preview: … this week so far", to the
+person who typed it only. It doesn't post to the channel, doesn't use up the
+week's Monday post and doesn't write anything. If the channel can't be read it
+ends with the same error line as `/trinity declined week`.
+
 ### Ellah changes nothing
 
 Keep forwarding declined calls to #declined-calls exactly as now. The weekly
@@ -425,7 +431,8 @@ The `declined_calls` table (migration 0007), `DECLINED_PHONE_SALT` and
    vercel env add SLACK_BOT_TOKEN            # the xoxb- token
    vercel env add SLACK_DECLINED_CHANNEL_ID  # the C… id
    ```
-7. Check: `/trinity declined week` should show this week's forwards. If it
+7. Check: `/trinity declined week` should show this week's forwards, and
+   `/trinity declined preview` how Monday's post will look. If it
    can't read the channel, the reply (only you see it) ends with Slack's error
    code and the fix, for example:
    - `token_not_set` / `channel_not_set`: the Vercel variable is missing (step 6).

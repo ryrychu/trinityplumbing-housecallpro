@@ -1,7 +1,12 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
-const { claimMock } = vi.hoisted(() => ({ claimMock: vi.fn() }));
+const { claimMock, postMessageMock } = vi.hoisted(() => ({
+  claimMock: vi.fn(),
+  postMessageMock: vi.fn(() => {
+    throw new Error("tests must not reach Slack");
+  }),
+}));
 vi.mock("@/lib/notifications/dedupe", () => ({ claim: claimMock }));
 // Defaults would build a real client or call Slack; every test passes its own.
 vi.mock("@/lib/supabase/client", () => ({
@@ -14,9 +19,7 @@ vi.mock("@/lib/slack/web", async (importOriginal) => ({
   fetchChannelHistory: () => {
     throw new Error("tests must not reach Slack");
   },
-  postMessage: () => {
-    throw new Error("tests must not reach Slack");
-  },
+  postMessage: postMessageMock,
 }));
 
 import {
@@ -374,5 +377,80 @@ describe("labelCommandRows", () => {
       "Logged with /trinity: distance — Saratoga contract &lt;ask Dave&gt;",
     ]);
     expect(rows[0]).not.toHaveProperty("note");
+  });
+});
+
+describe("/trinity declined preview", () => {
+  // Wednesday 11 Nov 2026, 10:00 EST: this week is Mon 9 – Sun 15 Nov.
+  const WED = new Date("2026-11-11T15:00:00Z");
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    process.env.SLACK_DECLINED_ENABLED = "true";
+    process.env.SLACK_BOT_TOKEN = "xoxb-test-not-real";
+    process.env.SLACK_DECLINED_CHANNEL_ID = "C_DECLINED";
+    vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+  afterEach(() => {
+    delete process.env.SLACK_DECLINED_ENABLED;
+    delete process.env.SLACK_BOT_TOKEN;
+    delete process.env.SLACK_DECLINED_CHANNEL_ID;
+    vi.restoreAllMocks();
+  });
+
+  it("parses", () => {
+    expect(parseDeclined("preview", "U_ELLAH")).toEqual({ kind: "declinedPreview" });
+  });
+
+  it("renders the Monday post for this week so far, Monday to now", async () => {
+    const d = setup(
+      [
+        forwarded("2026-11-06T15:00:00Z", "(518) 555-0110\nLast Week Caller\nold call"), // last week: not listed
+        forwarded("2026-11-09T15:00:00Z", "(518) 555-0123\nJane Doe\n12 Example St, Rensselaer, NY 12144\nCx called because sump pump stopped."),
+        forwarded("2026-11-10T15:00:00Z", "(518) 555-0123\nJane Doe\ncalled back"),
+        forwarded("2026-11-11T14:00:00Z", "(518) 555-0167"),
+      ],
+      [{ id: 1, created_at: "2026-11-10T16:00:00.000Z", reason: "busy", phone_hash: null, slack_user_id: "U_ELLAH", note: "wanted Tuesday" }]
+    );
+
+    const text = await renderDeclined(parseDeclined("preview", "U_ELLAH"), WED, d.deps);
+
+    expect(text).toBe(
+      [
+        "*Preview: 3 calls declined this week so far (Nov 9–15)*",
+        "• Jane Doe, Rensselaer: sump pump stopped (called twice)",
+        "• Logged with /trinity: busy — wanted Tuesday",
+        "• (518) 555-0167: no details",
+        "Under 15 for the week (12 short). 4-week average: 0.3 a week. November so far: 4.",
+      ].join("\n")
+    );
+  });
+
+  it("never claims, posts to the channel, or writes anything", async () => {
+    const d = setup([forwarded("2026-11-09T15:00:00Z", "(518) 555-0123")]);
+    await renderDeclined(parseDeclined("preview", "U_ELLAH"), WED, d.deps);
+
+    expect(claimMock).not.toHaveBeenCalled();
+    expect(postMessageMock).not.toHaveBeenCalled();
+    expect(d.store.insert).not.toHaveBeenCalled();
+    expect(d.store.deleteLatestBy).not.toHaveBeenCalled();
+  });
+
+  it("is off with the switch", async () => {
+    delete process.env.SLACK_DECLINED_ENABLED;
+    const d = setup();
+    expect(await renderDeclined(parseDeclined("preview", "U_ELLAH"), WED, d.deps)).toBe(DISABLED_TEXT);
+    expect(d.deps.channel.rowsBetween).not.toHaveBeenCalled();
+  });
+
+  it("adds the diagnostic line when the channel can't be read", async () => {
+    const m = memoryStore();
+    const text = await renderDeclined(parseDeclined("preview", "U_ELLAH"), WED, {
+      store: m.store,
+      channel: brokenChannel(new SlackApiError("conversations.history", "missing_scope", "channels:history")),
+    });
+    expect(text).toContain("*Preview: 0 calls declined this week so far (Nov 9–15)*");
+    expect(text).toContain("Couldn't read #declined-calls, so this counts /trinity entries only.");
+    expect(text).toContain("missing_scope (needs channels:history): The app is missing a permission.");
   });
 });

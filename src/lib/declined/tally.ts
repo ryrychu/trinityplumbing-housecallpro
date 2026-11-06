@@ -170,6 +170,26 @@ export function callLines(rows: DeclinedRow[]): string[] {
   return [...lines.slice(0, LIST_MAX), `… and ${lines.length - LIST_MAX} more`];
 }
 
+// The post body shared by the Monday report and its preview: a bold heading,
+// one line per call in `week`, then the totals. The 4-week average is always
+// over the four complete weeks ending with last week.
+function formatCallReport(rows: DeclinedRow[], now: Date, week: Range, heading: (count: string) => string): string {
+  const last = weekBefore(thisWeek(now));
+  const weeks: Range[] = [last];
+  while (weeks.length < 4) weeks.push(weekBefore(weeks[weeks.length - 1]));
+
+  const weekRows = inRange(rows, week);
+  const weekTally = tally(weekRows);
+  const average = weeks.reduce((n, w) => n + tally(inRange(rows, w)).total, 0) / weeks.length;
+  const mtd = tally(inRange(rows, monthToDate(now)));
+
+  return [
+    heading(calls(weekTally.total)),
+    ...callLines(weekRows),
+    `${thresholdLine(weekTally.total)} 4-week average: ${average.toFixed(1)} a week. ${monthName(now)} so far: ${mtd.total}.`,
+  ].join("\n");
+}
+
 /**
  * The Monday post to #declined-calls, in the estimates-channel style: a bold
  * count, one line per call, then the totals. Customer details are fine here
@@ -177,19 +197,14 @@ export function callLines(rows: DeclinedRow[]): string[] {
  */
 export function formatWeeklyReport(rows: DeclinedRow[], now: Date): string {
   const last = weekBefore(thisWeek(now));
-  const weeks: Range[] = [last];
-  while (weeks.length < 4) weeks.push(weekBefore(weeks[weeks.length - 1]));
+  return formatCallReport(rows, now, last, (n) => `*${n} last week (${weekLabel(last)})*`);
+}
 
-  const lastRows = inRange(rows, last);
-  const lastTally = tally(lastRows);
-  const average = weeks.reduce((n, w) => n + tally(inRange(rows, w)).total, 0) / weeks.length;
-  const mtd = tally(inRange(rows, monthToDate(now)));
-
-  return [
-    `*${calls(lastTally.total)} last week (${weekLabel(last)})*`,
-    ...callLines(lastRows),
-    `${thresholdLine(lastTally.total)} 4-week average: ${average.toFixed(1)} a week. ${monthName(now)} so far: ${mtd.total}.`,
-  ].join("\n");
+/** `/trinity declined preview`: the same post for this week so far, Monday to now. */
+export function formatPreview(rows: DeclinedRow[], now: Date): string {
+  const current = thisWeek(now);
+  const soFar = { startIso: current.startIso, endIso: now.toISOString() };
+  return formatCallReport(rows, now, soFar, (n) => `*Preview: ${n} this week so far (${weekLabel(current)})*`);
 }
 
 /** `/trinity declined week`: this week so far, and last week in full. */

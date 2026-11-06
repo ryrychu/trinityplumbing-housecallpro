@@ -150,6 +150,16 @@ describe("POST /api/slack/command", () => {
       expect(postMock).toHaveBeenCalledWith(RESPONSE_URL, "*Week ahead* — 9 jobs");
     });
 
+    // The preview carries customer names: it must only ever go back to the
+    // person who asked, through response_url (always ephemeral, see
+    // src/lib/slack/respond.ts), never to a channel.
+    it("answers `declined preview` privately through response_url", async () => {
+      const res = await POST(slackRequest("declined preview"));
+      expect(await res.json()).toEqual({ response_type: "ephemeral", text: "Working on it…" });
+      expect(renderCommandMock).toHaveBeenCalledWith({ kind: "declinedPreview" }, expect.any(Date));
+      expect(postMock).toHaveBeenCalledWith(RESPONSE_URL, "*Week ahead* — 9 jobs");
+    });
+
     it("rejects an unsigned declined request before anything is logged", async () => {
       const res = await POST(slackRequest("declined busy", { secret: "not-the-secret" }));
       expect(res.status).toBe(401);

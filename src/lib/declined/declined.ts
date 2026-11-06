@@ -15,6 +15,7 @@ import { channelRows } from "./channel";
 import { hashPhone } from "./phone";
 import type { DeclinedCommand, DeclinedReason } from "./parse";
 import {
+  formatPreview,
   formatWeekSummary,
   formatWeeklyReport,
   reportWindowStart,
@@ -44,6 +45,7 @@ export const USAGE_TEXT = [
   "",
   "`/trinity declined undo` — remove the last one you logged",
   "`/trinity declined week` — this week and last week, forwards included",
+  "`/trinity declined preview` — this week's Monday post so far, shown only to you",
 ].join("\n");
 
 const NO_SALT_TEXT =
@@ -214,7 +216,8 @@ async function combinedRows(
       return null;
     }),
   ]);
-  return shared ? { rows: [...own, ...shared], note: null } : { rows: own, note: channelUnavailable(failure) };
+  const labelled = labelCommandRows(own);
+  return shared ? { rows: [...labelled, ...shared], note: null } : { rows: labelled, note: channelUnavailable(failure) };
 }
 
 function withNote(lines: string[], note: string | null): string {
@@ -232,6 +235,13 @@ export async function renderDeclined(cmd: DeclinedCommand, now: Date, deps: Deps
     case "declinedWeek": {
       const { rows, note } = await combinedRows(deps, weekBefore(week).startIso, week.endIso);
       return withNote([formatWeekSummary(rows, now)], note);
+    }
+
+    case "declinedPreview": {
+      // Read-only: no claim, no post, no write. The reply goes back to the
+      // caller through the slash command's response_url, ephemeral.
+      const { rows, note } = await combinedRows(deps, reportWindowStart(now), week.endIso);
+      return withNote([formatPreview(rows, now)], note);
     }
 
     case "declinedUndo": {

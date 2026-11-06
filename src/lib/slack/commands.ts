@@ -77,6 +77,7 @@ export function resolveWindow(
     case "declinedLog":
     case "declinedUndo":
     case "declinedWeek":
+    case "declinedPreview":
     case "declinedUsage":
       return null;
 
@@ -143,6 +144,7 @@ export async function renderCommand(cmd: Command, now: Date): Promise<string> {
     cmd.kind === "declinedLog" ||
     cmd.kind === "declinedUndo" ||
     cmd.kind === "declinedWeek" ||
+    cmd.kind === "declinedPreview" ||
     cmd.kind === "declinedUsage"
   ) {
     return renderDeclined(cmd, now);
