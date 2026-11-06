@@ -1,63 +1,54 @@
-// Turned-down call log: what `/trinity declined …` does, and the Monday post.
+// Declined calls: what `/trinity declined ...` does, and the Monday post.
 //
-// Ella logs each call Trinity turns down (crew too busy, or a contract
-// customer too far away). Dave reads a weekly total in the schedule channel;
-// around 15 a week is the point to hire another van and plumber.
-//
-// Nothing here reads Slack history and nothing needs a bot token: logging
-// arrives through the existing signed slash command, and the report goes out
-// through the existing SLACK_WEBHOOK_SCHEDULE incoming webhook.
-import { createHmac } from "node:crypto";
+// Ellah forwards each turned-down call from #calls into #declined-calls. The
+// bot counts those forwards (read at report time with conversations.history;
+// nothing from them is stored) together with any `/trinity declined
+// busy|distance` entries, the backup path, which live in the declined_calls
+// table. Dave reads the Monday total in #declined-calls; around 15 a week is
+// the point to hire another van and plumber.
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { getSupabaseServerClient } from "@/lib/supabase/client";
 import { claim } from "@/lib/notifications/dedupe";
 import { isWeeklyLookaheadDue } from "@/lib/notifications/schedule";
-import { postSlack } from "@/lib/slack/client";
+import { fetchChannelHistory, postMessage } from "@/lib/slack/web";
+import { channelRows } from "./channel";
+import { hashPhone } from "./phone";
 import type { DeclinedCommand, DeclinedReason } from "./parse";
 import {
-  formatSplit,
   formatWeekSummary,
   formatWeeklyReport,
   reportWindowStart,
-  tally,
+  runningTotal,
   thisWeek,
   weekBefore,
   weekKey,
   type DeclinedRow,
 } from "./tally";
 
+export { hashPhone };
+
 // Off unless exactly "true", like SLACK_ALERTS_ENABLED and SLACK_COMMANDS_ENABLED.
-// Covers both the command and the Monday post, so this can deploy before the
-// migration is applied without anyone writing to a table that isn't there.
+// Covers the command, the channel count and the Monday post.
 export function declinedEnabled(): boolean {
   return process.env.SLACK_DECLINED_ENABLED === "true";
 }
 
-export const DISABLED_TEXT = "Turned-down call logging isn't switched on yet.";
+export const DISABLED_TEXT = "Declined-call counting isn't switched on yet.";
 
 export const USAGE_TEXT = [
-  "*Log a turned-down call*",
+  "*Log a declined call* (a backup for forwarding it to #declined-calls)",
   "`/trinity declined busy` — crew too busy",
   "`/trinity declined distance` — contract customer too far away",
   "Add the caller's number and a short note if you have them:",
   "`/trinity declined busy 518-555-0100 wanted Tuesday`",
   "",
   "`/trinity declined undo` — remove the last one you logged",
-  "`/trinity declined week` — this week and last week so far",
+  "`/trinity declined week` — this week and last week, forwards included",
 ].join("\n");
 
 const NO_SALT_TEXT =
   "Not logged: DECLINED_PHONE_SALT is not set on this deployment, so the phone number " +
   "can't be stored safely. Log it again without the number, or ask Ryan to set it.";
-
-/**
- * Salted HMAC of the normalized 10-digit number. A plain hash of a phone
- * number is reversible by trying all ten billion of them; the salt is what
- * makes the stored value useless without the deployment's secret.
- */
-export function hashPhone(phone: string, salt: string): string {
-  return createHmac("sha256", salt).update(phone).digest("hex");
-}
 
 export type StoredRow = DeclinedRow & {
   id: number;
@@ -117,44 +108,101 @@ const REASON_LABEL: Record<DeclinedReason, string> = {
   distance: "too far (distance)",
 };
 
-async function weekRows(store: DeclinedStore, now: Date): Promise<DeclinedRow[]> {
-  const week = thisWeek(now);
-  return store.listSince(week.startIso, week.endIso);
+/** Declined calls forwarded into #declined-calls, as tally rows. */
+export interface ChannelSource {
+  rowsBetween(fromIso: string, toIso: string): Promise<DeclinedRow[]>;
 }
 
-function runningTotal(rows: DeclinedRow[]): string {
-  const t = tally(rows);
-  return `This week so far: *${t.total}* (${formatSplit(t)}).`;
+const NOT_CONFIGURED = "SLACK_BOT_TOKEN or SLACK_DECLINED_CHANNEL_ID is not set";
+
+function channelConfig(): { token: string; channel: string } | null {
+  const token = process.env.SLACK_BOT_TOKEN;
+  const channel = process.env.SLACK_DECLINED_CHANNEL_ID;
+  return token && channel ? { token, channel } : null;
 }
 
-export async function renderDeclined(
-  cmd: DeclinedCommand,
-  now: Date,
-  store: DeclinedStore = supabaseDeclinedStore(getSupabaseServerClient())
-): Promise<string> {
+export function slackChannelSource(): ChannelSource {
+  return {
+    async rowsBetween(fromIso, toIso) {
+      const cfg = channelConfig();
+      if (!cfg) throw new Error(NOT_CONFIGURED);
+      const from = Date.parse(fromIso);
+      const to = Date.parse(toIso);
+      const messages = await fetchChannelHistory(cfg.token, cfg.channel, Math.floor(from / 1000), Math.ceil(to / 1000));
+      return channelRows(messages, process.env.DECLINED_PHONE_SALT).filter((r) => {
+        const t = Date.parse(r.created_at);
+        return t >= from && t < to;
+      });
+    },
+  };
+}
+
+export type Deps = { store: DeclinedStore; channel: ChannelSource };
+
+function defaultDeps(): Deps {
+  return { store: supabaseDeclinedStore(getSupabaseServerClient()), channel: slackChannelSource() };
+}
+
+export const CHANNEL_UNAVAILABLE =
+  "_Couldn't read #declined-calls just now, so this counts /trinity entries only._";
+
+/**
+ * Command entries plus channel forwards. For an interactive reply a channel
+ * failure degrades to command entries only, and says so; the Monday report
+ * never does this (see runDeclinedReportPass).
+ */
+async function combinedRows(
+  deps: Deps,
+  fromIso: string,
+  toIso: string
+): Promise<{ rows: DeclinedRow[]; note: string | null }> {
+  const [own, shared] = await Promise.all([
+    deps.store.listSince(fromIso, toIso),
+    deps.channel.rowsBetween(fromIso, toIso).catch((err) => {
+      // The error message only: Slack error codes, never message text.
+      console.error("[declined] channel read failed:", err instanceof Error ? err.message : String(err));
+      return null;
+    }),
+  ]);
+  return shared ? { rows: [...own, ...shared], note: null } : { rows: own, note: CHANNEL_UNAVAILABLE };
+}
+
+function withNote(lines: string[], note: string | null): string {
+  return (note ? [...lines, note] : lines).join("\n");
+}
+
+export async function renderDeclined(cmd: DeclinedCommand, now: Date, deps: Deps = defaultDeps()): Promise<string> {
   if (!declinedEnabled()) return DISABLED_TEXT;
+  const week = thisWeek(now);
 
   switch (cmd.kind) {
     case "declinedUsage":
       return USAGE_TEXT;
 
     case "declinedWeek": {
-      const rows = await store.listSince(weekBefore(thisWeek(now)).startIso, thisWeek(now).endIso);
-      return formatWeekSummary(rows, now);
+      const { rows, note } = await combinedRows(deps, weekBefore(week).startIso, week.endIso);
+      return withNote([formatWeekSummary(rows, now)], note);
     }
 
     case "declinedUndo": {
       if (!cmd.userId) return "Couldn't tell who you are, so nothing was removed.";
-      const removed = await store.deleteLatestBy(cmd.userId);
-      if (!removed) return "You haven't logged any turned-down calls, so there's nothing to undo.";
-      const rows = await weekRows(store, now);
-      return [
-        `Removed your last entry: ${REASON_LABEL[removed.reason]}, logged ${new Intl.DateTimeFormat(
-          "en-US",
-          { timeZone: "America/New_York", weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }
-        ).format(new Date(removed.created_at))}.`,
-        runningTotal(rows),
-      ].join("\n");
+      const removed = await deps.store.deleteLatestBy(cmd.userId);
+      if (!removed || !removed.reason) {
+        return "You haven't logged any declined calls with /trinity, so there's nothing to undo.";
+      }
+      const { rows, note } = await combinedRows(deps, week.startIso, week.endIso);
+      const when = new Intl.DateTimeFormat("en-US", {
+        timeZone: "America/New_York",
+        weekday: "short",
+        month: "short",
+        day: "numeric",
+        hour: "numeric",
+        minute: "2-digit",
+      }).format(new Date(removed.created_at));
+      return withNote(
+        [`Removed your last entry: ${REASON_LABEL[removed.reason]}, logged ${when}.`, runningTotal(rows, now)],
+        note
+      );
     }
 
     case "declinedLog": {
@@ -167,7 +215,7 @@ export async function renderDeclined(
         phoneHash = hashPhone(cmd.phone, salt);
       }
 
-      const before = await weekRows(store, now);
+      const { rows: before, note } = await combinedRows(deps, week.startIso, week.endIso);
       const repeat = phoneHash !== null && before.some((r) => r.phone_hash === phoneHash);
 
       const row: NewRow = {
@@ -177,37 +225,63 @@ export async function renderDeclined(
         note: cmd.note,
         phone_hash: phoneHash,
       };
-      await store.insert(row);
+      await deps.store.insert(row);
 
-      const lines = [`Logged: turned down, ${REASON_LABEL[cmd.reason]}.`];
+      const lines = [`Logged: declined, ${REASON_LABEL[cmd.reason]}.`];
       if (cmd.note) lines.push(`Note: ${cmd.note}`);
-      if (repeat) lines.push("That number was already logged this week, so it isn't counted twice.");
-      lines.push(runningTotal([...before, row]));
-      return lines.join("\n");
+      if (repeat) lines.push("That number is already counted this week, so it isn't counted twice.");
+      lines.push(runningTotal([...before, row], now));
+      return withNote(lines, note);
     }
   }
 }
 
+export type ReportDeps = Deps & { post: (text: string) => Promise<void> };
+
+function defaultReportDeps(supabase: SupabaseClient): ReportDeps {
+  return {
+    store: supabaseDeclinedStore(supabase),
+    channel: slackChannelSource(),
+    post: async (text) => {
+      const cfg = channelConfig();
+      if (!cfg) throw new Error(NOT_CONFIGURED);
+      await postMessage(cfg.token, cfg.channel, text);
+    },
+  };
+}
+
 /**
- * The Monday-morning post. Called from /api/cron/sync on every run; posts at
- * most once per reported week (claim() ledger, kind "declined_weekly", keyed
- * by that week's Monday). Builds the text BEFORE claiming, so a failed read
- * leaves the week unclaimed for the next 15-minute run instead of losing it.
+ * The Monday-morning post to #declined-calls. Called from /api/cron/sync on
+ * every run; posts at most once per reported week (claim() ledger, kind
+ * "declined_weekly", keyed by that week's Monday).
+ *
+ * Reads both sources and builds the text BEFORE claiming. A Slack or database
+ * error throws before the claim, so nothing is posted and the next 15-minute
+ * run tries again. Unlike the interactive reply, the report never falls back
+ * to a partial count: a wrong number in front of Dave is worse than a late one.
+ * Once claimed, a failed post is not retried (the ledger's rule everywhere:
+ * losing a message beats posting it twice).
  */
 export async function runDeclinedReportPass(
   supabase: SupabaseClient,
   now: Date,
-  store: DeclinedStore = supabaseDeclinedStore(supabase)
+  deps: ReportDeps = defaultReportDeps(supabase)
 ): Promise<boolean> {
   if (!declinedEnabled()) return false;
   if (!isWeeklyLookaheadDue(now)) return false;
+  if (!channelConfig()) {
+    console.warn(`[declined] weekly report skipped: ${NOT_CONFIGURED}`);
+    return false;
+  }
 
-  const rows = await store.listSince(reportWindowStart(now), now.toISOString());
-  const text = formatWeeklyReport(rows, now);
+  const from = reportWindowStart(now);
+  const to = now.toISOString();
+  const [own, shared] = await Promise.all([deps.store.listSince(from, to), deps.channel.rowsBetween(from, to)]);
+  const text = formatWeeklyReport([...own, ...shared], now);
 
   const reported = weekKey(weekBefore(thisWeek(now)));
   if (!(await claim(supabase, "declined_weekly", reported))) return false;
 
-  return postSlack(process.env.SLACK_WEBHOOK_SCHEDULE, text);
+  await deps.post(text);
+  return true;
 }
-

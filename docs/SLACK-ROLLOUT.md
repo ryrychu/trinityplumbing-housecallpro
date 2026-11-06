@@ -356,52 +356,80 @@ claimed.
 
 ---
 
-## Turned-down calls — `/trinity declined`
+## Declined calls — #declined-calls and `/trinity declined`
 
-Ella logs each call Trinity turns down: crew too busy, or a contract customer
-too far away. Every Monday morning the schedule channel gets last week's total
-(busy and distance split), checked against the 15-a-week hiring line, plus the
-4-week average and month to date. Totals only: no notes, numbers or names.
+When Trinity turns a call down (crew too busy, or a contract customer too far
+away), Ellah forwards the original message from #calls into #declined-calls.
+The bot counts those forwards. Every Monday morning it posts last week's total
+in #declined-calls, checked against the 15-a-week hiring line, with the 4-week
+average and the month so far:
 
-A repeat caller counts once per Mon–Sun week (Eastern), matched on a salted
-hash of their phone number. The number itself is never stored. Calls logged
-without a number always count on their own.
+> **Last week (Nov 2–8): 8 calls declined.** Under 15 for the week (7 short).
+> 4-week average: 6.5 a week.
+> November so far: 3.
 
-No new Slack app setup: it rides on the existing `/trinity` command (same
-signing secret, same "anyone in the workspace" access) and posts through the
-existing `SLACK_WEBHOOK_SCHEDULE` webhook. No bot token, no new scopes, and it
-never reads channel history.
+**What counts:** one forwarded (or shared) message posted in #declined-calls is
+one declined call, timed by when it was forwarded, Mon–Sun Eastern. Typed
+messages don't count: Ellah's own weekly line, Dave's replies, the bot's post,
+joins and leaves, and anything inside a thread. If the same phone number is
+forwarded twice in a week it counts once.
+
+**Nothing is stored from the channel.** The bot reads the last five weeks of
+#declined-calls when it needs a number, counts, and keeps nothing: no text,
+names, addresses or numbers, in the database or in logs. A phone number is
+only turned into a salted hash in memory to spot repeats.
+
+`/trinity declined busy|distance` still works as a backup (see the usage text
+in Slack). Those entries are stored in `declined_calls`, added to the forwards,
+and a number logged both ways counts once. They are the only ones with a
+busy/distance reason; forwards are just "declined".
+
+### Ellah changes nothing
+
+Keep forwarding declined calls to #declined-calls exactly as now. The weekly
+line is optional once the bot posts; nothing breaks if she keeps writing it.
 
 ### Go-live (Ryan)
 
-1. **Run the migration.** Supabase → SQL editor → paste
-   `supabase/migrations/0007_declined_calls.sql` → Run. Check it took:
-   `select count(*) from declined_calls;` returns `0`.
-2. **Set the salt** in Vercel (Production), once, and never change it:
+The `declined_calls` table (migration 0007), `DECLINED_PHONE_SALT` and
+`SLACK_DECLINED_ENABLED=true` are already live. This adds a bot token.
+
+1. **api.slack.com/apps → the Trinity app → OAuth & Permissions → Scopes → Bot
+   Token Scopes**, add:
+   - `channels:history` (read #declined-calls)
+   - `groups:history`, only if #declined-calls is a private channel
+   - `chat:write` (post the Monday summary)
+2. **Reinstall to Workspace** (banner at the top of that page). Slack may need a
+   workspace admin to approve the new scopes.
+3. Still on **OAuth & Permissions**, copy the **Bot User OAuth Token**
+   (`xoxb-…`). Treat it as a password.
+4. In Slack, in #declined-calls, type `/invite @<app name>`. The bot can't read
+   or post in a channel it isn't in.
+5. Get the channel ID: click the channel name at the top of #declined-calls; the
+   ID (`C…`) is at the bottom of the About tab.
+6. Set both in Vercel (Production), then redeploy:
    ```bash
-   node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"
-   vercel env add DECLINED_PHONE_SALT
+   vercel env add SLACK_BOT_TOKEN            # the xoxb- token
+   vercel env add SLACK_DECLINED_CHANNEL_ID  # the C… id
    ```
-   Without it, an entry that includes a phone number is refused (entries
-   without a number still log).
-3. **Flip the switch:** `vercel env add SLACK_DECLINED_ENABLED` with the value
-   `true` (exactly). Leave `SLACK_ALERTS_ENABLED` and `SLACK_COMMANDS_ENABLED`
-   as they are; both must already be `true`, as they are for the digests and
-   `/trinity`.
-4. **Redeploy**, then try `/trinity declined busy test`, `/trinity declined week`
-   and `/trinity declined undo` to remove the test entry.
-5. The first report posts the next Monday between 6am and noon Eastern, once
-   (ledger kind `declined_weekly` in `notifications_sent`, keyed by the
-   reported week's Monday).
+7. Check: `/trinity declined week` should show this week's forwards. If it ends
+   with "Couldn't read #declined-calls", the function logs name Slack's error
+   code (`not_in_channel` means step 4, `missing_scope` means steps 1–2).
 
-**Rollback:** set `SLACK_DECLINED_ENABLED` to anything but `true` and redeploy.
-The command then replies "not switched on yet" and the Monday post stops. The
-table and its rows stay.
+The first summary posts the next Monday between 6am and noon Eastern, once
+(`declined_weekly` in `notifications_sent`). It needs `SLACK_ALERTS_ENABLED=true`
+as well, like the other scheduled posts. If Slack or the database can't be read
+it posts nothing and tries again on the next 15-minute run; it never posts a
+partial count. Until the token and channel ID are set, the Monday post is
+skipped (logged as a warning) and nothing is claimed.
 
-### How to use it (Ella)
+**Rate limits:** this is an internal app installed only in Trinity's
+workspace, so `conversations.history` keeps its normal limit (Tier 3, 50+
+requests a minute). Slack's 2025 limit of 1 request a minute and 15 messages
+applies only to commercially distributed apps outside the Marketplace
+(https://docs.slack.dev/changelog/2025/05/29/rate-limit-changes-for-non-marketplace-apps).
+A report reads a few pages at most.
 
-- Turned someone down because the crew is full: `/trinity declined busy`
-- Turned down a contract customer because it's too far: `/trinity declined distance`
-- Add their number and a short note if you have them: `/trinity declined busy 518-555-0100 wanted Tuesday`
-- Made a mistake? `/trinity declined undo` removes the last one you logged.
-- `/trinity declined week` shows this week and last week. Only you see the replies.
+**Rollback:** set `SLACK_DECLINED_ENABLED` to anything but `true` and
+redeploy. Removing `SLACK_BOT_TOKEN` alone stops the channel count and the
+Monday post but leaves `/trinity declined` working on its own entries.

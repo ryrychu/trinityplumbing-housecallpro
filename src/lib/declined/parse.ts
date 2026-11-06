@@ -42,6 +42,12 @@ export function normalizePhone(raw: string): string | null {
   return digits.length === 10 ? digits : null;
 }
 
+/** The first US phone number in free text, normalized to 10 digits. */
+export function findPhone(text: string): string | null {
+  const match = text.match(PHONE_RE);
+  return match ? normalizePhone(match[0]) : null;
+}
+
 function scrubPhones(text: string): string {
   return text
     .replace(new RegExp(PHONE_RE.source, "g"), " ")
@@ -50,7 +56,7 @@ function scrubPhones(text: string): string {
 
 /**
  * `rest` is everything after the word "declined", in its original case so the
- * note keeps the capitalisation Ella typed.
+ * note keeps the capitalisation Ellah typed.
  */
 export function parseDeclined(rest: string, userId: string | null): DeclinedCommand {
   const text = rest.trim().replace(/\s+/g, " ");
@@ -64,8 +70,7 @@ export function parseDeclined(rest: string, userId: string | null): DeclinedComm
   if (word === "week" && tail === "") return { kind: "declinedWeek" };
   if (word !== "busy" && word !== "distance") return { kind: "declinedUsage" };
 
-  const match = tail.match(PHONE_RE);
-  const phone = match ? normalizePhone(match[0]) : null;
+  const phone = findPhone(tail);
   const note = scrubPhones(tail).replace(/\s+/g, " ").trim().slice(0, NOTE_MAX).trim();
 
   return { kind: "declinedLog", reason: word, phone, note: note || null, userId };

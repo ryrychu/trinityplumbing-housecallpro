@@ -1,16 +1,20 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
-const { claimMock, postSlackMock } = vi.hoisted(() => ({
-  claimMock: vi.fn(),
-  postSlackMock: vi.fn(),
-}));
+const { claimMock } = vi.hoisted(() => ({ claimMock: vi.fn() }));
 vi.mock("@/lib/notifications/dedupe", () => ({ claim: claimMock }));
-vi.mock("@/lib/slack/client", () => ({ postSlack: postSlackMock }));
-// The default store would build a real client; every test passes its own.
+// Defaults would build a real client or call Slack; every test passes its own.
 vi.mock("@/lib/supabase/client", () => ({
   getSupabaseServerClient: () => {
     throw new Error("tests must not reach Supabase");
+  },
+}));
+vi.mock("@/lib/slack/web", () => ({
+  fetchChannelHistory: () => {
+    throw new Error("tests must not reach Slack");
+  },
+  postMessage: () => {
+    throw new Error("tests must not reach Slack");
   },
 }));
 
@@ -20,10 +24,18 @@ import {
   hashPhone,
   DISABLED_TEXT,
   USAGE_TEXT,
+  CHANNEL_UNAVAILABLE,
+  type ChannelSource,
   type DeclinedStore,
   type StoredRow,
 } from "../declined";
 import { parseDeclined } from "../parse";
+import { channelRows } from "../channel";
+import type { DeclinedRow } from "../tally";
+import type { SlackMessage } from "@/lib/slack/web";
+import { forwarded, plain } from "./fixtures";
+
+const SALT = "test-salt";
 
 function memoryStore(initial: StoredRow[] = []) {
   const rows: StoredRow[] = [...initial];
@@ -50,120 +62,145 @@ function memoryStore(initial: StoredRow[] = []) {
   return { store, rows };
 }
 
-const SALT = "test-salt";
+/** A channel built from synthetic Slack messages, run through the real classifier. */
+function channelOf(messages: SlackMessage[]): ChannelSource {
+  return {
+    rowsBetween: vi.fn(async (from: string, to: string): Promise<DeclinedRow[]> =>
+      channelRows(messages, SALT).filter((r) => r.created_at >= from && r.created_at < to)
+    ),
+  };
+}
+
+const brokenChannel = (): ChannelSource => ({
+  rowsBetween: vi.fn(async () => {
+    throw new Error("[slack] conversations.history failed: not_in_channel");
+  }),
+});
+
+function setup(messages: SlackMessage[] = [], initial: StoredRow[] = []) {
+  const m = memoryStore(initial);
+  return { ...m, deps: { store: m.store, channel: channelOf(messages) } };
+}
+
 // Thursday 5 Nov 2026, 10:00 EST.
 const THURSDAY = new Date("2026-11-05T15:00:00Z");
-const log = (text: string, user = "U_ELLA") => parseDeclined(text, user);
+const log = (text: string, user = "U_ELLAH") => parseDeclined(text, user);
 
 describe("renderDeclined", () => {
   beforeEach(() => {
     process.env.SLACK_DECLINED_ENABLED = "true";
     process.env.DECLINED_PHONE_SALT = SALT;
+    vi.spyOn(console, "error").mockImplementation(() => {});
   });
   afterEach(() => {
     delete process.env.SLACK_DECLINED_ENABLED;
     delete process.env.DECLINED_PHONE_SALT;
+    vi.restoreAllMocks();
   });
 
   describe("disabled switch", () => {
     it.each([undefined, "", "1", "TRUE", "yes"])("does nothing when SLACK_DECLINED_ENABLED=%j", async (value) => {
       if (value === undefined) delete process.env.SLACK_DECLINED_ENABLED;
       else process.env.SLACK_DECLINED_ENABLED = value;
-      const { store } = memoryStore();
+      const d = setup();
 
-      expect(await renderDeclined(log("busy"), THURSDAY, store)).toBe(DISABLED_TEXT);
-      expect(store.insert).not.toHaveBeenCalled();
-      expect(store.listSince).not.toHaveBeenCalled();
+      expect(await renderDeclined(log("busy"), THURSDAY, d.deps)).toBe(DISABLED_TEXT);
+      expect(d.store.insert).not.toHaveBeenCalled();
+      expect(d.store.listSince).not.toHaveBeenCalled();
+      expect(d.deps.channel.rowsBetween).not.toHaveBeenCalled();
     });
   });
 
   it("prints usage for a bare `declined`", async () => {
-    expect(await renderDeclined(log(""), THURSDAY, memoryStore().store)).toBe(USAGE_TEXT);
+    expect(await renderDeclined(log(""), THURSDAY, setup().deps)).toBe(USAGE_TEXT);
   });
 
-  it("logs a call and replies with the week's running total", async () => {
-    const { store, rows } = memoryStore();
-    await renderDeclined(log("distance"), THURSDAY, store);
-    const text = await renderDeclined(log("busy 518-555-0100 wanted Tuesday"), THURSDAY, store);
+  it("logs a call and replies with the week's combined running total", async () => {
+    const d = setup([forwarded("2026-11-03T15:00:00Z", "Caller A 518-555-0101")]);
+    const text = await renderDeclined(log("busy 518-555-0100 wanted Tuesday"), THURSDAY, d.deps);
 
-    expect(text).toContain("Logged: turned down, too busy.");
+    expect(text).toContain("Logged: declined, too busy.");
     expect(text).toContain("Note: wanted Tuesday");
-    expect(text).toContain("This week so far: *2* (busy 1, distance 1).");
-    expect(rows[1]).toMatchObject({
+    expect(text).toContain("This week so far: 2 calls declined.");
+    expect(d.rows[0]).toMatchObject({
       reason: "busy",
-      slack_user_id: "U_ELLA",
+      slack_user_id: "U_ELLAH",
       note: "wanted Tuesday",
       created_at: THURSDAY.toISOString(),
       phone_hash: hashPhone("5185550100", SALT),
     });
   });
 
-  it("never stores the raw phone number anywhere in the row", async () => {
-    const { store, rows } = memoryStore();
-    await renderDeclined(log("busy 518-555-0100 call back 518 555 0100"), THURSDAY, store);
-    expect(JSON.stringify(rows)).not.toMatch(/5185550100|555.0100/);
+  it("never stores the raw phone number", async () => {
+    const d = setup();
+    await renderDeclined(log("busy 518-555-0100 call back 518 555 0100"), THURSDAY, d.deps);
+    expect(JSON.stringify(d.rows)).not.toMatch(/5185550100|555.0100/);
   });
 
-  it("counts a repeat caller in the same week once, and says so", async () => {
-    const { store, rows } = memoryStore();
-    await renderDeclined(log("busy 518-555-0100"), new Date("2026-11-03T15:00:00Z"), store);
-    const text = await renderDeclined(log("busy (518) 555-0100 called again"), THURSDAY, store);
+  it("counts a call both forwarded and logged with /trinity once, and says so", async () => {
+    const d = setup([forwarded("2026-11-03T15:00:00Z", "Pat Example 518-555-0142 no heat")]);
+    const text = await renderDeclined(log("distance (518) 555-0142"), THURSDAY, d.deps);
 
-    expect(text).toContain("already logged this week");
-    expect(text).toContain("This week so far: *1* (busy 1, distance 0).");
-    expect(rows).toHaveLength(2); // kept, just not counted twice
+    expect(text).toContain("already counted this week");
+    expect(text).toContain("This week so far: 1 call declined.");
   });
 
-  it("counts the same number again in a new week", async () => {
-    const { store } = memoryStore();
-    await renderDeclined(log("busy 5185550100"), new Date("2026-10-29T15:00:00Z"), store);
-    const text = await renderDeclined(log("busy 5185550100"), THURSDAY, store);
-    expect(text).not.toContain("already logged");
-    expect(text).toContain("This week so far: *1*");
-  });
-
-  it("refuses a phone number when no salt is configured, rather than storing a weak hash", async () => {
+  it("refuses a phone number when no salt is configured", async () => {
     delete process.env.DECLINED_PHONE_SALT;
-    const { store } = memoryStore();
-    const text = await renderDeclined(log("busy 518-555-0100"), THURSDAY, store);
-    expect(text).toContain("DECLINED_PHONE_SALT");
-    expect(store.insert).not.toHaveBeenCalled();
+    const d = setup();
+    expect(await renderDeclined(log("busy 518-555-0100"), THURSDAY, d.deps)).toContain("DECLINED_PHONE_SALT");
+    expect(d.store.insert).not.toHaveBeenCalled();
   });
 
-  it("still logs a call with no phone when no salt is configured", async () => {
-    delete process.env.DECLINED_PHONE_SALT;
-    const { store } = memoryStore();
-    expect(await renderDeclined(log("busy"), THURSDAY, store)).toContain("Logged");
+  it("still logs when the channel can't be read, and says the total is /trinity entries only", async () => {
+    const m = memoryStore();
+    const text = await renderDeclined(log("busy"), THURSDAY, { store: m.store, channel: brokenChannel() });
+    expect(text).toContain("Logged");
+    expect(text).toContain(CHANNEL_UNAVAILABLE);
+    expect(m.rows).toHaveLength(1);
   });
 
   describe("undo", () => {
-    it("removes only that user's most recent entry", async () => {
-      const { store, rows } = memoryStore();
-      await renderDeclined(log("busy first", "U_ELLA"), new Date("2026-11-04T15:00:00Z"), store);
-      await renderDeclined(log("distance second", "U_ELLA"), new Date("2026-11-05T14:00:00Z"), store);
-      await renderDeclined(log("busy someone else", "U_DAVE"), THURSDAY, store);
+    it("removes only that user's most recent /trinity entry; forwards are untouched", async () => {
+      const d = setup([forwarded("2026-11-03T15:00:00Z", "Caller A 518-555-0101")]);
+      await renderDeclined(log("busy first", "U_ELLAH"), new Date("2026-11-04T15:00:00Z"), d.deps);
+      await renderDeclined(log("distance second", "U_ELLAH"), new Date("2026-11-05T14:00:00Z"), d.deps);
+      await renderDeclined(log("busy someone else", "U_DAVE"), THURSDAY, d.deps);
 
-      const text = await renderDeclined(parseDeclined("undo", "U_ELLA"), THURSDAY, store);
+      const text = await renderDeclined(parseDeclined("undo", "U_ELLAH"), THURSDAY, d.deps);
 
       expect(text).toContain("Removed your last entry: too far (distance)");
-      expect(text).toContain("This week so far: *2* (busy 2, distance 0).");
-      expect(rows.map((r) => r.note)).toEqual(["first", "someone else"]);
+      expect(text).toContain("This week so far: 3 calls declined."); // 1 forward + 2 entries
+      expect(d.rows.map((r) => r.note)).toEqual(["first", "someone else"]);
     });
 
     it("says so when there is nothing to undo", async () => {
-      const { store } = memoryStore();
-      expect(await renderDeclined(parseDeclined("undo", "U_ELLA"), THURSDAY, store)).toContain("nothing to undo");
+      expect(await renderDeclined(parseDeclined("undo", "U_ELLAH"), THURSDAY, setup().deps)).toContain("nothing to undo");
     });
   });
 
-  it("`week` shows this week so far and last week", async () => {
-    const { store } = memoryStore();
-    await renderDeclined(log("busy"), new Date("2026-10-28T15:00:00Z"), store);
-    await renderDeclined(log("distance"), THURSDAY, store);
+  it("`week` shows the same combined numbers as the report", async () => {
+    const d = setup(
+      [
+        forwarded("2026-10-28T15:00:00Z", "Caller A 518-555-0101"),
+        forwarded("2026-10-29T15:00:00Z", "Caller B 518-555-0102"),
+        plain("2026-11-02T13:00:00Z", "Week of October 26: 2 calls declined"),
+        forwarded("2026-11-03T15:00:00Z", "Caller C, no number"),
+      ],
+      [{ id: 1, created_at: "2026-11-04T15:00:00.000Z", reason: "busy", phone_hash: null, slack_user_id: "U_ELLAH", note: null }]
+    );
 
-    const text = await renderDeclined(parseDeclined("week", "U_ELLA"), THURSDAY, store);
-    expect(text).toContain("This week so far (Mon Nov 2 – Sun Nov 8): *1* (busy 0, distance 1)");
-    expect(text).toContain("Last week (Mon Oct 26 – Sun Nov 1): *1* (busy 1, distance 0). Under 15");
+    const text = await renderDeclined(parseDeclined("week", "U_ELLAH"), THURSDAY, d.deps);
+    expect(text).toContain("This week so far (Nov 2–8): 2 calls declined.");
+    expect(text).toContain("Includes 1 logged with /trinity declined (busy 1, distance 0).");
+    expect(text).toContain("Last week (Oct 26–Nov 1): 2 calls declined. Under 15 for the week (13 short).");
+    expect(text).not.toContain("Couldn't read");
+  });
+
+  it("`week` falls back to /trinity entries, and says so, when the channel can't be read", async () => {
+    const m = memoryStore();
+    const text = await renderDeclined(parseDeclined("week", "U_ELLAH"), THURSDAY, { store: m.store, channel: brokenChannel() });
+    expect(text).toContain(CHANNEL_UNAVAILABLE);
   });
 });
 
@@ -171,51 +208,86 @@ describe("runDeclinedReportPass", () => {
   const supabase = {} as SupabaseClient;
   const MONDAY_7AM = new Date("2026-11-09T12:00:00Z");
 
+  function reportSetup(messages: SlackMessage[] = [], channel?: ChannelSource) {
+    const m = memoryStore();
+    const post = vi.fn<(text: string) => Promise<void>>(async () => {});
+    return { m, post, deps: { store: m.store, channel: channel ?? channelOf(messages), post } };
+  }
+
   beforeEach(() => {
     vi.clearAllMocks();
     process.env.SLACK_DECLINED_ENABLED = "true";
-    process.env.SLACK_WEBHOOK_SCHEDULE = "https://hooks.slack.test/schedule";
+    process.env.DECLINED_PHONE_SALT = SALT;
+    process.env.SLACK_BOT_TOKEN = "xoxb-test-not-real";
+    process.env.SLACK_DECLINED_CHANNEL_ID = "C_DECLINED";
     claimMock.mockResolvedValue(true);
-    postSlackMock.mockResolvedValue(true);
   });
   afterEach(() => {
     delete process.env.SLACK_DECLINED_ENABLED;
-    delete process.env.SLACK_WEBHOOK_SCHEDULE;
+    delete process.env.DECLINED_PHONE_SALT;
+    delete process.env.SLACK_BOT_TOKEN;
+    delete process.env.SLACK_DECLINED_CHANNEL_ID;
+    vi.restoreAllMocks();
   });
 
-  it("posts last week's report to the schedule webhook on Monday morning, claimed by that week", async () => {
-    const { store } = memoryStore();
-    expect(await runDeclinedReportPass(supabase, MONDAY_7AM, store)).toBe(true);
+  it("posts last week's combined report on Monday morning, claimed by that week", async () => {
+    const r = reportSetup([
+      forwarded("2026-11-03T15:00:00Z", "Caller A 518-555-0101"),
+      forwarded("2026-11-04T15:00:00Z", "Caller A again 518-555-0101"),
+      forwarded("2026-11-05T15:00:00Z", "Caller B, no number"),
+      plain("2026-11-09T11:30:00Z", "Week of November 2: 2 calls declined"),
+    ]);
+
+    expect(await runDeclinedReportPass(supabase, MONDAY_7AM, r.deps)).toBe(true);
     expect(claimMock).toHaveBeenCalledWith(supabase, "declined_weekly", "2026-11-02");
-    expect(postSlackMock).toHaveBeenCalledWith("https://hooks.slack.test/schedule", expect.stringContaining("Turned-down calls"));
+    expect(r.post).toHaveBeenCalledTimes(1);
+    expect(r.post.mock.calls[0][0]).toContain("*Last week (Nov 2–8): 2 calls declined.* Under 15 for the week (13 short).");
   });
 
   it("does not post twice once the week is claimed", async () => {
     claimMock.mockResolvedValue(false);
-    expect(await runDeclinedReportPass(supabase, MONDAY_7AM, memoryStore().store)).toBe(false);
-    expect(postSlackMock).not.toHaveBeenCalled();
+    const r = reportSetup();
+    expect(await runDeclinedReportPass(supabase, MONDAY_7AM, r.deps)).toBe(false);
+    expect(r.post).not.toHaveBeenCalled();
+  });
+
+  it("on a Slack API error, neither claims nor posts, so the next run retries", async () => {
+    const r = reportSetup([], brokenChannel());
+    await expect(runDeclinedReportPass(supabase, MONDAY_7AM, r.deps)).rejects.toThrow(/not_in_channel/);
+    expect(claimMock).not.toHaveBeenCalled();
+    expect(r.post).not.toHaveBeenCalled();
+  });
+
+  it("on a database error, neither claims nor posts", async () => {
+    const r = reportSetup();
+    vi.mocked(r.m.store.listSince).mockRejectedValueOnce(new Error("db down"));
+    await expect(runDeclinedReportPass(supabase, MONDAY_7AM, r.deps)).rejects.toThrow("db down");
+    expect(claimMock).not.toHaveBeenCalled();
+    expect(r.post).not.toHaveBeenCalled();
+  });
+
+  it("skips without claiming when the bot token or channel id is missing", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    delete process.env.SLACK_BOT_TOKEN;
+    const r = reportSetup();
+    expect(await runDeclinedReportPass(supabase, MONDAY_7AM, r.deps)).toBe(false);
+    expect(claimMock).not.toHaveBeenCalled();
+    expect(r.post).not.toHaveBeenCalled();
   });
 
   it("does nothing outside Monday morning", async () => {
-    const { store } = memoryStore();
-    expect(await runDeclinedReportPass(supabase, new Date("2026-11-10T12:00:00Z"), store)).toBe(false);
-    expect(await runDeclinedReportPass(supabase, new Date("2026-11-09T18:00:00Z"), store)).toBe(false); // 1pm
+    const r = reportSetup();
+    expect(await runDeclinedReportPass(supabase, new Date("2026-11-10T12:00:00Z"), r.deps)).toBe(false);
+    expect(await runDeclinedReportPass(supabase, new Date("2026-11-09T18:00:00Z"), r.deps)).toBe(false);
     expect(claimMock).not.toHaveBeenCalled();
   });
 
   it("does nothing when the switch is off", async () => {
     delete process.env.SLACK_DECLINED_ENABLED;
-    const { store } = memoryStore();
-    expect(await runDeclinedReportPass(supabase, MONDAY_7AM, store)).toBe(false);
-    expect(store.listSince).not.toHaveBeenCalled();
+    const r = reportSetup();
+    expect(await runDeclinedReportPass(supabase, MONDAY_7AM, r.deps)).toBe(false);
+    expect(r.deps.channel.rowsBetween).not.toHaveBeenCalled();
     expect(claimMock).not.toHaveBeenCalled();
-    expect(postSlackMock).not.toHaveBeenCalled();
-  });
-
-  it("does not use up the week's claim when the read fails", async () => {
-    const { store } = memoryStore();
-    vi.mocked(store.listSince).mockRejectedValueOnce(new Error("db down"));
-    await expect(runDeclinedReportPass(supabase, MONDAY_7AM, store)).rejects.toThrow("db down");
-    expect(claimMock).not.toHaveBeenCalled();
+    expect(r.post).not.toHaveBeenCalled();
   });
 });
