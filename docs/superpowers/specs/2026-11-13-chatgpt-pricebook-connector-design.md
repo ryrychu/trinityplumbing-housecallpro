@@ -46,8 +46,8 @@ ChatGPT ──POST /api/mcp (Bearer)──▶ route.ts ──▶ verifyMcpToken 
 | `src/lib/mcp/auth.ts` | `verifyMcpToken(authorizationHeader)` returns `{ userId, clientId }` or `null`. It uses `supabase.auth.getClaims(token)` and requires `role === "authenticated"`, a `client_id` claim (so only OAuth-issued tokens pass, not browser session tokens), and `is_anonymous !== true`. |
 | `src/app/api/mcp/route.ts` | Next.js route (Node runtime). Runs the token check, then calls MCP `WebStandardStreamableHTTPServerTransport` in stateless JSON mode. On a 401 it returns `WWW-Authenticate: Bearer resource_metadata="<origin>/.well-known/oauth-protected-resource"`. |
 | `src/app/.well-known/oauth-protected-resource/route.ts` | RFC 9728 metadata: `resource` = `<origin>/api/mcp`, `authorization_servers` = [`<SUPABASE_URL>/auth/v1`], `scopes_supported`, `bearer_methods_supported: ["header"]` |
-| `src/app/oauth/consent/page.tsx` + `actions.ts` | Server-rendered consent screen. If the user is signed out, it redirects to `/app/login?next=/oauth/consent?authorization_id=…`. It shows the client name, the read-only wording, and Approve or Deny buttons. Server actions call `supabase.auth.oauth.approveAuthorization` or `denyAuthorization` and redirect to `redirect_url`. If the user already consented (the details response has no `authorization_id`), it redirects straight to `redirect_url`. |
-| `src/middleware.ts` | Lets `/api/mcp` and `/.well-known/*` through. These routes run their own checks; the middleware would otherwise 401 them for having no cookie session. `/oauth/consent` stays behind the login redirect, which is what we want. |
+| `src/app/app/oauth/consent/page.tsx` + `actions.ts` | Server-rendered consent screen at **`/app/oauth/consent`**. It lives under `/app/` because the login page only follows `next` paths that start with `/app/` (`safeNextPath`), and the existing middleware matcher already sends signed-out visitors to `/app/login?next=…`. It shows the client name, the read-only wording, and Approve or Deny buttons. Server actions call `supabase.auth.oauth.approveAuthorization` or `denyAuthorization` with `skipBrowserRedirect: true` and redirect to `redirect_url`. If the user already consented (the details response has no `authorization_id`), it redirects straight to `redirect_url`. |
+| `src/middleware.ts` | **No change.** Its matcher covers only `/app/*`, `/api/app/*`, `/dispatch`, `/api/dispatch/*`, `/dashboard` and `/admin`, so `/api/mcp` and `/.well-known/*` are never matched. A test pins this so a future matcher change doesn't break the connector. |
 
 ### Tools
 
@@ -75,11 +75,11 @@ Money is shown as dollars (`$123.45`) plus the cents value. HCP documents price 
 - `api/mcp/route.ts`: 401 plus header when there's no token; `tools/list` returns the 4 tools when the token is valid; a `tools/call` round trip with a stubbed loader; 405 on GET.
 - `.well-known` route: the metadata shape.
 - Consent actions: approve and deny redirect to `redirect_url`; errors show a message.
-- Middleware: the new paths are allowed through, and `/oauth/consent` still redirects to login when signed out.
+- Middleware: the matcher doesn't include `/api/mcp` or `/.well-known`, and does cover `/app/oauth/consent`.
 
 ## Setup (manual, after deploy)
 
-1. In Supabase, go to Authentication → OAuth Server. Enable it, enable dynamic client registration, and set the authorization path to `/oauth/consent`. Check that the Site URL is the Trinity app domain.
+1. In Supabase, go to Authentication → OAuth Server. Enable it, enable dynamic client registration, and set the authorization path to `/app/oauth/consent`. Check that the Site URL is the Trinity app domain.
 2. In Supabase, go to Signing keys and make sure an asymmetric key (ES256 or RS256) is active. `getClaims` then verifies locally against JWKS, and the `openid` scope works.
 3. Open `<SUPABASE_URL>/.well-known/oauth-authorization-server/auth/v1` and confirm `registration_endpoint` is present. Note whether `offline_access` is in `scopes_supported`. OpenAI warns that ChatGPT may need users to sign in again when refresh isn't available.
 4. Deploy.
