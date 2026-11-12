@@ -196,7 +196,8 @@ export function auditPricebook(items: PricebookItem[], opts: { staleMonths?: num
     const key = `${i.kind}:${i.name.trim().toLowerCase()}`;
     byName.set(key, [...(byName.get(key) ?? []), i]);
   }
-  for (const group of byName.values()) if (group.length > 1) findings.duplicate_name.push(...group);
+  // Array.from: the tsconfig target doesn't allow iterating a Map directly.
+  for (const group of Array.from(byName.values())) if (group.length > 1) findings.duplicate_name.push(...group);
 
   const counts = Object.fromEntries(Object.entries(findings).map(([k, v]) => [k, v.length])) as Record<AuditRule, number>;
   return {
