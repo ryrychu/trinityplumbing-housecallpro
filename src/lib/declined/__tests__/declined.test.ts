@@ -594,3 +594,64 @@ describe("/trinity declined preview", () => {
     expect(text).toContain("missing_scope (needs channels:history): The app is missing a permission.");
   });
 });
+
+describe("/trinity declined preview month", () => {
+  // Sun 15 Nov 2026, 12:00am EST: exactly two weeks into November.
+  const NOW = new Date("2026-11-15T05:00:00Z");
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    process.env.SLACK_DECLINED_ENABLED = "true";
+    process.env.SLACK_BOT_TOKEN = "xoxb-test-not-real";
+    process.env.SLACK_DECLINED_CHANNEL_ID = "C_DECLINED";
+    vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+  afterEach(() => {
+    delete process.env.SLACK_DECLINED_ENABLED;
+    delete process.env.SLACK_BOT_TOKEN;
+    delete process.env.SLACK_DECLINED_CHANNEL_ID;
+    vi.restoreAllMocks();
+  });
+
+  it("parses, in any case", () => {
+    expect(parseDeclined("preview month", "U_ELLAH")).toEqual({ kind: "declinedMonthPreview" });
+    expect(parseDeclined("Preview Month", "U_ELLAH")).toEqual({ kind: "declinedMonthPreview" });
+    expect(parseDeclined("preview year", "U_ELLAH")).toEqual({ kind: "declinedUsage" });
+  });
+
+  it("renders this month so far against all of last month, privately, without claiming or writing", async () => {
+    const d = setup([
+      forwarded("2026-10-20T15:00:00Z", "(518) 555-0110\nOctober Caller\nold call"),
+      forwarded("2026-11-03T15:00:00Z", "(518) 555-0123\nJane Doe\n12 Example St, Rensselaer, NY 12144\nCx called because sump pump stopped."),
+      forwarded("2026-11-12T15:00:00Z", "(518) 555-0167"),
+    ]);
+
+    const text = await renderDeclined(parseDeclined("preview month", "U_ELLAH"), NOW, d.deps);
+
+    expect(text).toBe(
+      [
+        "*Preview: 2 calls declined this month so far (November 2026)*",
+        "• Jane Doe, Rensselaer: sump pump stopped",
+        "• (518) 555-0167: no details",
+        "October in full: 1. About 1.0 a week so far.",
+      ].join("\n")
+    );
+    expect(claimMock).not.toHaveBeenCalled();
+    expect(postMessageMock).not.toHaveBeenCalled();
+    expect(d.store.insert).not.toHaveBeenCalled();
+  });
+
+  it("is off with the switch", async () => {
+    delete process.env.SLACK_DECLINED_ENABLED;
+    const d = setup();
+    expect(await renderDeclined(parseDeclined("preview month", "U_ELLAH"), NOW, d.deps)).toBe(DISABLED_TEXT);
+    expect(d.deps.channel.rowsBetween).not.toHaveBeenCalled();
+  });
+
+  it("adds the diagnostic line when the channel can't be read", async () => {
+    const m = memoryStore();
+    const text = await renderDeclined(parseDeclined("preview month", "U_ELLAH"), NOW, { store: m.store, channel: brokenChannel() });
+    expect(text).toContain("*Preview: 0 calls declined this month so far (November 2026)*");
+    expect(text).toContain("Couldn't read #declined-calls, so this counts /trinity entries only.");
+  });
+});

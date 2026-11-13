@@ -16,12 +16,14 @@ import { hashPhone } from "./phone";
 import type { DeclinedCommand, DeclinedReason } from "./parse";
 import {
   formatMonthlyReport,
+  formatMonthPreview,
   formatPreview,
   formatWeekSummary,
   formatWeeklyReport,
   lastMonth,
   monthBefore,
   monthKey,
+  monthToDate,
   reportWindowStart,
   runningTotal,
   thisWeek,
@@ -50,6 +52,7 @@ export const USAGE_TEXT = [
   "`/trinity declined undo` — remove the last one you logged",
   "`/trinity declined week` — this week and last week, forwards included",
   "`/trinity declined preview` — this week's Monday post so far, shown only to you",
+  "`/trinity declined preview month` — this month so far, shown only to you",
 ].join("\n");
 
 const NO_SALT_TEXT =
@@ -256,6 +259,13 @@ export async function renderDeclined(cmd: DeclinedCommand, now: Date, deps: Deps
       // caller through the slash command's response_url, ephemeral.
       const { rows, note } = await combinedRows(deps, reportWindowStart(now), week.endIso);
       return withNote([formatPreview(rows, now)], note);
+    }
+
+    case "declinedMonthPreview": {
+      // Read-only and ephemeral, like the weekly preview. Reads last month
+      // too, for the "in full" comparison.
+      const { rows, note } = await combinedRows(deps, monthBefore(monthToDate(now)).startIso, now.toISOString());
+      return withNote([formatMonthPreview(rows, now)], note);
     }
 
     case "declinedUndo": {

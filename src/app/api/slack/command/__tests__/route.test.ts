@@ -160,6 +160,13 @@ describe("POST /api/slack/command", () => {
       expect(postMock).toHaveBeenCalledWith(RESPONSE_URL, "*Week ahead* — 9 jobs");
     });
 
+    it("answers `declined preview month` privately through response_url", async () => {
+      const res = await POST(slackRequest("declined preview month"));
+      expect(await res.json()).toEqual({ response_type: "ephemeral", text: "Working on it…" });
+      expect(renderCommandMock).toHaveBeenCalledWith({ kind: "declinedMonthPreview" }, expect.any(Date));
+      expect(postMock).toHaveBeenCalledWith(RESPONSE_URL, "*Week ahead* — 9 jobs");
+    });
+
     it("rejects an unsigned declined request before anything is logged", async () => {
       const res = await POST(slackRequest("declined busy", { secret: "not-the-secret" }));
       expect(res.status).toBe(401);
