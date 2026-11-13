@@ -25,6 +25,8 @@ vi.mock("@/lib/slack/web", async (importOriginal) => ({
 import {
   renderDeclined,
   runDeclinedReportPass,
+  runDeclinedMonthlyReportPass,
+  postToMonthlyChannel,
   hashPhone,
   DISABLED_TEXT,
   USAGE_TEXT,
@@ -300,6 +302,144 @@ describe("runDeclinedReportPass", () => {
     expect(r.deps.channel.rowsBetween).not.toHaveBeenCalled();
     expect(claimMock).not.toHaveBeenCalled();
     expect(r.post).not.toHaveBeenCalled();
+  });
+});
+
+describe("runDeclinedMonthlyReportPass", () => {
+  const supabase = {} as SupabaseClient;
+  // Sun 1 Nov 2026, 7:00 EST (DST ended at 2am). Reports October.
+  const FIRST_7AM = new Date("2026-11-01T12:00:00Z");
+
+  function reportSetup(messages: SlackMessage[] = [], channel?: ChannelSource, initial: StoredRow[] = []) {
+    const m = memoryStore(initial);
+    const post = vi.fn<(text: string) => Promise<void>>(async () => {});
+    return { m, post, deps: { store: m.store, channel: channel ?? channelOf(messages), post } };
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    process.env.SLACK_DECLINED_ENABLED = "true";
+    process.env.DECLINED_PHONE_SALT = SALT;
+    process.env.SLACK_BOT_TOKEN = "xoxb-test-not-real";
+    process.env.SLACK_DECLINED_CHANNEL_ID = "C_DECLINED";
+    process.env.SLACK_DECLINED_MONTHLY_CHANNEL_ID = "C_MONTHLY";
+    claimMock.mockResolvedValue(true);
+  });
+  afterEach(() => {
+    delete process.env.SLACK_DECLINED_ENABLED;
+    delete process.env.DECLINED_PHONE_SALT;
+    delete process.env.SLACK_BOT_TOKEN;
+    delete process.env.SLACK_DECLINED_CHANNEL_ID;
+    delete process.env.SLACK_DECLINED_MONTHLY_CHANNEL_ID;
+    vi.restoreAllMocks();
+  });
+
+  it("posts October's combined report on 1 November, claimed by the month", async () => {
+    const r = reportSetup(
+      [
+        forwarded("2026-09-15T15:00:00Z", "(518) 555-0109\nSeptember Caller\nold call"), // September: compared, not listed
+        forwarded("2026-10-06T15:00:00Z", "(518) 555-0123\nJane Doe\n12 Example St, Rensselaer, NY 12144\nCx called because sump pump stopped."),
+        forwarded("2026-10-07T15:00:00Z", "(518) 555-0123\nJane Doe\ncalled back"), // same week: counted once
+        forwarded("2026-10-29T15:00:00Z", "(518) 555-0167"),
+        plain("2026-10-30T15:00:00Z", "Week of Oct 26: 1 call declined"), // typed: not counted
+      ],
+      undefined,
+      [{ id: 1, created_at: "2026-10-20T16:00:00.000Z", reason: "distance", phone_hash: null, slack_user_id: "U_ELLAH", note: "Saratoga contract" }]
+    );
+
+    expect(await runDeclinedMonthlyReportPass(supabase, FIRST_7AM, r.deps)).toBe(true);
+    expect(claimMock).toHaveBeenCalledWith(supabase, "declined_monthly", "2026-10");
+    // Reads September (for the comparison) through the end of October.
+    expect(r.deps.channel.rowsBetween).toHaveBeenCalledWith("2026-09-01T04:00:00.000Z", "2026-11-01T04:00:00.000Z");
+    expect(r.post).toHaveBeenCalledTimes(1);
+    expect(r.post.mock.calls[0][0]).toBe(
+      [
+        "*3 calls declined last month (October 2026)*",
+        "• Jane Doe, Rensselaer: sump pump stopped (called twice)",
+        "• Logged with /trinity: distance — Saratoga contract",
+        "• (518) 555-0167: no details",
+        "Up 2 from September (1). About 0.7 a week.",
+      ].join("\n")
+    );
+  });
+
+  it("posts an empty month as 0", async () => {
+    const r = reportSetup();
+    expect(await runDeclinedMonthlyReportPass(supabase, FIRST_7AM, r.deps)).toBe(true);
+    expect(r.post.mock.calls[0][0]).toBe(
+      ["*0 calls declined last month (October 2026)*", "Same as September (0). About 0.0 a week."].join("\n")
+    );
+  });
+
+  it("on 1 January reports December, claimed as the year before", async () => {
+    const r = reportSetup();
+    expect(await runDeclinedMonthlyReportPass(supabase, new Date("2027-01-01T12:00:00Z"), r.deps)).toBe(true);
+    expect(claimMock).toHaveBeenCalledWith(supabase, "declined_monthly", "2026-12");
+    expect(r.post.mock.calls[0][0]).toMatch(/^\*0 calls declined last month \(December 2026\)\*/);
+  });
+
+  it("does not post twice once the month is claimed", async () => {
+    claimMock.mockResolvedValue(false);
+    const r = reportSetup();
+    expect(await runDeclinedMonthlyReportPass(supabase, FIRST_7AM, r.deps)).toBe(false);
+    expect(r.post).not.toHaveBeenCalled();
+  });
+
+  it("skips cleanly, without reading or claiming, when SLACK_DECLINED_MONTHLY_CHANNEL_ID is not set", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    delete process.env.SLACK_DECLINED_MONTHLY_CHANNEL_ID;
+    const r = reportSetup();
+    expect(await runDeclinedMonthlyReportPass(supabase, FIRST_7AM, r.deps)).toBe(false);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("monthly_channel_not_set"));
+    expect(r.deps.channel.rowsBetween).not.toHaveBeenCalled();
+    expect(claimMock).not.toHaveBeenCalled();
+    expect(r.post).not.toHaveBeenCalled();
+  });
+
+  it("skips cleanly when the bot token or #declined-calls id is missing", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    delete process.env.SLACK_DECLINED_CHANNEL_ID;
+    const r = reportSetup();
+    expect(await runDeclinedMonthlyReportPass(supabase, FIRST_7AM, r.deps)).toBe(false);
+    expect(claimMock).not.toHaveBeenCalled();
+    expect(r.post).not.toHaveBeenCalled();
+  });
+
+  it("on a Slack API error, neither claims nor posts, so the next run retries", async () => {
+    const r = reportSetup([], brokenChannel());
+    await expect(runDeclinedMonthlyReportPass(supabase, FIRST_7AM, r.deps)).rejects.toThrow(/not_in_channel/);
+    expect(claimMock).not.toHaveBeenCalled();
+    expect(r.post).not.toHaveBeenCalled();
+  });
+
+  it("on a database error, neither claims nor posts", async () => {
+    const r = reportSetup();
+    vi.mocked(r.m.store.listSince).mockRejectedValueOnce(new Error("db down"));
+    await expect(runDeclinedMonthlyReportPass(supabase, FIRST_7AM, r.deps)).rejects.toThrow("db down");
+    expect(claimMock).not.toHaveBeenCalled();
+    expect(r.post).not.toHaveBeenCalled();
+  });
+
+  it("does nothing outside the morning of the 1st", async () => {
+    const r = reportSetup();
+    expect(await runDeclinedMonthlyReportPass(supabase, new Date("2026-11-02T12:00:00Z"), r.deps)).toBe(false);
+    expect(await runDeclinedMonthlyReportPass(supabase, new Date("2026-11-01T18:00:00Z"), r.deps)).toBe(false);
+    expect(await runDeclinedMonthlyReportPass(supabase, new Date("2026-11-01T10:30:00Z"), r.deps)).toBe(false); // 5:30 EST
+    expect(claimMock).not.toHaveBeenCalled();
+  });
+
+  it("does nothing when the switch is off", async () => {
+    delete process.env.SLACK_DECLINED_ENABLED;
+    const r = reportSetup();
+    expect(await runDeclinedMonthlyReportPass(supabase, FIRST_7AM, r.deps)).toBe(false);
+    expect(r.deps.channel.rowsBetween).not.toHaveBeenCalled();
+    expect(claimMock).not.toHaveBeenCalled();
+  });
+
+  it("posts with the bot token to the monthly channel, not #declined-calls", async () => {
+    // The mock throws rather than reach Slack; the call itself is what matters.
+    await expect(postToMonthlyChannel("hello")).rejects.toThrow("tests must not reach Slack");
+    expect(postMessageMock).toHaveBeenCalledWith("xoxb-test-not-real", "C_MONTHLY", "hello");
   });
 });
 

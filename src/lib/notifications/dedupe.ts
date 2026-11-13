@@ -14,7 +14,8 @@ export type NotificationKind =
   | "estimate_approved"
   | "daily_digest"
   | "weekly_lookahead"
-  | "declined_weekly";
+  | "declined_weekly"
+  | "declined_monthly";
 
 // Batch, not per-row: the targeted paid-invoice poll can return up to 50
 // invoices in a single run (page_size=50); claiming them one at a time would

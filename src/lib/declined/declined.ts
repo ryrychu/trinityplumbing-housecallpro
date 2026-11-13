@@ -9,15 +9,19 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { getSupabaseServerClient } from "@/lib/supabase/client";
 import { claim } from "@/lib/notifications/dedupe";
-import { isWeeklyLookaheadDue } from "@/lib/notifications/schedule";
+import { isMonthlyReportDue, isWeeklyLookaheadDue } from "@/lib/notifications/schedule";
 import { fetchChannelHistory, postMessage, SlackApiError } from "@/lib/slack/web";
 import { channelRows } from "./channel";
 import { hashPhone } from "./phone";
 import type { DeclinedCommand, DeclinedReason } from "./parse";
 import {
+  formatMonthlyReport,
   formatPreview,
   formatWeekSummary,
   formatWeeklyReport,
+  lastMonth,
+  monthBefore,
+  monthKey,
   reportWindowStart,
   runningTotal,
   thisWeek,
@@ -29,7 +33,7 @@ import {
 export { hashPhone };
 
 // Off unless exactly "true", like SLACK_ALERTS_ENABLED and SLACK_COMMANDS_ENABLED.
-// Covers the command, the channel count and the Monday post.
+// Covers the command, the channel count, the Monday post and the monthly post.
 export function declinedEnabled(): boolean {
   return process.env.SLACK_DECLINED_ENABLED === "true";
 }
@@ -128,11 +132,21 @@ function channelConfig(): { token: string; channel: string } {
   return { token, channel };
 }
 
+// Where the post on the 1st goes: a channel of its own, so Dave sees the month
+// at a glance without scrolling #declined-calls. Same bot token.
+function monthlyChannelId(): string {
+  const channel = process.env.SLACK_DECLINED_MONTHLY_CHANNEL_ID;
+  if (!channel) throw new SlackApiError("config", "monthly_channel_not_set");
+  return channel;
+}
+
 const FIXES: Record<string, string> = {
   token_not_set: "SLACK_BOT_TOKEN is not set. Add the Bot User OAuth Token (xoxb-…) in Vercel and redeploy.",
   token_not_bot:
     "SLACK_BOT_TOKEN is not a bot token. Use the Bot User OAuth Token, which starts with xoxb-, and redeploy.",
   channel_not_set: "SLACK_DECLINED_CHANNEL_ID is not set. Add the channel ID (C…) of #declined-calls in Vercel and redeploy.",
+  monthly_channel_not_set:
+    "SLACK_DECLINED_MONTHLY_CHANNEL_ID is not set. Add the channel ID (C…) of the monthly channel in Vercel and redeploy.",
   not_in_channel: "The bot isn't in #declined-calls. In that channel, type /invite @ and pick the Trinity app.",
   missing_scope:
     "The app is missing a permission. Add it under OAuth & Permissions → Bot Token Scopes, reinstall the app, and update SLACK_BOT_TOKEN if it changed.",
@@ -298,6 +312,13 @@ export async function renderDeclined(cmd: DeclinedCommand, now: Date, deps: Deps
 
 export type ReportDeps = Deps & { post: (text: string) => Promise<void> };
 
+// Both sources for a report. No fallback to a partial count: a Slack or
+// database error throws, before anything is claimed.
+async function reportRows(deps: Deps, fromIso: string, toIso: string): Promise<DeclinedRow[]> {
+  const [own, shared] = await Promise.all([deps.store.listSince(fromIso, toIso), deps.channel.rowsBetween(fromIso, toIso)]);
+  return [...labelCommandRows(own), ...shared];
+}
+
 function defaultReportDeps(supabase: SupabaseClient): ReportDeps {
   return {
     store: supabaseDeclinedStore(supabase),
@@ -335,13 +356,51 @@ export async function runDeclinedReportPass(
     return false;
   }
 
-  const from = reportWindowStart(now);
-  const to = now.toISOString();
-  const [own, shared] = await Promise.all([deps.store.listSince(from, to), deps.channel.rowsBetween(from, to)]);
-  const text = formatWeeklyReport([...labelCommandRows(own), ...shared], now);
+  const text = formatWeeklyReport(await reportRows(deps, reportWindowStart(now), now.toISOString()), now);
 
   const reported = weekKey(weekBefore(thisWeek(now)));
   if (!(await claim(supabase, "declined_weekly", reported))) return false;
+
+  await deps.post(text);
+  return true;
+}
+
+export async function postToMonthlyChannel(text: string): Promise<void> {
+  const { token } = channelConfig();
+  await postMessage(token, monthlyChannelId(), text);
+}
+
+function defaultMonthlyReportDeps(supabase: SupabaseClient): ReportDeps {
+  return { store: supabaseDeclinedStore(supabase), channel: slackChannelSource(), post: postToMonthlyChannel };
+}
+
+/**
+ * The post on the 1st to the monthly channel (SLACK_DECLINED_MONTHLY_CHANNEL_ID):
+ * last calendar month against the month before. Called from /api/cron/sync on
+ * every run; posts at most once per month (claim() ledger, kind
+ * "declined_monthly", keyed "YYYY-MM" of the reported month). Same rules as
+ * the Monday post: build the text first, claim, then post; skip without
+ * claiming while a channel or the token isn't configured.
+ */
+export async function runDeclinedMonthlyReportPass(
+  supabase: SupabaseClient,
+  now: Date,
+  deps: ReportDeps = defaultMonthlyReportDeps(supabase)
+): Promise<boolean> {
+  if (!declinedEnabled()) return false;
+  if (!isMonthlyReportDue(now)) return false;
+  try {
+    channelConfig();
+    monthlyChannelId();
+  } catch (err) {
+    console.warn(`[declined] monthly report skipped: ${err instanceof Error ? err.message : String(err)}`);
+    return false;
+  }
+
+  const month = lastMonth(now);
+  const text = formatMonthlyReport(await reportRows(deps, monthBefore(month).startIso, month.endIso), now);
+
+  if (!(await claim(supabase, "declined_monthly", monthKey(month)))) return false;
 
   await deps.post(text);
   return true;
