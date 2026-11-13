@@ -81,11 +81,13 @@ vi.mock("@/lib/dashboard/queries", () => ({
   getWeekAheadSchedule: getWeekAheadScheduleMock,
 }));
 
-const { runDeclinedReportPassMock } = vi.hoisted(() => ({
+const { runDeclinedReportPassMock, runDeclinedMonthlyReportPassMock } = vi.hoisted(() => ({
   runDeclinedReportPassMock: vi.fn().mockResolvedValue(false),
+  runDeclinedMonthlyReportPassMock: vi.fn().mockResolvedValue(false),
 }));
 vi.mock("@/lib/declined/declined", () => ({
   runDeclinedReportPass: runDeclinedReportPassMock,
+  runDeclinedMonthlyReportPass: runDeclinedMonthlyReportPassMock,
 }));
 
 import { GET } from "../route";
@@ -555,6 +557,20 @@ describe("GET /api/cron/sync", () => {
       await GET(authorizedRequest());
 
       expect(runDeclinedReportPassMock).not.toHaveBeenCalled();
+      expect(runDeclinedMonthlyReportPassMock).not.toHaveBeenCalled();
+    });
+
+    // Same contract for the monthly pass: it gates itself (switch, the 1st,
+    // its channel id, claim); the route calls it and survives it.
+    it("runs the monthly turned-down calls pass and still posts the digest when it throws", async () => {
+      vi.setSystemTime(new Date("2026-07-01T10:00:00Z")); // Wed 1 Jul, 06:00 EDT
+      runDeclinedMonthlyReportPassMock.mockRejectedValueOnce(new Error("slack down"));
+
+      const res = await GET(authorizedRequest());
+
+      expect(res.status).toBe(200);
+      expect(runDeclinedMonthlyReportPassMock).toHaveBeenCalledWith(expect.anything(), new Date("2026-07-01T10:00:00Z"));
+      expect(postSlackMock.mock.calls.some(([, text]) => String(text).includes("Today —"))).toBe(true);
     });
   });
 
