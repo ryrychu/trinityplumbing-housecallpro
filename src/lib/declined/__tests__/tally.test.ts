@@ -8,6 +8,13 @@ import {
   thresholdLine,
   formatWeeklyReport,
   monthToDate,
+  lastMonth,
+  monthBefore,
+  monthKey,
+  monthLabel,
+  comparisonLine,
+  formatMonthlyReport,
+  formatMonthPreview,
   type DeclinedRow,
 } from "../tally";
 
@@ -187,5 +194,178 @@ describe("formatWeeklyReport", () => {
       row("2026-11-09T11:00:00Z"), // this morning, 6am
     ];
     expect(formatWeeklyReport(rows, MONDAY_MORNING)).toContain("November so far: 5.");
+  });
+});
+
+describe("lastMonth", () => {
+  it("is the previous calendar month, midnight to midnight Eastern", () => {
+    // Mon 1 Dec 2025, 7am EST.
+    expect(lastMonth(new Date("2025-12-01T12:00:00Z"))).toEqual({
+      startIso: "2025-11-01T04:00:00.000Z", // 1 Nov, still EDT
+      endIso: "2025-12-01T05:00:00.000Z", // 1 Dec, EST
+    });
+  });
+
+  it("goes from January back to December of the year before", () => {
+    const range = lastMonth(new Date("2027-01-01T11:00:00Z"));
+    expect(range).toEqual({ startIso: "2026-12-01T05:00:00.000Z", endIso: "2027-01-01T05:00:00.000Z" });
+    expect(monthKey(range)).toBe("2026-12");
+    expect(monthLabel(range)).toBe("December 2026");
+  });
+
+  it("spans the March change to summer time (DST starts 8 Mar 2026)", () => {
+    expect(lastMonth(new Date("2026-04-01T10:00:00Z"))).toEqual({
+      startIso: "2026-03-01T05:00:00.000Z", // EST
+      endIso: "2026-04-01T04:00:00.000Z", // EDT
+    });
+  });
+
+  it("spans the November change back (DST ends 1 Nov 2026)", () => {
+    const november = lastMonth(new Date("2026-12-01T11:00:00Z"));
+    expect(november).toEqual({ startIso: "2026-11-01T04:00:00.000Z", endIso: "2026-12-01T05:00:00.000Z" });
+
+    const rows = [
+      row("2026-11-01T03:30:00Z"), // Sat 31 Oct, 11:30pm EDT: October
+      row("2026-11-01T04:30:00Z"), // Sun 1 Nov, 12:30am EDT: November
+      row("2026-12-01T04:30:00Z"), // Mon 30 Nov, 11:30pm EST: November
+      row("2026-12-01T05:30:00Z"), // Tue 1 Dec, 12:30am EST: December
+    ];
+    expect(inRange(rows, november).map((r) => r.created_at)).toEqual(["2026-11-01T04:30:00Z", "2026-12-01T04:30:00Z"]);
+  });
+
+  it("goes by the Eastern date, not the UTC one", () => {
+    // 1 Aug 02:00 UTC is still 31 Jul in Eastern, so last month is June.
+    expect(monthKey(lastMonth(new Date("2026-08-01T02:00:00Z")))).toBe("2026-06");
+  });
+});
+
+describe("monthBefore", () => {
+  it("steps back one month, across a year end", () => {
+    const dec = lastMonth(new Date("2027-01-01T11:00:00Z"));
+    expect(monthKey(monthBefore(dec))).toBe("2026-11");
+    expect(monthKey(monthBefore(lastMonth(new Date("2026-02-01T11:00:00Z"))))).toBe("2025-12");
+  });
+});
+
+describe("comparisonLine", () => {
+  it.each([
+    [23, 19, "Up 4 from September (19)."],
+    [16, 19, "Down 3 from September (19)."],
+    [19, 19, "Same as September (19)."],
+    [5, 0, "Up 5 from September (0)."],
+    [0, 0, "Same as September (0)."],
+    [0, 7, "Down 7 from September (7)."],
+  ])("%i against %i", (current, previous, expected) => {
+    expect(comparisonLine(current, previous, "September")).toBe(expected);
+  });
+});
+
+describe("formatMonthlyReport", () => {
+  // Sun 1 Nov 2026, 6:15am EST (DST ended at 2am). Reports October.
+  const FIRST = new Date("2026-11-01T11:15:00Z");
+
+  function october(n: number): DeclinedRow[] {
+    return Array.from({ length: n }, (_, i) => ({ ...row("2026-10-14T15:00:00Z", null, `p${i}`), label: `Caller ${i + 1}` }));
+  }
+  const september = (n: number) => Array.from({ length: n }, () => row("2026-09-16T15:00:00Z"));
+
+  it("lists each call, then the comparison and the weekly rate", () => {
+    expect(formatMonthlyReport([...october(3), ...september(5)], FIRST)).toBe(
+      [
+        "*3 calls declined last month (October 2026)*",
+        "• Caller 1",
+        "• Caller 2",
+        "• Caller 3",
+        "Down 2 from September (5). About 0.7 a week.", // 3 / (31/7)
+      ].join("\n")
+    );
+  });
+
+  it("with an empty month, says 0 and lists nothing", () => {
+    expect(formatMonthlyReport(september(4), FIRST)).toBe(
+      ["*0 calls declined last month (October 2026)*", "Down 4 from September (4). About 0.0 a week."].join("\n")
+    );
+  });
+
+  it("with nothing at all, says the same as the month before", () => {
+    expect(formatMonthlyReport([], FIRST)).toBe(
+      ["*0 calls declined last month (October 2026)*", "Same as September (0). About 0.0 a week."].join("\n")
+    );
+  });
+
+  it("says 1 call, not 1 calls", () => {
+    expect(formatMonthlyReport(october(1), FIRST)).toContain("*1 call declined last month (October 2026)*");
+  });
+
+  it("leaves out calls from either side of the month, and this morning's", () => {
+    const rows = [
+      row("2026-09-30T15:00:00Z"), // September
+      row("2026-10-01T03:59:00Z"), // 30 Sep, 11:59pm EDT: September
+      row("2026-10-01T04:00:00Z"), // 1 Oct, midnight EDT: October
+      row("2026-11-01T03:59:00Z"), // 31 Oct, 11:59pm EDT: October
+      row("2026-11-01T10:00:00Z"), // 1 Nov, 5am EST: November
+    ];
+    const text = formatMonthlyReport(rows, FIRST);
+    expect(text.split("\n")[0]).toBe("*2 calls declined last month (October 2026)*");
+    expect(text).toContain("Same as September (2).");
+  });
+
+  it("counts a repeat caller once a week, as the Monday post does, and lists them once that week", () => {
+    const rows = [
+      { ...row("2026-10-13T15:00:00Z", null, "same"), label: "Patty, Hillsdale: barn plumbing" },
+      { ...row("2026-10-15T15:00:00Z", "busy", "same"), label: "Logged with /trinity: busy" },
+      { ...row("2026-10-21T15:00:00Z", null, "same"), label: "Patty, Hillsdale: barn plumbing" }, // next week: counts again
+    ];
+    const text = formatMonthlyReport(rows, FIRST);
+    expect(text).toContain("*2 calls declined last month (October 2026)*");
+    expect(text).toContain("• Patty, Hillsdale: barn plumbing (called twice)\n• Patty, Hillsdale: barn plumbing\n");
+  });
+
+  it("caps the list at 25 lines with a count of the rest", () => {
+    const text = formatMonthlyReport(october(40), FIRST);
+    expect(text.split("\n").filter((l) => l.startsWith("• "))).toHaveLength(25);
+    expect(text).toContain("• Caller 25\n… and 15 more\n");
+    expect(text).toContain("*40 calls declined last month (October 2026)*");
+    expect(text).toContain("About 9.0 a week."); // 40 / (31/7)
+  });
+
+  it("reports December against November on 1 January", () => {
+    const rows = [row("2026-12-02T15:00:00Z"), row("2027-01-01T04:30:00Z"), row("2026-11-20T15:00:00Z")];
+    expect(formatMonthlyReport(rows, new Date("2027-01-01T11:00:00Z"))).toBe(
+      [
+        "*2 calls declined last month (December 2026)*",
+        "• (no details)",
+        "• (no details)",
+        "Up 1 from November (1). About 0.5 a week.",
+      ].join("\n")
+    );
+  });
+
+  it("uses a 28-day February for the weekly rate", () => {
+    const feb = Array.from({ length: 8 }, () => row("2027-02-10T15:00:00Z"));
+    expect(formatMonthlyReport(feb, new Date("2027-03-01T11:00:00Z"))).toContain("About 2.0 a week.");
+  });
+});
+
+describe("formatMonthPreview", () => {
+  // Sun 15 Nov 2026, 12:00am EST: exactly 14 days into the month.
+  const NOW = new Date("2026-11-15T05:00:00Z");
+
+  it("shows this month so far against all of last month", () => {
+    const rows = [
+      { ...row("2026-11-03T15:00:00Z"), label: "Jane Doe" },
+      { ...row("2026-11-10T15:00:00Z"), label: "John Roe" },
+      row("2026-10-20T15:00:00Z"),
+      row("2026-10-21T15:00:00Z"),
+      row("2026-10-22T15:00:00Z"),
+    ];
+    expect(formatMonthPreview(rows, NOW)).toBe(
+      [
+        "*Preview: 2 calls declined this month so far (November 2026)*",
+        "• Jane Doe",
+        "• John Roe",
+        "October in full: 3. About 1.0 a week so far.", // 2 calls / 2 weeks
+      ].join("\n")
+    );
   });
 });
