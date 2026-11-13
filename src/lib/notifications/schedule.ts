@@ -49,3 +49,11 @@ export function isWeeklyLookaheadDue(now: Date): boolean {
   if (dow !== MONDAY) return false;
   return inMorningWindow(now);
 }
+
+// The 1st of the month, same 06:00–12:00 Eastern window. Used for the monthly
+// declined-calls post about the month that just ended.
+export function isMonthlyReportDue(now: Date): boolean {
+  const { d } = localParts(now);
+  if (d !== 1) return false;
+  return inMorningWindow(now);
+}
