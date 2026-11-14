@@ -57,3 +57,13 @@ export function isMonthlyReportDue(now: Date): boolean {
   if (d !== 1) return false;
   return inMorningWindow(now);
 }
+
+// Dave's Fieldy task list: 7 to 11am Eastern, every day, an hour after the job
+// digest. Once a day through claim("fieldy_daily", localDateKey(now)).
+const FIELDY_HOUR = 7;
+const FIELDY_CUTOFF_HOUR = 11;
+
+export function isFieldyDailyDue(now: Date): boolean {
+  const { hour } = localParts(now);
+  return hour >= FIELDY_HOUR && hour < FIELDY_CUTOFF_HOUR;
+}
