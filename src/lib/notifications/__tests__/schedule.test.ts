@@ -4,6 +4,7 @@ import {
   mondayDateKey,
   isDailyDigestDue,
   isWeeklyLookaheadDue,
+  isMonthlyReportDue,
 } from "../schedule";
 
 describe("localDateKey", () => {
@@ -85,5 +86,30 @@ describe("isWeeklyLookaheadDue", () => {
 
   it("is false before 06:00 Monday", () => {
     expect(isWeeklyLookaheadDue(new Date("2026-07-27T09:00:00Z"))).toBe(false);
+  });
+});
+
+describe("isMonthlyReportDue", () => {
+  it("is true on the 1st at 06:00 local in winter (EST, -05:00)", () => {
+    expect(isMonthlyReportDue(new Date("2027-01-01T11:00:00Z"))).toBe(true);
+  });
+
+  it("is true on the 1st at 06:00 local in summer (EDT, -04:00)", () => {
+    expect(isMonthlyReportDue(new Date("2026-07-01T10:00:00Z"))).toBe(true);
+  });
+
+  it("follows the clock change on 1 Nov 2026, when DST ends at 2am", () => {
+    expect(isMonthlyReportDue(new Date("2026-11-01T10:30:00Z"))).toBe(false); // 05:30 EST
+    expect(isMonthlyReportDue(new Date("2026-11-01T11:00:00Z"))).toBe(true); // 06:00 EST
+  });
+
+  it("is false on the 1st before 06:00 and from noon on", () => {
+    expect(isMonthlyReportDue(new Date("2026-07-01T09:59:00Z"))).toBe(false);
+    expect(isMonthlyReportDue(new Date("2026-07-01T16:00:00Z"))).toBe(false);
+  });
+
+  it("is false on any other day, including the UTC 1st that is still the 31st in Eastern", () => {
+    expect(isMonthlyReportDue(new Date("2026-07-02T10:00:00Z"))).toBe(false);
+    expect(isMonthlyReportDue(new Date("2026-08-01T02:00:00Z"))).toBe(false); // Jul 31, 10pm EDT
   });
 });

@@ -8,7 +8,7 @@ import { syncResourceIncremental, type IncrementalResult } from "@/lib/sync/incr
 import { type RehostBudget } from "@/lib/sync/attachments";
 import { notifyPaidInvoices, notifyApprovedEstimates } from "@/lib/notifications/dispatch";
 import { claim } from "@/lib/notifications/dedupe";
-import { runDeclinedReportPass } from "@/lib/declined/declined";
+import { runDeclinedMonthlyReportPass, runDeclinedReportPass } from "@/lib/declined/declined";
 import {
   isDailyDigestDue,
   isWeeklyLookaheadDue,
@@ -405,6 +405,14 @@ export async function GET(req: Request) {
     } catch (err) {
       // A Slack/database problem must never fail the sync the dashboard depends on.
       console.error("[cron] declined-calls report pass failed:", err);
+    }
+
+    // Last month's turned-down calls, on the morning of the 1st, to its own
+    // channel (SLACK_DECLINED_MONTHLY_CHANNEL_ID). Same switch, its own claim.
+    try {
+      await runDeclinedMonthlyReportPass(supabase, now);
+    } catch (err) {
+      console.error("[cron] declined-calls monthly report pass failed:", err);
     }
 
     // Split from the daily digest below into its own try/catch: sharing one

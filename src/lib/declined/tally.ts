@@ -78,9 +78,38 @@ export function weekBefore(range: Range): Range {
 /** The calendar month (Eastern) containing `now`, from the 1st up to `now`. */
 export function monthToDate(now: Date): Range {
   const { y, m0 } = localParts(now);
-  // 16:00 UTC on the 1st is the 1st in Eastern under either offset.
-  const first = dayRange(new Date(Date.UTC(y, m0, 1, 16, 0, 0)));
-  return { startIso: first.startIso, endIso: now.toISOString() };
+  return { startIso: monthStartIso(y, m0), endIso: now.toISOString() };
+}
+
+// Midnight Eastern on the 1st of month m0 (any integer; Date.UTC rolls -1 back
+// to December of the year before). 16:00 UTC is the 1st in Eastern under
+// either offset, so dayRange() finds that day's midnight without DST math.
+function monthStartIso(y: number, m0: number): string {
+  return dayRange(new Date(Date.UTC(y, m0, 1, 16, 0, 0))).startIso;
+}
+
+/** The whole calendar month (Eastern) before the one containing `now`. */
+export function lastMonth(now: Date): Range {
+  const { y, m0 } = localParts(now);
+  return { startIso: monthStartIso(y, m0 - 1), endIso: monthStartIso(y, m0) };
+}
+
+/** The calendar month before the one `range` starts in. */
+export function monthBefore(range: Range): Range {
+  return lastMonth(new Date(range.startIso));
+}
+
+/** "2026-10", Eastern. The monthly post's claim key. */
+export function monthKey(range: Range): string {
+  const { y, m0 } = localParts(new Date(range.startIso));
+  return `${y}-${String(m0 + 1).padStart(2, "0")}`;
+}
+
+/** "October 2026". */
+export function monthLabel(range: Range): string {
+  return new Intl.DateTimeFormat("en-US", { timeZone: TZ, month: "long", year: "numeric" }).format(
+    new Date(range.startIso)
+  );
 }
 
 export function weekKey(range: Range): string {
@@ -225,4 +254,52 @@ export function formatWeekSummary(rows: DeclinedRow[], now: Date): string {
 /** The one-line running total after logging or undoing. */
 export function runningTotal(rows: DeclinedRow[], now: Date): string {
   return `This week so far: ${calls(tally(inRange(rows, thisWeek(now))).total)}.`;
+}
+
+const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+
+// Calls a week over `range`, so a month reads against the 15-a-week line.
+function perWeek(total: number, range: Range): string {
+  const weeks = (Date.parse(range.endIso) - Date.parse(range.startIso)) / WEEK_MS;
+  return weeks > 0 ? (total / weeks).toFixed(1) : "0.0";
+}
+
+/** "Up 4 from September (19)." against the month before. */
+export function comparisonLine(current: number, previous: number, previousName: string): string {
+  const diff = current - previous;
+  if (diff === 0) return `Same as ${previousName} (${previous}).`;
+  return `${diff > 0 ? "Up" : "Down"} ${Math.abs(diff)} from ${previousName} (${previous}).`;
+}
+
+/**
+ * The post on the 1st to the monthly channel: last month's calls, one line
+ * each (same lines and 25-line cap as the Monday post), then the change from
+ * the month before and the weekly rate. Counting is the Monday post's: a
+ * repeat caller counts once per Mon–Sun week, so a month is never less than
+ * the sum of its whole weeks.
+ */
+export function formatMonthlyReport(rows: DeclinedRow[], now: Date): string {
+  const month = lastMonth(now);
+  const prior = monthBefore(month);
+  const monthRows = inRange(rows, month);
+  const total = tally(monthRows).total;
+  const previous = tally(inRange(rows, prior)).total;
+  return [
+    `*${calls(total)} last month (${monthLabel(month)})*`,
+    ...callLines(monthRows),
+    `${comparisonLine(total, previous, monthName(new Date(prior.startIso)))} About ${perWeek(total, month)} a week.`,
+  ].join("\n");
+}
+
+/** `/trinity declined preview month`: this month so far, the 1st to now. */
+export function formatMonthPreview(rows: DeclinedRow[], now: Date): string {
+  const soFar = monthToDate(now);
+  const prior = monthBefore(soFar);
+  const monthRows = inRange(rows, soFar);
+  const total = tally(monthRows).total;
+  return [
+    `*Preview: ${calls(total)} this month so far (${monthLabel(soFar)})*`,
+    ...callLines(monthRows),
+    `${monthName(new Date(prior.startIso))} in full: ${tally(inRange(rows, prior)).total}. About ${perWeek(total, soFar)} a week so far.`,
+  ].join("\n");
 }

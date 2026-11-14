@@ -5,6 +5,7 @@
 //   /trinity declined undo
 //   /trinity declined week
 //   /trinity declined preview
+//   /trinity declined preview month
 //   /trinity declined              (usage)
 //
 // The phone number is pulled out of the text wherever it appears, so
@@ -27,6 +28,7 @@ export type DeclinedCommand =
   | { kind: "declinedUndo"; userId: string | null }
   | { kind: "declinedWeek" }
   | { kind: "declinedPreview" }
+  | { kind: "declinedMonthPreview" }
   | { kind: "declinedUsage" };
 
 export const NOTE_MAX = 200;
@@ -71,6 +73,7 @@ export function parseDeclined(rest: string, userId: string | null): DeclinedComm
   if (word === "undo" && tail === "") return { kind: "declinedUndo", userId };
   if (word === "week" && tail === "") return { kind: "declinedWeek" };
   if (word === "preview" && tail === "") return { kind: "declinedPreview" };
+  if (word === "preview" && tail.toLowerCase() === "month") return { kind: "declinedMonthPreview" };
   if (word !== "busy" && word !== "distance") return { kind: "declinedUsage" };
 
   const phone = findPhone(tail);

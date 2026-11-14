@@ -403,6 +403,55 @@ person who typed it only. It doesn't post to the channel, doesn't use up the
 week's Monday post and doesn't write anything. If the channel can't be read it
 ends with the same error line as `/trinity declined week`.
 
+### Monthly summary — its own channel
+
+On the morning of the 1st the bot posts last calendar month (midnight to
+midnight Eastern) to a separate channel, so Dave can see the month at a glance
+without scrolling #declined-calls. Same counting and same lines as the Monday
+post (forwards plus `/trinity` entries, a repeat caller once per Mon–Sun week,
+25 lines then "… and N more"), then the change from the month before and the
+calls a week, to read against the 15-a-week line:
+
+> **23 calls declined last month (October 2026)**
+> • Sandra Sample, Rensselaer: sump pump stopped, pit nearly overflowing
+> • Patty, Hillsdale: barn plumbing before winter (called twice)
+> • Logged with /trinity: distance — Saratoga contract
+> • …
+> Up 4 from September (19). About 5.2 a week.
+
+It runs inside the same `/api/cron/sync` run as the Monday post (same
+`CRON_SECRET`, no new Vercel cron): any run on the 1st between 6am and noon
+Eastern posts it, once (`declined_monthly` in `notifications_sent`, keyed by
+the reported month, e.g. `2026-10`). DST is handled the same way as the
+digests, by checking Eastern time in code. Same switches as the Monday post:
+`SLACK_DECLINED_ENABLED=true` and `SLACK_ALERTS_ENABLED=true`. It reads two
+months of #declined-calls, keeps nothing, and on a Slack or database error
+posts nothing and retries on the next run. Until
+`SLACK_DECLINED_MONTHLY_CHANNEL_ID` is set it is skipped (logged as a warning:
+`monthly_channel_not_set`) and nothing is claimed.
+
+**Preview:** `/trinity declined preview month` shows this month so far (the 1st
+to now) against last month in full, to the person who typed it only. No post,
+no claim, no writes.
+
+**Go-live (Ryan).** The bot token and #declined-calls setup above must already
+work. No new scopes: `chat:write` covers it.
+
+1. In Slack, create the channel (for example #declined-monthly) and add Dave.
+2. In that channel, type `/invite @<app name>`. The bot can't post where it
+   isn't a member.
+3. Get its channel ID: click the channel name; the ID (`C…`) is at the bottom
+   of the About tab.
+4. Set it in Vercel (Production), then redeploy:
+   ```bash
+   vercel env add SLACK_DECLINED_MONTHLY_CHANNEL_ID  # the C… id
+   ```
+5. Check: `/trinity declined preview month`. The first real post goes out on
+   the next 1st, between 6am and noon Eastern.
+
+To stop only the monthly post, remove `SLACK_DECLINED_MONTHLY_CHANNEL_ID` and
+redeploy; the Monday post and `/trinity declined` carry on.
+
 ### Ellah changes nothing
 
 Keep forwarding declined calls to #declined-calls exactly as now. The weekly
