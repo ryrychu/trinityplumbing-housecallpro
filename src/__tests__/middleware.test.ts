@@ -145,6 +145,20 @@ describe("middleware", () => {
       const hasCatchAll = config.matcher.some((p) => p.includes("(.*)") || p.includes("(?!"));
       expect(hasCatchAll).toBe(false);
     });
+
+    // The ChatGPT connector (src/app/api/mcp, src/lib/mcp/auth.ts) has the same
+    // need as Slack: ChatGPT calls with a Supabase OAuth bearer token, never a
+    // cookie session, so a gated /api/mcp or /.well-known would 302 every
+    // request to the login page. Its consent page, on the other hand, MUST be
+    // gated: it lives at /app/oauth/consent precisely so the existing /app
+    // rule sends signed-out visitors to /app/login and back.
+    it("leaves the ChatGPT connector routes outside the gate and keeps consent inside it", () => {
+      const gatesConnector = config.matcher.some(
+        (p) => p.startsWith("/api/mcp") || p.startsWith("/.well-known")
+      );
+      expect(gatesConnector).toBe(false);
+      expect(config.matcher).toContain("/app/:path*");
+    });
   });
 
   describe("dashboard and admin, signed out", () => {

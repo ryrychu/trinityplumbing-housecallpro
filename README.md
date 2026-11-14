@@ -177,6 +177,35 @@ Two behaviors worth understanding before touching this:
   is a latency optimization on top, and as of this writing it is not known to
   fire for option-level approvals at all.
 
+## ChatGPT price book connector (`/api/mcp`)
+
+Read-only MCP server that lets ChatGPT review the Housecall Pro price book
+(services, materials, prices, descriptions). It has no write access to HCP.
+Supabase Auth is the OAuth 2.1 server: ChatGPT registers itself, the user signs
+in with their normal Trinity app login, and approves at `/app/oauth/consent`.
+Spec: `docs/superpowers/specs/2026-11-13-chatgpt-pricebook-connector-design.md`.
+
+It uses no new env vars (`HOUSECALL_API_KEY`, `NEXT_PUBLIC_SUPABASE_URL`,
+`NEXT_PUBLIC_SUPABASE_ANON_KEY`). One-time setup:
+
+1. **Supabase → Authentication → OAuth Server:** enable it, enable dynamic
+   client registration, and set the authorization path to `/app/oauth/consent`.
+   **Authentication → URL Configuration:** the Site URL must be this app's domain.
+2. **Supabase → Signing keys:** make sure an asymmetric key (ES256 or RS256)
+   is active. The `openid` scope fails with the legacy HS256 secret.
+3. Open `<SUPABASE_URL>/.well-known/oauth-authorization-server/auth/v1` and
+   check that `registration_endpoint` is listed.
+4. Deploy, then open `https://<app>/.well-known/oauth-protected-resource`. It
+   should name `<SUPABASE_URL>/auth/v1`.
+5. **ChatGPT (workspace admin):** Plugins → Add custom MCP server → URL
+   `https://<app>/api/mcp`, authentication **OAuth** → publish to the
+   workspace. Sign in, approve, and ask "run the price book audit".
+6. Compare one price in ChatGPT's answer with the same item in HCP, to confirm
+   prices really are in cents.
+
+If ChatGPT keeps asking you to sign in again, it may be because Supabase
+doesn't advertise `offline_access` (so no refresh token).
+
 ## Deploy
 
 ```bash
