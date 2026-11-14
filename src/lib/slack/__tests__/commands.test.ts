@@ -122,3 +122,20 @@ describe("resolveWindow", () => {
     expect(localParts(w.anchor).d).toBe(2); // Mon 2026-11-02
   });
 });
+
+describe("parseCommand: fieldy", () => {
+  it.each([
+    ["fieldy preview", { kind: "fieldyPreview" }],
+    ["  Fieldy   PREVIEW ", { kind: "fieldyPreview" }],
+    ["fieldy", { kind: "fieldyUsage" }],
+    ["fieldy whatever", { kind: "fieldyUsage" }],
+    ["fieldypreview", { kind: "help" }],
+  ])("parses %j", (text, cmd) => {
+    expect(parseCommand(text)).toEqual(cmd);
+  });
+
+  it("has no date window", () => {
+    expect(resolveWindow({ kind: "fieldyPreview" }, new Date())).toBeNull();
+    expect(resolveWindow({ kind: "fieldyUsage" }, new Date())).toBeNull();
+  });
+});

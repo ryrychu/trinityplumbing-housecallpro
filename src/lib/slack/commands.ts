@@ -13,11 +13,13 @@ import { renderDigest } from "@/lib/notifications/digest";
 import { listOpenEstimates, listUnpaidInvoices } from "@/lib/mobile/money";
 import { parseDeclined, type DeclinedCommand } from "@/lib/declined/parse";
 import { renderDeclined } from "@/lib/declined/declined";
+import { parseFieldy, renderFieldy, type FieldyCommand } from "@/lib/fieldy/fieldy";
 
 export type Command =
   | { kind: "today" | "tomorrow" | "week" | "nextWeek" | "money" | "help" }
   | { kind: "weekday"; dow: number }
-  | DeclinedCommand;
+  | DeclinedCommand
+  | FieldyCommand;
 
 // 0 = Sunday, matching localParts().dow in src/lib/dashboard/week.ts.
 const WEEKDAYS: Record<string, number> = {
@@ -36,6 +38,9 @@ export function parseCommand(text: string, userId: string | null = null): Comman
   if (declined) return parseDeclined(declined[1], userId);
 
   const t = text.trim().toLowerCase().replace(/\s+/g, " ");
+
+  const fieldy = t.match(/^fieldy(?: (.*))?$/);
+  if (fieldy) return parseFieldy(fieldy[1] ?? "");
 
   if (t === "" || t === "help") return { kind: "help" };
   if (t === "today") return { kind: "today" };
@@ -80,6 +85,8 @@ export function resolveWindow(
     case "declinedPreview":
     case "declinedMonthPreview":
     case "declinedUsage":
+    case "fieldyPreview":
+    case "fieldyUsage":
       return null;
 
     case "help":
@@ -128,6 +135,7 @@ export const HELP_TEXT = [
   "`/trinity thursday` — the next Thursday (any weekday works)",
   "`/trinity money` — open estimates and unpaid invoices",
   "`/trinity declined` — log a call we turned down (too busy or too far)",
+  "`/trinity fieldy preview` — this morning's Fieldy task post, shown only to you",
 ].join("\n");
 
 export async function renderCommand(cmd: Command, now: Date): Promise<string> {
@@ -151,6 +159,8 @@ export async function renderCommand(cmd: Command, now: Date): Promise<string> {
   ) {
     return renderDeclined(cmd, now);
   }
+
+  if (cmd.kind === "fieldyPreview" || cmd.kind === "fieldyUsage") return renderFieldy(cmd, now);
 
   // today and week go through renderDigest so a command and the 6am post are
   // the same string by construction, not by two implementations agreeing today

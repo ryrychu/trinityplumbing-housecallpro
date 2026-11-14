@@ -5,6 +5,7 @@ import {
   isDailyDigestDue,
   isWeeklyLookaheadDue,
   isMonthlyReportDue,
+  isFieldyDailyDue,
 } from "../schedule";
 
 describe("localDateKey", () => {
@@ -111,5 +112,23 @@ describe("isMonthlyReportDue", () => {
   it("is false on any other day, including the UTC 1st that is still the 31st in Eastern", () => {
     expect(isMonthlyReportDue(new Date("2026-07-02T10:00:00Z"))).toBe(false);
     expect(isMonthlyReportDue(new Date("2026-08-01T02:00:00Z"))).toBe(false); // Jul 31, 10pm EDT
+  });
+});
+
+describe("isFieldyDailyDue", () => {
+  it.each([
+    ["2026-11-14T12:00:00Z", true], // 07:00 EST
+    ["2026-11-14T11:59:00Z", false], // 06:59 EST
+    ["2026-11-14T15:59:00Z", true], // 10:59 EST
+    ["2026-11-14T16:00:00Z", false], // 11:00 EST
+    ["2026-07-29T11:00:00Z", true], // 07:00 EDT
+    ["2026-07-29T10:59:00Z", false], // 06:59 EDT
+    ["2026-07-29T15:00:00Z", false], // 11:00 EDT
+  ])("at %s is %s", (iso, due) => {
+    expect(isFieldyDailyDue(new Date(iso))).toBe(due);
+  });
+
+  it("runs on weekends too", () => {
+    expect(isFieldyDailyDue(new Date("2026-11-15T13:00:00Z"))).toBe(true); // Sunday 08:00 EST
   });
 });
