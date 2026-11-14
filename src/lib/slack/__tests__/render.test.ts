@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-const { getScheduleDaysMock, renderDigestMock, estimatesMock, invoicesMock } = vi.hoisted(() => ({
+const { getScheduleDaysMock, renderDigestMock, estimatesMock, invoicesMock, renderFieldyMock } = vi.hoisted(() => ({
+  renderFieldyMock: vi.fn(),
   getScheduleDaysMock: vi.fn(),
   renderDigestMock: vi.fn(),
   estimatesMock: vi.fn(),
@@ -15,6 +16,11 @@ vi.mock("@/lib/notifications/digest", () => ({ renderDigest: renderDigestMock })
 vi.mock("@/lib/mobile/money", () => ({
   listOpenEstimates: estimatesMock,
   listUnpaidInvoices: invoicesMock,
+}));
+
+vi.mock("@/lib/fieldy/fieldy", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/fieldy/fieldy")>()),
+  renderFieldy: renderFieldyMock,
 }));
 
 import { renderCommand, HELP_TEXT } from "../commands";
@@ -44,6 +50,13 @@ describe("renderCommand", () => {
     const out = await renderCommand({ kind: "week" }, SAT);
     expect(renderDigestMock).toHaveBeenCalledWith("week", SAT);
     expect(out).toBe("*Week ahead* — 9 jobs");
+  });
+
+  it("hands /trinity fieldy to renderFieldy", async () => {
+    renderFieldyMock.mockResolvedValue("*Preview: Dave's Fieldy tasks, Sat Aug 8*");
+    const out = await renderCommand({ kind: "fieldyPreview" }, SAT);
+    expect(renderFieldyMock).toHaveBeenCalledWith({ kind: "fieldyPreview" }, SAT);
+    expect(out).toBe("*Preview: Dave's Fieldy tasks, Sat Aug 8*");
   });
 
   it("asks getScheduleDays for a one-day window for tomorrow", async () => {
@@ -81,7 +94,7 @@ describe("renderCommand", () => {
   });
 
   it("lists every supported subcommand in the help text", () => {
-    for (const word of ["today", "tomorrow", "week", "next week", "money"]) {
+    for (const word of ["today", "tomorrow", "week", "next week", "money", "fieldy preview"]) {
       expect(HELP_TEXT).toContain(word);
     }
   });
