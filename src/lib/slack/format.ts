@@ -36,7 +36,7 @@ export function dayLabelFromKey(dateKey: string): string {
 
 // "1:30 PM". Written in full rather than a compact "1:30p" — this is read on a
 // phone at 6am, and the extra three characters cost nothing at 5-6 jobs a day.
-function timeLabel(iso: string | null): string {
+export function timeLabel(iso: string | null): string {
   if (!iso) return "Time TBD";
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone: TZ,
