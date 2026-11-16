@@ -10,7 +10,7 @@ import type { EstimateHit, InvoiceHit } from "@/lib/mobile/money";
 import type { MirrorResource } from "@/lib/mobile/mirrorFreshness";
 import type { DashboardSnapshot, TodayScheduleRow } from "@/lib/dashboard/queries";
 import { localDateKey } from "@/lib/notifications/schedule";
-import { timeLabel } from "@/lib/slack/format";
+import { dayLabelFromKey, timeLabel } from "@/lib/slack/format";
 import { formatMoney } from "@/lib/mcp/pricebook";
 
 export interface ScheduleDay {
@@ -55,6 +55,21 @@ async function ok(deps: JobsDeps, resources: MirrorResource[], body: Record<stri
 function fail(tool: string, message: string, err: unknown): ToolResult {
   console.error(`[mcp-jobs] ${tool} failed: ${err instanceof Error ? err.message : String(err)}`);
   return { isError: true, content: [{ type: "text", text: message }] };
+}
+
+function scheduleJob(r: TodayScheduleRow) {
+  return {
+    id: r.id,
+    time: timeLabel(r.scheduledStart),
+    scheduledStart: r.scheduledStart,
+    customer: r.customerName,
+    phone: r.customerPhone,
+    address: r.address,
+    service: r.service,
+    technician: r.technicianName,
+    status: r.status,
+    zone: r.zone,
+  };
 }
 
 export function createJobsMcpServer(deps: JobsDeps): McpServer {
@@ -172,6 +187,65 @@ export function createJobsMcpServer(deps: JobsDeps): McpServer {
         });
       } catch (err) {
         return fail("get_job", "Couldn't read that job just now. Try again in a minute.", err);
+      }
+    }
+  );
+
+  server.registerTool(
+    "get_schedule",
+    {
+      title: "Schedule",
+      description: `Trinity's jobs day by day (Eastern time), the same schedule as the dashboard and /trinity week. Canceled jobs are left out. Optionally only one technician's jobs. ${SOURCE_NOTE}`,
+      inputSchema: {
+        startDate: z
+          .string()
+          .regex(/^\d{4}-\d{2}-\d{2}$/)
+          .optional()
+          .describe("First day, as YYYY-MM-DD in Eastern time. Defaults to today."),
+        days: z.number().int().min(1).max(14).optional().describe("How many days, 1 to 14. Defaults to 7."),
+        technician: z
+          .string()
+          .min(1)
+          .max(60)
+          .optional()
+          .describe("Only jobs whose technician name contains this text, e.g. 'Dan'."),
+      },
+      annotations: READ_ONLY,
+    },
+    async ({ startDate, days, technician }) => {
+      // 16:00 UTC is midday Eastern under either offset, so the anchor always
+      // falls inside the requested day (the same trick as /trinity in
+      // src/lib/slack/commands.ts). Round-tripping through localDateKey also
+      // catches dates like 2026-02-30 that the regex lets through.
+      let anchor = deps.now();
+      if (startDate) {
+        anchor = new Date(`${startDate}T16:00:00Z`);
+        if (Number.isNaN(anchor.getTime()) || localDateKey(anchor) !== startDate) {
+          return {
+            isError: true,
+            content: [{ type: "text" as const, text: `"${startDate}" isn't a real date. Use YYYY-MM-DD, e.g. 2026-11-17.` }],
+          };
+        }
+      }
+      const dayCount = days ?? 7;
+      const needle = technician?.trim().toLowerCase();
+
+      try {
+        const schedule = (await deps.getScheduleDays(anchor, dayCount)).map((d) => {
+          const rows = needle
+            ? d.rows.filter((r) => (r.technicianName ?? "").toLowerCase().includes(needle))
+            : d.rows;
+          return { date: d.dateKey, label: dayLabelFromKey(d.dateKey), jobCount: rows.length, jobs: rows.map(scheduleJob) };
+        });
+        return await ok(deps, ["jobs", "customers"], {
+          startDate: schedule[0]?.date ?? startDate ?? localDateKey(anchor),
+          days: dayCount,
+          technician: technician ?? null,
+          totalJobs: schedule.reduce((n, d) => n + d.jobCount, 0),
+          schedule,
+        });
+      } catch (err) {
+        return fail("get_schedule", "Couldn't read the schedule just now. Try again in a minute.", err);
       }
     }
   );

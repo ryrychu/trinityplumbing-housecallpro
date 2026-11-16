@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { CUSTOMER_HIT, SYNCED_AT, connect, stubDeps, text } from "./fixtures";
+import { CUSTOMER_HIT, NOW, SYNCED_AT, connect, scheduleRow, stubDeps, text } from "./fixtures";
+import type { JobsDeps } from "../server";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -107,5 +108,103 @@ describe("createJobsMcpServer: customers and jobs", () => {
     const client = await connect(deps);
     const body = JSON.parse(text(await client.callTool({ name: "find_customer", arguments: { query: "pat" } })));
     expect(body.dataAsOf).toBeNull();
+  });
+});
+
+describe("get_schedule", () => {
+  function recording() {
+    const calls: { anchor: string; days: number }[] = [];
+    const getScheduleDays: JobsDeps["getScheduleDays"] = async (anchor, days) => {
+      calls.push({ anchor: anchor.toISOString(), days });
+      return [
+        {
+          dateKey: "2026-11-17",
+          rows: [
+            scheduleRow({ id: "job_a", technicianName: "Dan Tech" }),
+            scheduleRow({ id: "job_b", technicianName: "Mike Other", scheduledStart: null }),
+          ],
+        },
+        { dateKey: "2026-11-18", rows: [] },
+      ];
+    };
+    return { calls, getScheduleDays };
+  }
+
+  it("defaults to 7 days from now", async () => {
+    const { calls, getScheduleDays } = recording();
+    const { deps, freshnessCalls } = stubDeps({ getScheduleDays });
+    const client = await connect(deps);
+    const body = JSON.parse(text(await client.callTool({ name: "get_schedule", arguments: {} })));
+    expect(calls).toEqual([{ anchor: NOW.toISOString(), days: 7 }]);
+    expect(body).toMatchObject({ days: 7, technician: null, totalJobs: 2, dataAsOf: SYNCED_AT });
+    expect(freshnessCalls).toEqual([["jobs", "customers"]]);
+  });
+
+  it("anchors a start date inside that Eastern day and labels each day", async () => {
+    const { calls, getScheduleDays } = recording();
+    const client = await connect(stubDeps({ getScheduleDays }).deps);
+    const body = JSON.parse(
+      text(await client.callTool({ name: "get_schedule", arguments: { startDate: "2026-11-17", days: 2 } }))
+    );
+    expect(calls).toEqual([{ anchor: "2026-11-17T16:00:00.000Z", days: 2 }]);
+    expect(body.startDate).toBe("2026-11-17");
+    expect(body.schedule.map((d: { label: string }) => d.label)).toEqual(["Tue Nov 17", "Wed Nov 18"]);
+    expect(body.schedule[0].jobs[0]).toEqual({
+      id: "job_a",
+      time: "9:30 AM",
+      scheduledStart: "2026-11-17T14:30:00Z",
+      customer: "Pat Example",
+      phone: "5185550142",
+      address: "12 Elm St, Averill Park",
+      service: "Drain cleaning",
+      technician: "Dan Tech",
+      status: "Scheduled",
+      zone: "Averill Park",
+    });
+    expect(body.schedule[0].jobs[1].time).toBe("Time TBD");
+  });
+
+  it("filters by technician name, case-insensitively", async () => {
+    const { getScheduleDays } = recording();
+    const client = await connect(stubDeps({ getScheduleDays }).deps);
+    const body = JSON.parse(
+      text(await client.callTool({ name: "get_schedule", arguments: { technician: "dan" } }))
+    );
+    expect(body.totalJobs).toBe(1);
+    expect(body.schedule[0]).toMatchObject({ jobCount: 1 });
+    expect(body.schedule[0].jobs[0].id).toBe("job_a");
+  });
+
+  it("rejects a date that doesn't exist without querying", async () => {
+    const { calls, getScheduleDays } = recording();
+    const client = await connect(stubDeps({ getScheduleDays }).deps);
+    const res = await client.callTool({ name: "get_schedule", arguments: { startDate: "2026-02-30" } });
+    expect(res.isError).toBe(true);
+    expect(text(res)).toMatch(/isn't a real date/);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("refuses more than 14 days without querying", async () => {
+    const { calls, getScheduleDays } = recording();
+    const client = await connect(stubDeps({ getScheduleDays }).deps);
+    const res = await client
+      .callTool({ name: "get_schedule", arguments: { days: 30 } })
+      .catch(() => ({ isError: true }));
+    expect((res as { isError?: boolean }).isError).toBe(true);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("hides the raw error when the schedule query fails", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const client = await connect(
+      stubDeps({
+        getScheduleDays: async () => {
+          throw new Error("jobs query failed: Pat Example");
+        },
+      }).deps
+    );
+    const res = await client.callTool({ name: "get_schedule", arguments: {} });
+    expect(res.isError).toBe(true);
+    expect(text(res)).not.toMatch(/Pat Example/);
   });
 });
