@@ -85,4 +85,16 @@ describe("/.well-known/oauth-protected-resource", () => {
     vi.stubEnv("NEXT_PUBLIC_SUPABASE_URL", "");
     expect(metadataGET(new Request("https://ops.example.com/x")).status).toBe(500);
   });
+
+  // Pinned to the exact bytes served before the jobs connector existed. The
+  // jobs work refactors the helpers behind this route; ChatGPT has already
+  // registered against this document, so it must not move.
+  it("serves exactly the same price book metadata as before", async () => {
+    vi.stubEnv("NEXT_PUBLIC_SUPABASE_URL", "https://abc.supabase.co");
+    const res = metadataGET(new Request("https://ops.example.com/.well-known/oauth-protected-resource"));
+    expect(await res.text()).toBe(
+      '{"resource":"https://ops.example.com/api/mcp","authorization_servers":["https://abc.supabase.co/auth/v1"],"scopes_supported":["openid","email","profile"],"bearer_methods_supported":["header"],"resource_name":"Trinity Plumbing price book (read-only)"}'
+    );
+    expect(res.headers.get("cache-control")).toBe("public, max-age=300");
+  });
 });
