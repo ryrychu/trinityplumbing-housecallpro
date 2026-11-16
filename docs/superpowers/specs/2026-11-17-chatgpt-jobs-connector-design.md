@@ -72,13 +72,13 @@ Every tool is annotated `readOnlyHint: true, destructiveHint: false, idempotentH
 | `find_customer` | `query`: 1–100 chars, a name or phone number | `searchCustomers(query)` | Up to 25 matches: `id`, `name`, `phone`, `address` | customers |
 | `get_customer_history` | `customerId`: string | `getCustomerDetail(id)` | Contact details, `lifetime` (dollars and cents), and every job: `id`, date, service, status, amount | customers, jobs |
 | `get_job` | `jobId`: string | `getJobDetail(id)` | Customer, phone, address, scheduled start and end, technician, service, status, amount, invoice (id, status, amount), notes (content, author, date) | jobs, invoices |
-| `get_schedule` | `startDate?`: `YYYY-MM-DD` Eastern, default today. `days?`: 1–14, default 7. `technician?`: text | `getScheduleDays(anchor, days)` | One entry per day (`date`, label such as "Mon Nov 17", `jobs`). Each job: `id`, time, customer, phone, address, service, technician, status, zone. If `technician` is given, only jobs whose technician name contains it (case-insensitive). | jobs, customers |
+| `get_schedule` | `startDate?`: `YYYY-MM-DD` Eastern, default today. `days?`: 1–14, default 7. `technician?`: text | `getScheduleDays(anchor, days)` | One entry per day (`date`, label such as "Tue Nov 17", `jobs`). Each job: `id`, time, customer, phone, address, service, technician, status, zone. If `technician` is given, only jobs whose technician name contains it (case-insensitive). | jobs, customers |
 | `get_money_summary` | none | `listOpenEstimates()`, `listUnpaidInvoices()`, `getDashboardSnapshot()` | Open estimates and unpaid or overdue invoices, each as returned by those functions, plus `revenueBookedThisWeek` and `revenueScheduledNextWeek` | estimates, invoices, jobs |
 
 Rules that apply to every tool:
 
 - **Money is shown as dollars plus the cents value** (`"$1,234.50"` and `123450`), using `formatMoney` from `src/lib/mcp/pricebook.ts`, the same formatter the price book tools use. A missing amount shows as `"n/a"` with `null` cents.
-- **Day labels** ("Mon Nov 17") come from `dayLabelFromKey` in `src/lib/slack/format.ts`, so they match `/trinity` and the digests.
+- **Day labels** ("Tue Nov 17") come from `dayLabelFromKey` in `src/lib/slack/format.ts`, so they match `/trinity` and the digests.
 - **`get_schedule` adds no date arithmetic.** It turns `startDate` into an anchor inside that Eastern day using the helpers in `src/lib/dashboard/week.ts`, and `getScheduleDays` does the DST-safe bucketing it already does for `/trinity` and the dashboard. `lat` and `lng` are left out of the result.
 - **A customer or job that doesn't exist** returns a normal (non-error) result saying it wasn't found, so ChatGPT can try `find_customer` again.
 - `technicianId` is still absent from `TodayScheduleRow` (`docs/PHASE-1.x-BACKLOG.md`), so the technician filter matches on display name, with the same same-name caveat as the mobile Schedule tab.
@@ -100,7 +100,7 @@ Rules that apply to every tool:
 - **`src/lib/mcp/__tests__/auth.test.ts`:** extend so metadata and `WWW-Authenticate` are built for both resources.
 - **Price book regression:** the existing `/api/mcp` route tests keep passing unchanged, and a new test pins the root `/.well-known/oauth-protected-resource` JSON to its exact current value.
 - **New metadata route:** the JSON shape and `resource` value.
-- **`src/__tests__/middleware.test.ts`:** extend so `/api/mcp/jobs` and `/.well-known/oauth-protected-resource/api/mcp/jobs` are not matched, while `/api/app/*` still is.
+- **`src/__tests__/middleware.test.ts`:** no change needed. Its existing "leaves the ChatGPT connector routes outside the gate" test already fails if any matcher entry starts with `/api/mcp` or `/.well-known`, which covers both new paths.
 
 ## Environment variables
 
