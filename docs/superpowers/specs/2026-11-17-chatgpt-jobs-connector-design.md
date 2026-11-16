@@ -126,6 +126,7 @@ Rollback: unset `MCP_JOBS_ENABLED` and redeploy. There is no database change to 
 - **Data can be up to about 15 minutes behind HCP.** Every result carries `dataAsOf`.
 - **`getScheduleDays` reads every job** before filtering, so `get_schedule` may take a few seconds. That's well inside `maxDuration = 60`. Pushing the date range into the query is still deferred, as in the 2026-08-08 spec.
 - **Supabase's OAuth 2.1 server is beta**, as for the price book connector.
+- **Free text reaches ChatGPT.** Job notes and the service field (which can fall back to a customer-typed job description) are passed through as-is, so a crafted note could try to instruct ChatGPT. The connector is read-only, but Dave's workspace may have other connectors that can act, so treat tool output as data, not instructions.
 
 ## Out of scope
 

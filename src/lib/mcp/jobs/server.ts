@@ -33,7 +33,9 @@ export interface JobsDeps {
   now(): Date;
 }
 
-const READ_ONLY = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false } as const;
+export const CUSTOMER_MATCH_LIMIT = 25;
+
+const READ_ONLY ={ readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false } as const;
 
 const SOURCE_NOTE =
   "Data comes from Trinity's copy of HouseCall Pro, updated about every 15 minutes; dataAsOf is when it was last synced. Read-only.";
@@ -88,7 +90,16 @@ export function createJobsMcpServer(deps: JobsDeps): McpServer {
     async ({ query }) => {
       try {
         const customers = await deps.searchCustomers(query);
-        return await ok(deps, ["customers"], { query, count: customers.length, customers });
+        const truncated = customers.length >= CUSTOMER_MATCH_LIMIT;
+        return await ok(deps, ["customers"], {
+          query,
+          count: customers.length,
+          truncated,
+          ...(truncated && {
+            note: `Showing the first ${CUSTOMER_MATCH_LIMIT} matches. Ask with more of the name or the phone number to narrow it down.`,
+          }),
+          customers,
+        });
       } catch (err) {
         return fail("find_customer", "Couldn't search customers just now. Try again in a minute.", err);
       }
@@ -199,12 +210,13 @@ export function createJobsMcpServer(deps: JobsDeps): McpServer {
       inputSchema: {
         startDate: z
           .string()
-          .regex(/^\d{4}-\d{2}-\d{2}$/)
+          .regex(/^20\d{2}-\d{2}-\d{2}$/)
           .optional()
-          .describe("First day, as YYYY-MM-DD in Eastern time. Defaults to today."),
+          .describe("First day, as YYYY-MM-DD in Eastern time, 2000-2099. Defaults to today."),
         days: z.number().int().min(1).max(14).optional().describe("How many days, 1 to 14. Defaults to 7."),
         technician: z
           .string()
+          .trim()
           .min(1)
           .max(60)
           .optional()
@@ -254,7 +266,7 @@ export function createJobsMcpServer(deps: JobsDeps): McpServer {
     "get_money_summary",
     {
       title: "Money summary",
-      description: `Open estimates, unpaid and overdue invoices (most overdue first), and revenue booked this week and scheduled next week. ${SOURCE_NOTE}`,
+      description: `Open estimates, unpaid and overdue invoices (most overdue first), and revenue booked this week and scheduled next week. Totals leave out items with no amount; missingAmountCount says how many. ${SOURCE_NOTE}`,
       inputSchema: {},
       annotations: READ_ONLY,
     },
@@ -266,6 +278,7 @@ export function createJobsMcpServer(deps: JobsDeps): McpServer {
           deps.getRevenue(),
         ]);
         const sum = (rows: { amountCents: number | null }[]) => rows.reduce((t, r) => t + (r.amountCents ?? 0), 0);
+        const missing = (rows: { amountCents: number | null }[]) => rows.filter((r) => r.amountCents === null).length;
         const estimatesCents = sum(estimates);
         const invoicesCents = sum(invoices);
         return await ok(deps, ["estimates", "invoices", "jobs"], {
@@ -273,6 +286,7 @@ export function createJobsMcpServer(deps: JobsDeps): McpServer {
             count: estimates.length,
             total: formatMoney(estimatesCents),
             totalCents: estimatesCents,
+            missingAmountCount: missing(estimates),
             items: estimates.map((e) => ({ ...e, amount: formatMoney(e.amountCents) })),
           },
           unpaidInvoices: {
@@ -280,6 +294,7 @@ export function createJobsMcpServer(deps: JobsDeps): McpServer {
             overdueCount: invoices.filter((i) => i.overdueDays !== null).length,
             total: formatMoney(invoicesCents),
             totalCents: invoicesCents,
+            missingAmountCount: missing(invoices),
             items: invoices.map((i) => ({ ...i, amount: formatMoney(i.amountCents) })),
           },
           revenueBookedThisWeek: formatMoney(revenue.revenueBookedThisWeekCents),

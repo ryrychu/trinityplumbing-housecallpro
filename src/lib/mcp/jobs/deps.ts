@@ -5,11 +5,11 @@ import { getJobDetail } from "@/lib/mobile/jobDetail";
 import { listOpenEstimates, listUnpaidInvoices } from "@/lib/mobile/money";
 import { mirrorSyncedAt } from "@/lib/mobile/mirrorFreshness";
 import { getDashboardSnapshot, getScheduleDays } from "@/lib/dashboard/queries";
-import type { JobsDeps } from "./server";
+import { CUSTOMER_MATCH_LIMIT, type JobsDeps } from "./server";
 
 export function liveJobsDeps(): JobsDeps {
   return {
-    searchCustomers: (query) => searchCustomers(query),
+    searchCustomers: (query) => searchCustomers(query, CUSTOMER_MATCH_LIMIT),
     getCustomerDetail,
     getJobDetail,
     getScheduleDays,

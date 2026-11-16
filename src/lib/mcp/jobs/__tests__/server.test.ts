@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { CUSTOMER_HIT, NOW, SYNCED_AT, connect, scheduleRow, stubDeps, text } from "./fixtures";
-import type { JobsDeps } from "../server";
+import { CUSTOMER_MATCH_LIMIT, type JobsDeps } from "../server";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -27,7 +27,22 @@ describe("createJobsMcpServer: customers and jobs", () => {
     expect(queries).toEqual(["pat"]);
     expect(body).toMatchObject({ query: "pat", count: 1, dataAsOf: SYNCED_AT });
     expect(body.customers[0]).toEqual(CUSTOMER_HIT);
+    expect(body.truncated).toBe(false);
+    expect(body.note).toBeUndefined();
     expect(freshnessCalls).toEqual([["customers"]]);
+  });
+
+  it("flags results that hit the match cap", async () => {
+    const { deps } = stubDeps({
+      searchCustomers: async () => Array.from({ length: CUSTOMER_MATCH_LIMIT }, () => CUSTOMER_HIT),
+    });
+    const client = await connect(deps);
+    const body = JSON.parse(text(await client.callTool({ name: "find_customer", arguments: { query: "smith" } })));
+    expect(body.count).toBe(25);
+    expect(body.truncated).toBe(true);
+    expect(body.note).toBe(
+      "Showing the first 25 matches. Ask with more of the name or the phone number to narrow it down."
+    );
   });
 
   it("returns a customer's history with dates and money", async () => {
@@ -194,6 +209,37 @@ describe("get_schedule", () => {
     expect(calls).toHaveLength(0);
   });
 
+  it("refuses a start date outside 2000-2099 without querying", async () => {
+    const { calls, getScheduleDays } = recording();
+    const client = await connect(stubDeps({ getScheduleDays }).deps);
+    const res = await client
+      .callTool({ name: "get_schedule", arguments: { startDate: "9999-12-25" } })
+      .catch(() => ({ isError: true }));
+    expect((res as { isError?: boolean }).isError).toBe(true);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("refuses a whitespace-only technician without querying", async () => {
+    const { calls, getScheduleDays } = recording();
+    const client = await connect(stubDeps({ getScheduleDays }).deps);
+    const res = await client
+      .callTool({ name: "get_schedule", arguments: { technician: "   " } })
+      .catch(() => ({ isError: true }));
+    expect((res as { isError?: boolean }).isError).toBe(true);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("trims the technician before filtering and echoing", async () => {
+    const { getScheduleDays } = recording();
+    const client = await connect(stubDeps({ getScheduleDays }).deps);
+    const body = JSON.parse(
+      text(await client.callTool({ name: "get_schedule", arguments: { technician: " dan " } }))
+    );
+    expect(body.technician).toBe("dan");
+    expect(body.totalJobs).toBe(1);
+    expect(body.schedule[0].jobs[0].id).toBe("job_a");
+  });
+
   it("hides the raw error when the schedule query fails", async () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     const client = await connect(
@@ -224,9 +270,9 @@ describe("get_money_summary", () => {
     const client = await connect(deps);
     const body = JSON.parse(text(await client.callTool({ name: "get_money_summary", arguments: {} })));
 
-    expect(body.openEstimates).toMatchObject({ count: 1, total: "$1,250.00", totalCents: 125000 });
+    expect(body.openEstimates).toMatchObject({ count: 1, total: "$1,250.00", totalCents: 125000, missingAmountCount: 0 });
     expect(body.openEstimates.items[0]).toMatchObject({ id: "est_1", amount: "$1,250.00", amountCents: 125000 });
-    expect(body.unpaidInvoices).toMatchObject({ count: 2, overdueCount: 1, total: "$400.00", totalCents: 40000 });
+    expect(body.unpaidInvoices).toMatchObject({ count: 2, overdueCount: 1, total: "$400.00", totalCents: 40000, missingAmountCount: 1 });
     expect(body.unpaidInvoices.items[1]).toMatchObject({ id: "inv_3", amount: "n/a", amountCents: null });
     expect(body).toMatchObject({
       revenueBookedThisWeek: "$3,500.00",
