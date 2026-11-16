@@ -250,5 +250,48 @@ export function createJobsMcpServer(deps: JobsDeps): McpServer {
     }
   );
 
+  server.registerTool(
+    "get_money_summary",
+    {
+      title: "Money summary",
+      description: `Open estimates, unpaid and overdue invoices (most overdue first), and revenue booked this week and scheduled next week. ${SOURCE_NOTE}`,
+      inputSchema: {},
+      annotations: READ_ONLY,
+    },
+    async () => {
+      try {
+        const [estimates, invoices, revenue] = await Promise.all([
+          deps.listOpenEstimates(),
+          deps.listUnpaidInvoices(),
+          deps.getRevenue(),
+        ]);
+        const sum = (rows: { amountCents: number | null }[]) => rows.reduce((t, r) => t + (r.amountCents ?? 0), 0);
+        const estimatesCents = sum(estimates);
+        const invoicesCents = sum(invoices);
+        return await ok(deps, ["estimates", "invoices", "jobs"], {
+          openEstimates: {
+            count: estimates.length,
+            total: formatMoney(estimatesCents),
+            totalCents: estimatesCents,
+            items: estimates.map((e) => ({ ...e, amount: formatMoney(e.amountCents) })),
+          },
+          unpaidInvoices: {
+            count: invoices.length,
+            overdueCount: invoices.filter((i) => i.overdueDays !== null).length,
+            total: formatMoney(invoicesCents),
+            totalCents: invoicesCents,
+            items: invoices.map((i) => ({ ...i, amount: formatMoney(i.amountCents) })),
+          },
+          revenueBookedThisWeek: formatMoney(revenue.revenueBookedThisWeekCents),
+          revenueBookedThisWeekCents: revenue.revenueBookedThisWeekCents,
+          revenueScheduledNextWeek: formatMoney(revenue.revenueScheduledNextWeekCents),
+          revenueScheduledNextWeekCents: revenue.revenueScheduledNextWeekCents,
+        });
+      } catch (err) {
+        return fail("get_money_summary", "Couldn't read estimates and invoices just now. Try again in a minute.", err);
+      }
+    }
+  );
+
   return server;
 }

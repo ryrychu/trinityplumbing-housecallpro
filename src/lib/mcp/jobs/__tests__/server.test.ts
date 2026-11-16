@@ -208,3 +208,59 @@ describe("get_schedule", () => {
     expect(text(res)).not.toMatch(/Pat Example/);
   });
 });
+
+describe("get_money_summary", () => {
+  it("totals open estimates, unpaid invoices and revenue", async () => {
+    const { deps, freshnessCalls } = stubDeps({
+      listOpenEstimates: async () => [
+        { id: "est_1", customerId: "cus_1", customerName: "Pat Example", amountCents: 125000, status: null },
+      ],
+      listUnpaidInvoices: async () => [
+        { id: "inv_2", customerId: "cus_1", customerName: "Pat Example", amountCents: 40000, status: "open", dueDate: "2026-11-01", overdueDays: 16 },
+        { id: "inv_3", customerId: null, customerName: null, amountCents: null, status: "open", dueDate: null, overdueDays: null },
+      ],
+      getRevenue: async () => ({ revenueBookedThisWeekCents: 350000, revenueScheduledNextWeekCents: 0 }),
+    });
+    const client = await connect(deps);
+    const body = JSON.parse(text(await client.callTool({ name: "get_money_summary", arguments: {} })));
+
+    expect(body.openEstimates).toMatchObject({ count: 1, total: "$1,250.00", totalCents: 125000 });
+    expect(body.openEstimates.items[0]).toMatchObject({ id: "est_1", amount: "$1,250.00", amountCents: 125000 });
+    expect(body.unpaidInvoices).toMatchObject({ count: 2, overdueCount: 1, total: "$400.00", totalCents: 40000 });
+    expect(body.unpaidInvoices.items[1]).toMatchObject({ id: "inv_3", amount: "n/a", amountCents: null });
+    expect(body).toMatchObject({
+      revenueBookedThisWeek: "$3,500.00",
+      revenueBookedThisWeekCents: 350000,
+      revenueScheduledNextWeek: "$0.00",
+      revenueScheduledNextWeekCents: 0,
+      dataAsOf: SYNCED_AT,
+    });
+    expect(freshnessCalls).toEqual([["estimates", "invoices", "jobs"]]);
+  });
+
+  it("hides the raw error when a money query fails", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const client = await connect(
+      stubDeps({
+        listUnpaidInvoices: async () => {
+          throw new Error("invoices query failed: Pat Example");
+        },
+      }).deps
+    );
+    const res = await client.callTool({ name: "get_money_summary", arguments: {} });
+    expect(res.isError).toBe(true);
+    expect(text(res)).not.toMatch(/Pat Example/);
+  });
+
+  it("registers exactly the five tools", async () => {
+    const client = await connect(stubDeps().deps);
+    const { tools } = await client.listTools();
+    expect(tools.map((t) => t.name).sort()).toEqual([
+      "find_customer",
+      "get_customer_history",
+      "get_job",
+      "get_money_summary",
+      "get_schedule",
+    ]);
+  });
+});
