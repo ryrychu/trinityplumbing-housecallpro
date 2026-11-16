@@ -1,6 +1,14 @@
 // @vitest-environment node
-import { describe, it, expect } from "vitest";
-import { verifyMcpToken, protectedResourceMetadata, requestOrigin, wwwAuthenticate } from "../auth";
+import { describe, it, expect, vi, afterEach } from "vitest";
+import {
+  verifyMcpToken,
+  protectedResourceMetadata,
+  requestOrigin,
+  wwwAuthenticate,
+  metadataResponse,
+  JOBS_RESOURCE,
+  PRICEBOOK_RESOURCE,
+} from "../auth";
 
 const VALID = { sub: "user-1", role: "authenticated", client_id: "chatgpt-client", is_anonymous: false };
 const verifier = (claims: Record<string, unknown> | null) => async () => claims;
@@ -67,5 +75,47 @@ describe("protected resource metadata", () => {
       'Bearer resource_metadata="https://o.example/.well-known/oauth-protected-resource"'
     );
     expect(wwwAuthenticate("https://o.example", true)).toMatch(/^Bearer error="invalid_token", resource_metadata=/);
+  });
+});
+
+describe("per-connector resources", () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  it("defaults to the price book resource", () => {
+    expect(protectedResourceMetadata("https://o.example", "https://abc.supabase.co")).toEqual(
+      protectedResourceMetadata("https://o.example", "https://abc.supabase.co", PRICEBOOK_RESOURCE)
+    );
+    expect(wwwAuthenticate("https://o.example", false)).toBe(
+      wwwAuthenticate("https://o.example", false, PRICEBOOK_RESOURCE)
+    );
+  });
+
+  it("describes the jobs connector at its own path", () => {
+    expect(protectedResourceMetadata("https://o.example", "https://abc.supabase.co", JOBS_RESOURCE)).toEqual({
+      resource: "https://o.example/api/mcp/jobs",
+      authorization_servers: ["https://abc.supabase.co/auth/v1"],
+      scopes_supported: ["openid", "email", "profile"],
+      bearer_methods_supported: ["header"],
+      resource_name: "Trinity Plumbing jobs & customers (read-only)",
+    });
+  });
+
+  it("points the jobs challenge at the jobs metadata document", () => {
+    expect(wwwAuthenticate("https://o.example", false, JOBS_RESOURCE)).toBe(
+      'Bearer resource_metadata="https://o.example/.well-known/oauth-protected-resource/api/mcp/jobs"'
+    );
+    expect(wwwAuthenticate("https://o.example", true, JOBS_RESOURCE)).toBe(
+      'Bearer error="invalid_token", resource_metadata="https://o.example/.well-known/oauth-protected-resource/api/mcp/jobs"'
+    );
+  });
+
+  it("builds the metadata response, and fails closed without Supabase", async () => {
+    vi.stubEnv("NEXT_PUBLIC_SUPABASE_URL", "https://abc.supabase.co");
+    const res = metadataResponse(new Request("https://o.example/x"), JOBS_RESOURCE);
+    expect(res.status).toBe(200);
+    expect((await res.json()).resource).toBe("https://o.example/api/mcp/jobs");
+
+    vi.stubEnv("NEXT_PUBLIC_SUPABASE_URL", "");
+    expect(metadataResponse(new Request("https://o.example/x"), JOBS_RESOURCE).status).toBe(500);
   });
 });

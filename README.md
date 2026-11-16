@@ -206,6 +206,31 @@ It uses no new env vars (`HOUSECALL_API_KEY`, `NEXT_PUBLIC_SUPABASE_URL`,
 If ChatGPT keeps asking you to sign in again, it may be because Supabase
 doesn't advertise `offline_access` (so no refresh token).
 
+## ChatGPT jobs & customers connector (`/api/mcp/jobs`)
+
+A second, separate read-only ChatGPT connector: customer lookup, a customer's
+job history, single job details, the schedule and a money summary. It reads
+the Supabase copy of HouseCall Pro (up to ~15 minutes behind) and never
+writes. Anyone who can sign in to the Trinity app can use it. It uses the same
+Supabase OAuth setup as the price book connector above, so there's no extra
+Supabase configuration.
+Spec: `docs/superpowers/specs/2026-11-17-chatgpt-jobs-connector-design.md`.
+
+1. Deploy with `MCP_JOBS_ENABLED` unset. `POST /api/mcp/jobs` should return
+   503, the price book connector should still work ("run the price book
+   audit"), and `/.well-known/oauth-protected-resource` should be unchanged.
+2. Set `MCP_JOBS_ENABLED=true` in Vercel and redeploy. `/api/mcp/jobs` should
+   return 401 without a token, and
+   `/.well-known/oauth-protected-resource/api/mcp/jobs` should name
+   `/api/mcp/jobs`.
+3. **ChatGPT (workspace admin):** Plugins → Add custom MCP server → URL
+   `https://<app>/api/mcp/jobs`, authentication **OAuth** → publish. Sign in
+   and approve.
+4. Check: "what's on this week?" against `/trinity week`; one customer's
+   history against the mobile app; "what's unpaid?" against `/trinity money`.
+
+To turn it off, unset `MCP_JOBS_ENABLED` and redeploy.
+
 ## Deploy
 
 ```bash

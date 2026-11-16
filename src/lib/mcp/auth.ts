@@ -6,6 +6,31 @@ import { createClient } from "@supabase/supabase-js";
 export const MCP_PATH = "/api/mcp";
 export const RESOURCE_METADATA_PATH = "/.well-known/oauth-protected-resource";
 
+// One protected resource per ChatGPT connector. Each has its own endpoint and
+// its own RFC 9728 metadata document, and the 401 challenge names the right
+// one, so ChatGPT registers each connector separately. Both use the same
+// Supabase authorization server and the same token check.
+export interface McpResource {
+  /** The MCP endpoint path, e.g. "/api/mcp". */
+  path: string;
+  /** Where that endpoint's protected-resource metadata is served. */
+  metadataPath: string;
+  /** Shown to users as the connector's name. */
+  name: string;
+}
+
+export const PRICEBOOK_RESOURCE: McpResource = {
+  path: MCP_PATH,
+  metadataPath: RESOURCE_METADATA_PATH,
+  name: "Trinity Plumbing price book (read-only)",
+};
+
+export const JOBS_RESOURCE: McpResource = {
+  path: "/api/mcp/jobs",
+  metadataPath: "/.well-known/oauth-protected-resource/api/mcp/jobs",
+  name: "Trinity Plumbing jobs & customers (read-only)",
+};
+
 export interface McpCaller {
   userId: string;
   clientId: string;
@@ -60,17 +85,38 @@ export function requestOrigin(req: Request): string {
   return `${proto}://${host}`;
 }
 
-export function protectedResourceMetadata(origin: string, supabaseUrl: string) {
+export function protectedResourceMetadata(
+  origin: string,
+  supabaseUrl: string,
+  resource: McpResource = PRICEBOOK_RESOURCE
+) {
   return {
-    resource: `${origin}${MCP_PATH}`,
+    resource: `${origin}${resource.path}`,
     authorization_servers: [`${supabaseUrl.replace(/\/+$/, "")}/auth/v1`],
     scopes_supported: ["openid", "email", "profile"],
     bearer_methods_supported: ["header"],
-    resource_name: "Trinity Plumbing price book (read-only)",
+    resource_name: resource.name,
   };
 }
 
-export function wwwAuthenticate(origin: string, invalidToken: boolean): string {
-  const meta = `resource_metadata="${origin}${RESOURCE_METADATA_PATH}"`;
+export function wwwAuthenticate(
+  origin: string,
+  invalidToken: boolean,
+  resource: McpResource = PRICEBOOK_RESOURCE
+): string {
+  const meta = `resource_metadata="${origin}${resource.metadataPath}"`;
   return invalidToken ? `Bearer error="invalid_token", ${meta}` : `Bearer ${meta}`;
+}
+
+// The body of every protected-resource metadata route. Fails closed when the
+// Supabase URL is missing rather than advertising an authorization server
+// that doesn't exist.
+export function metadataResponse(req: Request, resource: McpResource): Response {
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  if (!supabaseUrl) {
+    return Response.json({ error: "server_misconfigured" }, { status: 500 });
+  }
+  return Response.json(protectedResourceMetadata(requestOrigin(req), supabaseUrl, resource), {
+    headers: { "Cache-Control": "public, max-age=300" },
+  });
 }
