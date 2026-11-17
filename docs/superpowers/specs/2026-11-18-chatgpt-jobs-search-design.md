@@ -39,7 +39,7 @@ A pure function in `src/lib/mcp/jobs/search.ts`.
 3. Drop **street suffixes**: `rd, road, st, street, ave, av, avenue, dr, drive, ln, lane, blvd, boulevard, ct, court, pl, way, hwy, highway, rte, route, pkwy, parkway, tpke, turnpike, ext, extension, cir, circle, ter, terrace`.
 4. Drop tokens shorter than 2 characters. Numbers of 2 or more digits are kept, so a house number like "578" counts.
 5. De-duplicate, keeping first-seen order. Keep at most **5** terms. Extra terms go in `dropped`.
-6. **Phone:** if the query contains 7 or more digits in total, `phoneDigits` = all of its digits, and those digit tokens are removed from `terms`.
+6. **Phone:** this step runs first. The first run of digits joined only by spaces, dots, dashes, parentheses or `+` that holds **7 to 11 digits** is a phone number. `phoneDigits` is set to those digits, and the run is removed before the words are taken. Other numbers stay ordinary search words, such as a house number and a ZIP code with words between them ("578 Aviation Rd Queensbury 12804" has no phone number). Revised 2026-11-18 after review: the first rule, "7 or more digits in the whole query", read house number + ZIP as a phone.
 
 Returns `{ terms: string[]; phoneDigits: string | null; dropped: string[] }`.
 

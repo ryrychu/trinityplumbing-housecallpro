@@ -160,6 +160,19 @@ describe("searchTerms", () => {
     });
   });
 
+  it("finds a phone number among other words", () => {
+    expect(searchTerms("Kay at 518.555.0142")).toEqual({ terms: ["kay"], phoneDigits: "5185550142", dropped: [] });
+    expect(searchTerms("1-518-555-0142").phoneDigits).toBe("15185550142");
+  });
+
+  it("keeps a house number and ZIP code as words, not a phone number", () => {
+    expect(searchTerms("578 Aviation Rd Queensbury 12804")).toEqual({
+      terms: ["578", "aviation", "queensbury", "12804"],
+      phoneDigits: null,
+      dropped: [],
+    });
+  });
+
   it("returns no words for a question made only of filler", () => {
     expect(searchTerms("find the jobs")).toEqual({ terms: [], phoneDigits: null, dropped: [] });
   });
@@ -350,16 +363,26 @@ export interface SearchWords {
   dropped: string[];
 }
 
+// Digits joined only by phone punctuation. A house number and a ZIP code with
+// words between them are separate runs, so they never add up to a phone.
+const DIGIT_RUN = /\d(?:[\s().+-]*\d)*/g;
+
 // Lowercase [a-z0-9] tokens only: nothing that could change the meaning of a
 // PostgREST or() filter survives this.
 export function searchTerms(query: string): SearchWords {
-  const lower = query.toLowerCase();
-  const digits = lower.replace(/\D/g, "");
-  const phoneDigits = digits.length >= 7 ? digits : null;
+  let rest = query.toLowerCase();
+  let phoneDigits: string | null = null;
+  for (const run of rest.match(DIGIT_RUN) ?? []) {
+    const digits = run.replace(/\D/g, "");
+    if (digits.length >= 7 && digits.length <= 11) {
+      phoneDigits = digits;
+      rest = rest.replace(run, " ");
+      break;
+    }
+  }
   const words: string[] = [];
-  for (const token of lower.match(/[a-z0-9]+/g) ?? []) {
+  for (const token of rest.match(/[a-z0-9]+/g) ?? []) {
     if (token.length < 2 || FILLER.has(token) || STREET_SUFFIXES.has(token)) continue;
-    if (phoneDigits && /^\d+$/.test(token)) continue;
     if (!words.includes(token)) words.push(token);
   }
   return { terms: words.slice(0, MAX_TERMS), phoneDigits, dropped: words.slice(MAX_TERMS) };
