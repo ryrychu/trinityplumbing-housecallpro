@@ -52,18 +52,27 @@ describe("/api/mcp/jobs with a valid token", () => {
       createServer: () => createJobsMcpServer(stubDeps().deps),
     });
 
-  it("initializes as trinity-jobs and lists the five tools", async () => {
+  it("initializes as trinity-jobs with instructions and lists the six tools", async () => {
     const init = await serve({
       jsonrpc: "2.0",
       id: 1,
       method: "initialize",
       params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "test", version: "1" } },
     });
-    expect((await init.json()).result.serverInfo.name).toBe("trinity-jobs");
+    const initBody = await init.json();
+    expect(initBody.result.serverInfo.name).toBe("trinity-jobs");
+    expect(initBody.result.instructions).toContain("search_jobs");
 
     const list = await serve(LIST);
     const names = (await list.json()).result.tools.map((t: { name: string }) => t.name).sort();
-    expect(names).toEqual(["find_customer", "get_customer_history", "get_job", "get_money_summary", "get_schedule"]);
+    expect(names).toEqual([
+      "find_customer",
+      "get_customer_history",
+      "get_job",
+      "get_money_summary",
+      "get_schedule",
+      "search_jobs",
+    ]);
   });
 
   it("runs a tool end to end", async () => {

@@ -7,7 +7,7 @@ import type { JobDetail } from "@/lib/mobile/jobDetail";
 import type { MirrorResource } from "@/lib/mobile/mirrorFreshness";
 import type { TodayScheduleRow } from "@/lib/dashboard/queries";
 import { createJobsMcpServer, type JobsDeps } from "../server";
-import type { CustomerCandidate } from "../search";
+import type { CustomerCandidate, JobCandidate } from "../search";
 
 export const SYNCED_AT = "2026-11-17T12:45:00.000Z";
 // 8:00 AM Eastern on Tue Nov 17 2026.
@@ -61,6 +61,44 @@ export const GYM_CUSTOMER: CustomerCandidate = {
   ),
 };
 
+export function jobCandidate(over: Partial<JobCandidate> = {}): JobCandidate {
+  return {
+    id: "job_x",
+    customerId: "cus_gym",
+    scheduledStart: null,
+    workStatus: "complete rated",
+    onMyWayAt: null,
+    amountCents: 25000,
+    street: "99 Aviation Road",
+    city: "Queensbury",
+    description: "Commercial Service Call Fee",
+    jobType: null,
+    customer: { id: "cus_gym", name: "Kay Example", company: "Gymco", tags: [] },
+    ...over,
+  };
+}
+
+const GYM_JOB_DATES = [
+  "2026-11-23T18:00:00Z",
+  "2026-11-11T19:00:00Z",
+  "2026-10-02T16:00:00Z",
+  "2026-04-06T15:00:00Z",
+  "2026-04-03T13:00:00Z",
+  "2026-03-23T19:00:00Z",
+  "2026-03-09T17:00:00Z",
+  "2026-03-04T20:00:00Z",
+  "2025-07-16T17:00:00Z",
+  "2025-04-29T15:00:00Z",
+];
+
+// Ten jobs at the Aviation Road gym, newest first. Nothing in them says
+// "planet" or "fitness", like the real records.
+export function gymJobs(): JobCandidate[] {
+  return GYM_JOB_DATES.map((d, i) =>
+    jobCandidate({ id: `job_g${i + 1}`, scheduledStart: d, workStatus: i === 0 ? "scheduled" : "complete rated" })
+  );
+}
+
 export const JOB_DETAIL: JobDetail = {
   id: "job_1",
   customerId: "cus_1",
@@ -101,6 +139,7 @@ export function stubDeps(over: Partial<JobsDeps> = {}) {
   const freshnessCalls: MirrorResource[][] = [];
   const deps: JobsDeps = {
     findCustomerCandidates: async () => [CUSTOMER_CANDIDATE],
+    findJobCandidates: async () => [],
     getCustomerDetail: async (id) => (id === CUSTOMER_DETAIL.id ? CUSTOMER_DETAIL : null),
     getJobDetail: async (id) => (id === JOB_DETAIL.id ? JOB_DETAIL : null),
     getScheduleDays: async () => [],

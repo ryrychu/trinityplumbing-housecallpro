@@ -5,12 +5,13 @@ import { getJobDetail } from "@/lib/mobile/jobDetail";
 import { listOpenEstimates, listUnpaidInvoices } from "@/lib/mobile/money";
 import { mirrorSyncedAt } from "@/lib/mobile/mirrorFreshness";
 import { getDashboardSnapshot, getScheduleDays } from "@/lib/dashboard/queries";
-import { findCustomerCandidates } from "./searchQueries";
+import { findCustomerCandidates, findJobCandidates } from "./searchQueries";
 import type { JobsDeps } from "./server";
 
 export function liveJobsDeps(): JobsDeps {
   return {
     findCustomerCandidates,
+    findJobCandidates,
     getCustomerDetail,
     getJobDetail,
     getScheduleDays,

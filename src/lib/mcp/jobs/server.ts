@@ -12,16 +12,23 @@ import type { DashboardSnapshot, TodayScheduleRow } from "@/lib/dashboard/querie
 import { localDateKey } from "@/lib/notifications/schedule";
 import { dayLabelFromKey, timeLabel } from "@/lib/slack/format";
 import { formatMoney } from "@/lib/mcp/pricebook";
+import { scheduleStatus } from "@/lib/dashboard/queries";
 import {
+  JOB_MATCH_LIMIT,
   customerName,
   formatAddress,
   matchCustomer,
+  matchJob,
   rankCustomers,
+  rankJobs,
   searchNote,
   searchTerms,
   termsMatched,
   type CustomerCandidate,
   type CustomerMatch,
+  type JobCandidate,
+  type JobMatchOn,
+  type Match,
 } from "./search";
 
 export interface ScheduleDay {
@@ -34,6 +41,7 @@ export type Revenue = Pick<DashboardSnapshot, "revenueBookedThisWeekCents" | "re
 // Injected so tests can stub every lookup without touching Supabase.
 export interface JobsDeps {
   findCustomerCandidates(terms: string[], phoneDigits: string | null): Promise<CustomerCandidate[]>;
+  findJobCandidates(terms: string[]): Promise<JobCandidate[]>;
   getCustomerDetail(id: string): Promise<CustomerDetail | null>;
   getJobDetail(id: string): Promise<JobDetail | null>;
   getScheduleDays(anchor: Date, days: number): Promise<ScheduleDay[]>;
@@ -51,7 +59,13 @@ const READ_ONLY = { readOnlyHint: true, destructiveHint: false, idempotentHint: 
 const SOURCE_NOTE =
   "Data comes from Trinity's copy of HouseCall Pro, updated about every 15 minutes; dataAsOf is when it was last synced. Read-only.";
 
-type ToolResult = { isError?: boolean; content: { type: "text"; text: string }[] };
+// Sent to ChatGPT when it connects. MCP can't make ChatGPT ask the user
+// anything; this, the tool descriptions and each result's note are how the
+// connector gets it to check partial matches before answering.
+export const SERVER_INSTRUCTIONS =
+  "Trinity Jobs searches Trinity Plumbing's copy of HouseCall Pro. People ask in plain language by business name or street (\"the jobs at Planet Fitness on Aviation Rd\"), and customers are often filed under an owner or company name instead. Use search_jobs for questions about work at a place, and find_customer for questions about a customer. When a result has unmatchedTerms, tell the user which words didn't match, show what did match, and ask them to confirm before answering. When nothing matches, ask for a street, town, customer name or rough date. Never invent jobs or customers that aren't in a result.";
+
+type ToolResult ={ isError?: boolean; content: { type: "text"; text: string }[] };
 
 function dateOf(iso: string | null): string | null {
   return iso ? localDateKey(new Date(iso)) : null;
@@ -98,8 +112,25 @@ function customerResult(c: CustomerCandidate, m: CustomerMatch) {
   };
 }
 
+function jobResult(j: JobCandidate, matched: Match<JobMatchOn>[]) {
+  return {
+    id: j.id,
+    date: dateOf(j.scheduledStart),
+    time: j.scheduledStart ? timeLabel(j.scheduledStart) : null,
+    status: scheduleStatus({ work_status: j.workStatus, raw: { work_timestamps: { on_my_way_at: j.onMyWayAt } } }),
+    service: j.jobType?.trim() || j.description?.split("\n")[0]?.trim() || null,
+    address: formatAddress({ street: j.street, city: j.city }),
+    customer: j.customer?.name ?? null,
+    company: j.customer?.company ?? null,
+    customerId: j.customerId,
+    amount: formatMoney(j.amountCents),
+    amountCents: j.amountCents,
+    matched,
+  };
+}
+
 export function createJobsMcpServer(deps: JobsDeps): McpServer {
-  const server = new McpServer({ name: "trinity-jobs", version: "1.0.0" });
+  const server = new McpServer({ name: "trinity-jobs", version: "1.0.0" }, { instructions: SERVER_INSTRUCTIONS });
 
   server.registerTool(
     "find_customer",
@@ -363,6 +394,60 @@ export function createJobsMcpServer(deps: JobsDeps): McpServer {
         });
       } catch (err) {
         return fail("get_money_summary", "Couldn't read estimates and invoices just now. Try again in a minute.", err);
+      }
+    }
+  );
+
+  server.registerTool(
+    "search_jobs",
+    {
+      title: "Search jobs",
+      description: `Find jobs by place, business or kind of work: the job's street, town, description or job type, or the customer's name, company or tag. Pass the user's words as they said them. Each job lists which words matched it. Returns up to ${JOB_MATCH_LIMIT}, the jobs matching the most words first, then newest first. ${SOURCE_NOTE}`,
+      inputSchema: {
+        query: z
+          .string()
+          .min(1)
+          .max(200)
+          .describe("The user's words, e.g. 'planet fitness on aviation rd' or 'water heater in Troy'."),
+      },
+      annotations: READ_ONLY,
+    },
+    async ({ query }) => {
+      // Jobs have no phone field, so a phone number in the question is ignored here.
+      const { terms } = searchTerms(query);
+      if (terms.length === 0) {
+        return ok(deps, ["jobs", "customers"], {
+          query,
+          terms,
+          matchedTerms: [],
+          unmatchedTerms: [],
+          count: 0,
+          truncated: false,
+          jobs: [],
+          note: searchNote("jobs", [], [], [], 0, null),
+        });
+      }
+      try {
+        const candidates = await deps.findJobCandidates(terms);
+        const ranked = rankJobs(
+          candidates.map((job) => ({ job, matched: matchJob(job, terms) })).filter((r) => r.matched.length > 0)
+        );
+        const shown = ranked.slice(0, JOB_MATCH_LIMIT);
+        const truncated = ranked.length > JOB_MATCH_LIMIT;
+        const { matchedTerms, unmatchedTerms } = termsMatched(terms, ranked.map((r) => r.matched));
+        const note = searchNote("jobs", terms, matchedTerms, unmatchedTerms, shown.length, truncated ? JOB_MATCH_LIMIT : null);
+        return await ok(deps, ["jobs", "customers"], {
+          query,
+          terms,
+          matchedTerms,
+          unmatchedTerms,
+          count: shown.length,
+          truncated,
+          jobs: shown.map((r) => jobResult(r.job, r.matched)),
+          ...(note && { note }),
+        });
+      } catch (err) {
+        return fail("search_jobs", "Couldn't search jobs just now. Try again in a minute.", err);
       }
     }
   );

@@ -1,6 +1,17 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { CUSTOMER_CANDIDATE, GYM_CUSTOMER, NOW, SYNCED_AT, connect, scheduleRow, stubDeps, text } from "./fixtures";
-import type { JobsDeps } from "../server";
+import {
+  CUSTOMER_CANDIDATE,
+  GYM_CUSTOMER,
+  NOW,
+  SYNCED_AT,
+  connect,
+  gymJobs,
+  jobCandidate,
+  scheduleRow,
+  stubDeps,
+  text,
+} from "./fixtures";
+import { SERVER_INSTRUCTIONS, type JobsDeps } from "../server";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -267,7 +278,7 @@ describe("get_money_summary", () => {
     expect(text(res)).not.toMatch(/Pat Example/);
   });
 
-  it("registers exactly the five tools", async () => {
+  it("registers exactly the six tools", async () => {
     const client = await connect(stubDeps().deps);
     const { tools } = await client.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual([
@@ -276,6 +287,7 @@ describe("get_money_summary", () => {
       "get_job",
       "get_money_summary",
       "get_schedule",
+      "search_jobs",
     ]);
   });
 });
@@ -375,5 +387,129 @@ describe("find_customer", () => {
     const res = await client.callTool({ name: "find_customer", arguments: { query: "pat" } });
     expect(res.isError).toBe(true);
     expect(text(res)).toBe("Couldn't search customers just now. Try again in a minute.");
+  });
+});
+
+describe("search_jobs", () => {
+  it("finds the gym's jobs by street and asks to confirm the business name", async () => {
+    const calls: string[][] = [];
+    const { deps, freshnessCalls } = stubDeps({
+      findJobCandidates: async (terms) => {
+        calls.push(terms);
+        return gymJobs();
+      },
+    });
+    const client = await connect(deps);
+    const body = JSON.parse(
+      text(
+        await client.callTool({
+          name: "search_jobs",
+          arguments: { query: "find the jobs we did at planet fitness on aviation rd" },
+        })
+      )
+    );
+
+    expect(calls).toEqual([["planet", "fitness", "aviation"]]);
+    expect(body).toMatchObject({
+      terms: ["planet", "fitness", "aviation"],
+      matchedTerms: ["aviation"],
+      unmatchedTerms: ["planet", "fitness"],
+      count: 10,
+      truncated: false,
+      dataAsOf: SYNCED_AT,
+    });
+    expect(body.jobs.map((j: { id: string }) => j.id)).toEqual(gymJobs().map((j) => j.id));
+    expect(body.jobs[0]).toEqual({
+      id: "job_g1",
+      date: "2026-11-23",
+      time: "1:00 PM",
+      status: "Scheduled",
+      service: "Commercial Service Call Fee",
+      address: "99 Aviation Road, Queensbury",
+      customer: "Kay Example",
+      company: "Gymco",
+      customerId: "cus_gym",
+      amount: "$250.00",
+      amountCents: 25000,
+      matched: [{ term: "aviation", on: "job address" }],
+    });
+    expect(body.jobs[1].status).toBe("Completed");
+    expect(body.note).toBe(
+      'Nothing in Trinity\'s records mentions "planet", "fitness". These jobs matched "aviation". Show them to the user, say which words matched, and ask whether these are what they meant before treating them as the answer.'
+    );
+    expect(freshnessCalls).toEqual([["jobs", "customers"]]);
+  });
+
+  it("puts jobs matching more of the words first", async () => {
+    const { deps } = stubDeps({
+      findJobCandidates: async () => [
+        ...gymJobs(),
+        jobCandidate({ id: "job_p", scheduledStart: "2024-01-01T15:00:00Z", description: "Planet Fitness locker room" }),
+      ],
+    });
+    const client = await connect(deps);
+    const body = JSON.parse(
+      text(await client.callTool({ name: "search_jobs", arguments: { query: "planet fitness aviation" } }))
+    );
+    expect(body.jobs[0].id).toBe("job_p");
+    expect(body.unmatchedTerms).toEqual([]);
+    expect(body.note).toBeUndefined();
+  });
+
+  it("asks for another detail when nothing matches", async () => {
+    const { deps } = stubDeps({ findJobCandidates: async () => [jobCandidate({ id: "job_z" })] });
+    const client = await connect(deps);
+    const body = JSON.parse(text(await client.callTool({ name: "search_jobs", arguments: { query: "zebra" } })));
+    expect(body).toMatchObject({ count: 0, jobs: [], unmatchedTerms: ["zebra"] });
+    expect(body.note).toBe(
+      'Nothing in Trinity\'s records matched "zebra". Ask the user for another detail: the street or town, the customer\'s name, or roughly when the work was done.'
+    );
+  });
+
+  it("caps at 50 jobs and says so", async () => {
+    const { deps } = stubDeps({
+      findJobCandidates: async () => Array.from({ length: 60 }, (_, i) => jobCandidate({ id: `job_${i}` })),
+    });
+    const client = await connect(deps);
+    const body = JSON.parse(text(await client.callTool({ name: "search_jobs", arguments: { query: "aviation" } })));
+    expect(body.count).toBe(50);
+    expect(body.truncated).toBe(true);
+    expect(body.note).toBe("Showing the first 50; ask the user for a date or a town to narrow it down.");
+  });
+
+  it("asks for something to search when the question is only filler, without querying", async () => {
+    let queried = false;
+    const { deps } = stubDeps({
+      findJobCandidates: async () => {
+        queried = true;
+        return [];
+      },
+    });
+    const client = await connect(deps);
+    const body = JSON.parse(text(await client.callTool({ name: "search_jobs", arguments: { query: "show me the jobs" } })));
+    expect(queried).toBe(false);
+    expect(body).toMatchObject({ count: 0, jobs: [], note: "Give a name, business, street, town or phone number to search for." });
+  });
+
+  it("hides the raw error when the search fails", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const { deps } = stubDeps({
+      findJobCandidates: async () => {
+        throw new Error("job search failed: Kay Example, 99 Aviation Road");
+      },
+    });
+    const client = await connect(deps);
+    const res = await client.callTool({ name: "search_jobs", arguments: { query: "aviation" } });
+    expect(res.isError).toBe(true);
+    expect(text(res)).toBe("Couldn't search jobs just now. Try again in a minute.");
+  });
+});
+
+describe("server instructions", () => {
+  it("tells ChatGPT to confirm partial matches with the user", async () => {
+    const client = await connect(stubDeps().deps);
+    expect(client.getInstructions()).toBe(SERVER_INSTRUCTIONS);
+    expect(SERVER_INSTRUCTIONS).toContain("unmatchedTerms");
+    expect(SERVER_INSTRUCTIONS).toContain("search_jobs");
   });
 });
