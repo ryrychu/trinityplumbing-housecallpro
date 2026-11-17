@@ -54,7 +54,7 @@ Example: "find the jobs we did at planet fitness on aviation rd" → `terms: ["p
 - **Jobs by their own fields:** `jobs` rows where any of these contains the term (`ilike *term*`): `raw->address->>street`, `raw->address->>city`, `raw->>description`, `raw->job_fields->job_type->>name`. Limit 200 per term.
 - **Jobs by customer:** `customers` where `first_name`, `last_name`, `company` or `raw->>tags` contains the term (limit 50 per term). Then those customers' jobs (`.in("customer_id", ids)`, limit 300). A customer's *address* deliberately doesn't pull in its jobs: Ignitefh has 13 locations, and "aviation" must not return all 13 locations' jobs.
 
-The candidate rows are merged and de-duplicated by job id. Their customers are then loaded with `selectByIds` (`id, first_name, last_name, company, tags`).
+The candidate rows are merged and de-duplicated by job id. Their customers are then loaded by id in chunks of 200 (`id, first_name, last_name, company, tags`). **A failed customer lookup fails the search** (`job search failed: …`). It must not silently drop jobs that matched only on a customer's name or tag. That's why it doesn't use the never-throwing `selectByIds`. Revised 2026-11-18 after review.
 
 Each candidate carries: `id`, `customerId`, `scheduledStart`, `workStatus`, `onMyWayAt` (for `scheduleStatus`), `amountCents`, `street`, `city`, `description`, `jobType`, `customer: { id, name, company, tags } | null`.
 
