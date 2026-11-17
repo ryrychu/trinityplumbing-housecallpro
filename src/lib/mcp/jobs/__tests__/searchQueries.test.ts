@@ -133,6 +133,15 @@ describe("findJobCandidates", () => {
     await expect(findJobCandidates(["aviation"])).rejects.toThrow("job search failed: boom");
   });
 
+  it("fails the search when the customer lookup fails, instead of dropping jobs", async () => {
+    fakeSupabase((c) => {
+      if (c.table === "jobs") return { data: [JOB_ROW], error: null };
+      if (c.table === "customers" && c.in) return { data: null, error: { message: "lookup down" } };
+      return { data: [], error: null };
+    });
+    await expect(findJobCandidates(["aviation"])).rejects.toThrow("job search failed: lookup down");
+  });
+
   it("does not query when there are no words", async () => {
     const calls = fakeSupabase(() => ({ data: [], error: null }));
     expect(await findJobCandidates([])).toEqual([]);

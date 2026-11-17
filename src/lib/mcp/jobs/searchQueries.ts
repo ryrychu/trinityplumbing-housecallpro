@@ -3,8 +3,10 @@
 // including inside raw JSON. search.ts then decides what really matched.
 // Spec: docs/superpowers/specs/2026-11-18-chatgpt-jobs-search-design.md
 import { getSupabaseServerClient } from "@/lib/supabase/client";
-import { selectByIds } from "@/lib/supabase/selectByIds";
 import type { CustomerAddress, CustomerCandidate, JobCandidate } from "./search";
+
+type Supabase = ReturnType<typeof getSupabaseServerClient>;
+const ID_CHUNK = 200;
 
 const JOB_COLUMNS =
   "id, customer_id, scheduled_start, work_status, total_amount_cents, street:raw->address->>street, city:raw->address->>city, description:raw->>description, job_type:raw->job_fields->job_type->>name, on_my_way_at:raw->work_timestamps->>on_my_way_at";
@@ -94,12 +96,7 @@ export async function findJobCandidates(terms: string[]): Promise<JobCandidate[]
   const customerIds = Array.from(
     new Set(Array.from(rows.values()).map((r) => r.customer_id).filter((id): id is string => !!id))
   );
-  const customers = await selectByIds<CustomerNameRow>(
-    supabase,
-    "customers",
-    "id, first_name, last_name, company, tags",
-    customerIds
-  );
+  const customers = await customersById(supabase, customerIds);
   const byId = new Map(customers.map((c) => [c.id, c]));
 
   return Array.from(rows.values()).map((r) => toJobCandidate(r, r.customer_id ? byId.get(r.customer_id) : undefined));
@@ -128,6 +125,22 @@ export async function findCustomerCandidates(terms: string[], phoneDigits: strin
     for (const row of (r.data ?? []) as unknown as CustomerRow[]) rows.set(row.id, row);
   }
   return Array.from(rows.values()).map(toCustomerCandidate);
+}
+
+// Like selectByIds (chunked, so the id list never makes an over-long URL), but
+// a failure fails the search: a job found only by its customer's name or tag
+// must not silently vanish because the name lookup broke.
+async function customersById(supabase: Supabase, ids: string[]): Promise<CustomerNameRow[]> {
+  const out: CustomerNameRow[] = [];
+  for (let i = 0; i < ids.length; i += ID_CHUNK) {
+    const { data, error } = await supabase
+      .from("customers")
+      .select("id, first_name, last_name, company, tags")
+      .in("id", ids.slice(i, i + ID_CHUNK));
+    if (error) throw new Error(`job search failed: ${error.message}`);
+    out.push(...((data ?? []) as unknown as CustomerNameRow[]));
+  }
+  return out;
 }
 
 function toJobCandidate(r: JobRow, c: CustomerNameRow | undefined): JobCandidate {
