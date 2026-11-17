@@ -48,10 +48,26 @@ interface CustomerRow extends CustomerNameRow {
 // can change the meaning of a PostgREST or() filter.
 const anyContains = (columns: string[], term: string) => columns.map((c) => `${c}.ilike.%${term}%`).join(",");
 
-export async function findJobCandidates(terms: string[]): Promise<JobCandidate[]> {
-  if (terms.length === 0) return [];
+// `capped` is true when any query in the search returned exactly its row limit,
+// so the candidates may be only part of what matches.
+export interface Candidates<T> {
+  candidates: T[];
+  capped: boolean;
+}
+
+// Words that are JSON key names or values common to every address, so a hit in
+// raw->>addresses / raw->>tags says nothing about the customer.
+export const JSON_NOISE_WORDS = new Set([
+  "id", "name", "state", "city", "country", "type", "line", "latitude", "longitude", "service", "billing", "zip", "ny",
+]);
+
+const NEWEST_FIRST = { ascending: false, nullsFirst: false } as const;
+
+export async function findJobCandidates(terms: string[]): Promise<Candidates<JobCandidate>> {
+  if (terms.length === 0) return { candidates: [], capped: false };
   const supabase = getSupabaseServerClient();
 
+  let capped = false;
   const perTerm = await Promise.all(
     terms.map(async (term) => {
       const [byJob, byCustomer] = await Promise.all([
@@ -64,6 +80,7 @@ export async function findJobCandidates(terms: string[]): Promise<JobCandidate[]
               term
             )
           )
+          .order("scheduled_start", NEWEST_FIRST)
           .limit(JOBS_PER_TERM),
         // A customer's own addresses deliberately don't pull in its jobs: a
         // customer with 13 locations would return every location's jobs.
@@ -78,15 +95,19 @@ export async function findJobCandidates(terms: string[]): Promise<JobCandidate[]
 
       const jobs = (byJob.data ?? []) as unknown as JobRow[];
       const ids = ((byCustomer.data ?? []) as unknown as { id: string }[]).map((r) => r.id);
+      if (jobs.length === JOBS_PER_TERM || ids.length === CUSTOMERS_PER_TERM) capped = true;
       if (ids.length === 0) return jobs;
 
       const theirJobs = await supabase
         .from("jobs")
         .select(JOB_COLUMNS)
         .in("customer_id", ids)
+        .order("scheduled_start", NEWEST_FIRST)
         .limit(JOBS_PER_CUSTOMER_MATCH);
       if (theirJobs.error) throw new Error(`job search failed: ${theirJobs.error.message}`);
-      return [...jobs, ...((theirJobs.data ?? []) as unknown as JobRow[])];
+      const theirRows = (theirJobs.data ?? []) as unknown as JobRow[];
+      if (theirRows.length === JOBS_PER_CUSTOMER_MATCH) capped = true;
+      return [...jobs, ...theirRows];
     })
   );
 
@@ -99,20 +120,34 @@ export async function findJobCandidates(terms: string[]): Promise<JobCandidate[]
   const customers = await customersById(supabase, customerIds);
   const byId = new Map(customers.map((c) => [c.id, c]));
 
-  return Array.from(rows.values()).map((r) => toJobCandidate(r, r.customer_id ? byId.get(r.customer_id) : undefined));
+  return {
+    candidates: Array.from(rows.values()).map((r) => toJobCandidate(r, r.customer_id ? byId.get(r.customer_id) : undefined)),
+    capped,
+  };
 }
 
-export async function findCustomerCandidates(terms: string[], phoneDigits: string | null): Promise<CustomerCandidate[]> {
-  if (terms.length === 0 && !phoneDigits) return [];
+export async function findCustomerCandidates(
+  terms: string[],
+  phoneDigits: string | null
+): Promise<Candidates<CustomerCandidate>> {
+  if (terms.length === 0 && !phoneDigits) return { candidates: [], capped: false };
   const supabase = getSupabaseServerClient();
 
   const filters = terms.map((t) =>
-    anyContains(["first_name", "last_name", "company", "city", "notes", "raw->>addresses", "raw->>tags"], t)
+    anyContains(
+      [
+        "first_name", "last_name", "company", "city", "notes", "address_line1",
+        ...(JSON_NOISE_WORDS.has(t) ? [] : ["raw->>addresses", "raw->>tags"]),
+      ],
+      t
+    )
   );
   // The same two phone patterns as the mobile app's searchCustomers: the digits
   // as typed, and with `%` between each digit so a punctuated number matches.
   if (phoneDigits) {
-    filters.push(`phone.ilike.%${phoneDigits}%,phone.ilike.%${phoneDigits.split("").join("%")}%`);
+    // Stored numbers have no leading 1, so an 11-digit search uses its last 10.
+    const local = phoneDigits.length === 11 && phoneDigits.startsWith("1") ? phoneDigits.slice(1) : phoneDigits;
+    filters.push(`phone.ilike.%${local}%,phone.ilike.%${local.split("").join("%")}%`);
   }
 
   const results = await Promise.all(
@@ -120,11 +155,13 @@ export async function findCustomerCandidates(terms: string[], phoneDigits: strin
   );
 
   const rows = new Map<string, CustomerRow>();
+  let capped = false;
   for (const r of results) {
     if (r.error) throw new Error(`customer search failed: ${r.error.message}`);
+    if ((r.data ?? []).length === CUSTOMERS_PER_TERM) capped = true;
     for (const row of (r.data ?? []) as unknown as CustomerRow[]) rows.set(row.id, row);
   }
-  return Array.from(rows.values()).map(toCustomerCandidate);
+  return { candidates: Array.from(rows.values()).map(toCustomerCandidate), capped };
 }
 
 // Like selectByIds (chunked, so the id list never makes an over-long URL), but

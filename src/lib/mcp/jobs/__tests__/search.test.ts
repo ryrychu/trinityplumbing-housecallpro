@@ -96,6 +96,12 @@ describe("searchTerms", () => {
     });
   });
 
+  it("does not mistake a date or ZIP+4 for a phone number", () => {
+    expect(searchTerms("2026-11-18").phoneDigits).toBeNull();
+    expect(searchTerms("12804-1234").phoneDigits).toBeNull();
+    expect(searchTerms("555-0142").phoneDigits).toBe("5550142");
+  });
+
   it("returns no words for a question made only of filler", () => {
     expect(searchTerms("find the jobs")).toEqual({ terms: [], phoneDigits: null, dropped: [] });
   });
@@ -201,33 +207,63 @@ describe("termsMatched", () => {
 
 describe("searchNote", () => {
   it("asks for something to search when there are no words", () => {
-    expect(searchNote("jobs", [], [], [], 0, null)).toBe(
+    expect(searchNote("jobs", [], [], [], 0, null, false)).toBe(
+      "Give a street, town, business or customer name, or kind of work to search for. To find jobs by phone number, use find_customer, then get_customer_history."
+    );
+    expect(searchNote("customers", [], [], [], 0, null, false)).toBe(
       "Give a name, business, street, town or phone number to search for."
     );
   });
 
   it("asks for another detail when nothing matched", () => {
-    expect(searchNote("jobs", ["zebra", "quartz"], [], ["zebra", "quartz"], 0, null)).toBe(
+    expect(searchNote("jobs", ["zebra", "quartz"], [], ["zebra", "quartz"], 0, null, false)).toBe(
       'Nothing in Trinity\'s records matched "zebra", "quartz". Ask the user for another detail: the street or town, the customer\'s name, or roughly when the work was done.'
     );
   });
 
+  it("does not claim nothing matched when a query hit its cap", () => {
+    expect(searchNote("jobs", ["zebra"], [], ["zebra"], 0, null, true)).toBe(
+      'Nothing among the records checked matched "zebra", but some words matched more records than one search covers. Ask the user for a date, house number or customer name.'
+    );
+    expect(searchNote("customers", ["zebra"], [], ["zebra"], 0, null, true)).toBe(
+      'Nothing among the records checked matched "zebra", but some words matched more records than one search covers. Ask the user for the customer\'s name or street.'
+    );
+  });
+
   it("tells ChatGPT to confirm a partial match", () => {
-    expect(searchNote("jobs", ["planet", "fitness", "aviation"], ["aviation"], ["planet", "fitness"], 10, null)).toBe(
+    expect(searchNote("jobs", ["planet", "fitness", "aviation"], ["aviation"], ["planet", "fitness"], 10, null, false)).toBe(
       'Nothing in Trinity\'s records mentions "planet", "fitness". These jobs matched "aviation". Show them to the user, say which words matched, and ask whether these are what they meant before treating them as the answer.'
     );
   });
 
+  it("softens the partial-match opening when capped", () => {
+    expect(searchNote("jobs", ["planet", "aviation"], ["aviation"], ["planet"], 10, null, true)).toBe(
+      'None of the records checked mention "planet". These jobs matched "aviation". Show them to the user, say which words matched, and ask whether these are what they meant before treating them as the answer. Some words matched more records than one search covers, so this list may be incomplete; ask the user for a date, house number or customer name to narrow it down.'
+    );
+  });
+
   it("says nothing when every word matched", () => {
-    expect(searchNote("customers", ["smith"], ["smith"], [], 3, null)).toBeUndefined();
+    expect(searchNote("customers", ["smith"], ["smith"], [], 3, null, false)).toBeUndefined();
+  });
+
+  it("warns the list may be incomplete when capped, even with every word matched", () => {
+    expect(searchNote("customers", ["smith"], ["smith"], [], 3, null, true)).toBe(
+      "Some words matched more records than one search covers, so this list may be incomplete; ask the user for the customer's name or street to narrow it down."
+    );
   });
 
   it("adds the truncation advice, alone or after the partial-match note", () => {
-    expect(searchNote("jobs", ["aviation"], ["aviation"], [], 50, 50)).toBe(
-      "Showing the first 50; ask the user for a date or a town to narrow it down."
+    expect(searchNote("jobs", ["aviation"], ["aviation"], [], 50, 50, false)).toBe(
+      "Showing the first 50; ask the user for a date, house number or customer name to narrow it down."
     );
-    expect(searchNote("customers", ["smith", "zz"], ["smith"], ["zz"], 25, 25)).toBe(
-      'Nothing in Trinity\'s records mentions "zz". These customers matched "smith". Show them to the user, say which words matched, and ask whether these are what they meant before treating them as the answer. Showing the first 25; ask the user for a date or a town to narrow it down.'
+    expect(searchNote("customers", ["smith", "zz"], ["smith"], ["zz"], 25, 25, false)).toBe(
+      'Nothing in Trinity\'s records mentions "zz". These customers matched "smith". Show them to the user, say which words matched, and ask whether these are what they meant before treating them as the answer. Showing the first 25; ask the user for the customer\'s name or street to narrow it down.'
+    );
+  });
+
+  it("prefers the truncation advice over the incomplete warning", () => {
+    expect(searchNote("jobs", ["aviation"], ["aviation"], [], 50, 50, true)).toBe(
+      "Showing the first 50; ask the user for a date, house number or customer name to narrow it down."
     );
   });
 });

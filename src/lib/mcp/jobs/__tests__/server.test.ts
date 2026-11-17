@@ -298,7 +298,7 @@ describe("find_customer", () => {
     const { deps, freshnessCalls } = stubDeps({
       findCustomerCandidates: async (terms, phone) => {
         calls.push([terms, phone]);
-        return [CUSTOMER_CANDIDATE, GYM_CUSTOMER];
+        return { candidates: [CUSTOMER_CANDIDATE, GYM_CUSTOMER], capped: false };
       },
     });
     const client = await connect(deps);
@@ -339,7 +339,7 @@ describe("find_customer", () => {
     const { deps } = stubDeps({
       findCustomerCandidates: async (terms, phone) => {
         calls.push([terms, phone]);
-        return [CUSTOMER_CANDIDATE];
+        return { candidates: [CUSTOMER_CANDIDATE], capped: false };
       },
     });
     const client = await connect(deps);
@@ -352,14 +352,26 @@ describe("find_customer", () => {
 
   it("flags results past the match cap", async () => {
     const { deps } = stubDeps({
-      findCustomerCandidates: async () =>
-        Array.from({ length: 30 }, (_, i) => ({ ...CUSTOMER_CANDIDATE, id: `cus_${i}`, lastName: "Smith" })),
+      findCustomerCandidates: async () => ({
+        candidates: Array.from({ length: 30 }, (_, i) => ({ ...CUSTOMER_CANDIDATE, id: `cus_${i}`, lastName: "Smith" })),
+        capped: false,
+      }),
     });
     const client = await connect(deps);
     const body = JSON.parse(text(await client.callTool({ name: "find_customer", arguments: { query: "smith" } })));
     expect(body.count).toBe(25);
     expect(body.truncated).toBe(true);
-    expect(body.note).toBe("Showing the first 25; ask the user for a date or a town to narrow it down.");
+    expect(body.note).toBe("Showing the first 25; ask the user for the customer's name or street to narrow it down.");
+  });
+
+  it("marks the result truncated and incomplete when a query hit its cap", async () => {
+    const { deps } = stubDeps({
+      findCustomerCandidates: async () => ({ candidates: [GYM_CUSTOMER], capped: true }),
+    });
+    const client = await connect(deps);
+    const body = JSON.parse(text(await client.callTool({ name: "find_customer", arguments: { query: "aviation" } })));
+    expect(body.truncated).toBe(true);
+    expect(body.note).toContain("this list may be incomplete; ask the user for the customer's name or street");
   });
 
   it("asks for something to search when the question is only filler, without querying", async () => {
@@ -367,7 +379,7 @@ describe("find_customer", () => {
     const { deps } = stubDeps({
       findCustomerCandidates: async () => {
         queried = true;
-        return [];
+        return { candidates: [], capped: false };
       },
     });
     const client = await connect(deps);
@@ -396,7 +408,7 @@ describe("search_jobs", () => {
     const { deps, freshnessCalls } = stubDeps({
       findJobCandidates: async (terms) => {
         calls.push(terms);
-        return gymJobs();
+        return { candidates: gymJobs(), capped: false };
       },
     });
     const client = await connect(deps);
@@ -442,10 +454,13 @@ describe("search_jobs", () => {
 
   it("puts jobs matching more of the words first", async () => {
     const { deps } = stubDeps({
-      findJobCandidates: async () => [
-        ...gymJobs(),
-        jobCandidate({ id: "job_p", scheduledStart: "2024-01-01T15:00:00Z", description: "Planet Fitness locker room" }),
-      ],
+      findJobCandidates: async () => ({
+        candidates: [
+          ...gymJobs(),
+          jobCandidate({ id: "job_p", scheduledStart: "2024-01-01T15:00:00Z", description: "Planet Fitness locker room" }),
+        ],
+        capped: false,
+      }),
     });
     const client = await connect(deps);
     const body = JSON.parse(
@@ -457,7 +472,7 @@ describe("search_jobs", () => {
   });
 
   it("asks for another detail when nothing matches", async () => {
-    const { deps } = stubDeps({ findJobCandidates: async () => [jobCandidate({ id: "job_z" })] });
+    const { deps } = stubDeps({ findJobCandidates: async () => ({ candidates: [jobCandidate({ id: "job_z" })], capped: false }) });
     const client = await connect(deps);
     const body = JSON.parse(text(await client.callTool({ name: "search_jobs", arguments: { query: "zebra" } })));
     expect(body).toMatchObject({ count: 0, jobs: [], unmatchedTerms: ["zebra"] });
@@ -468,13 +483,26 @@ describe("search_jobs", () => {
 
   it("caps at 50 jobs and says so", async () => {
     const { deps } = stubDeps({
-      findJobCandidates: async () => Array.from({ length: 60 }, (_, i) => jobCandidate({ id: `job_${i}` })),
+      findJobCandidates: async () => ({
+        candidates: Array.from({ length: 60 }, (_, i) => jobCandidate({ id: `job_${i}` })),
+        capped: false,
+      }),
     });
     const client = await connect(deps);
     const body = JSON.parse(text(await client.callTool({ name: "search_jobs", arguments: { query: "aviation" } })));
     expect(body.count).toBe(50);
     expect(body.truncated).toBe(true);
-    expect(body.note).toBe("Showing the first 50; ask the user for a date or a town to narrow it down.");
+    expect(body.note).toBe("Showing the first 50; ask the user for a date, house number or customer name to narrow it down.");
+  });
+
+  it("marks the result truncated and incomplete when a query hit its cap", async () => {
+    const { deps } = stubDeps({
+      findJobCandidates: async () => ({ candidates: gymJobs(), capped: true }),
+    });
+    const client = await connect(deps);
+    const body = JSON.parse(text(await client.callTool({ name: "search_jobs", arguments: { query: "aviation" } })));
+    expect(body.truncated).toBe(true);
+    expect(body.note).toContain("this list may be incomplete; ask the user for a date, house number or customer name");
   });
 
   it("asks for something to search when the question is only filler, without querying", async () => {
@@ -482,13 +510,13 @@ describe("search_jobs", () => {
     const { deps } = stubDeps({
       findJobCandidates: async () => {
         queried = true;
-        return [];
+        return { candidates: [], capped: false };
       },
     });
     const client = await connect(deps);
     const body = JSON.parse(text(await client.callTool({ name: "search_jobs", arguments: { query: "show me the jobs" } })));
     expect(queried).toBe(false);
-    expect(body).toMatchObject({ count: 0, jobs: [], note: "Give a name, business, street, town or phone number to search for." });
+    expect(body).toMatchObject({ count: 0, jobs: [], note: "Give a street, town, business or customer name, or kind of work to search for. To find jobs by phone number, use find_customer, then get_customer_history." });
   });
 
   it("hides the raw error when the search fails", async () => {

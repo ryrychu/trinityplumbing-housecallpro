@@ -40,7 +40,9 @@ export function searchTerms(query: string): SearchWords {
   let phoneDigits: string | null = null;
   for (const run of rest.match(DIGIT_RUN) ?? []) {
     const digits = run.replace(/\D/g, "");
-    if (digits.length >= 7 && digits.length <= 11) {
+    // Seven (no area code), ten, or eleven with a leading 1. Dates and ZIP+4
+    // codes are other digit counts, so they stay searchable words.
+    if (digits.length === 7 || digits.length === 10 || (digits.length === 11 && digits.startsWith("1"))) {
       phoneDigits = digits;
       rest = rest.replace(run, " ");
       break;
@@ -203,27 +205,41 @@ export function termsMatched(
 const quoted = (words: string[]) => words.map((w) => `"${w}"`).join(", ");
 
 // The note is how the connector gets ChatGPT to check with the user: it can't
-// ask the user itself, but it can tell ChatGPT exactly what to say.
+// ask the user itself, but it can tell ChatGPT exactly what to say. `capped`
+// means a database query hit its row limit, so the candidates may be a subset.
 export function searchNote(
   kind: "jobs" | "customers",
   terms: string[],
   matchedTerms: string[],
   unmatchedTerms: string[],
   count: number,
-  truncatedAt: number | null
+  truncatedAt: number | null,
+  capped: boolean
 ): string | undefined {
-  if (terms.length === 0) return "Give a name, business, street, town or phone number to search for.";
+  const advice = kind === "jobs" ? "a date, house number or customer name" : "the customer's name or street";
+  if (terms.length === 0) {
+    return kind === "jobs"
+      ? "Give a street, town, business or customer name, or kind of work to search for. To find jobs by phone number, use find_customer, then get_customer_history."
+      : "Give a name, business, street, town or phone number to search for.";
+  }
   if (count === 0) {
-    return `Nothing in Trinity's records matched ${quoted(terms)}. Ask the user for another detail: the street or town, the customer's name, or roughly when the work was done.`;
+    return capped
+      ? `Nothing among the records checked matched ${quoted(terms)}, but some words matched more records than one search covers. Ask the user for ${advice}.`
+      : `Nothing in Trinity's records matched ${quoted(terms)}. Ask the user for another detail: the street or town, the customer's name, or roughly when the work was done.`;
   }
   const parts: string[] = [];
   if (unmatchedTerms.length > 0) {
+    const opening = capped ? "None of the records checked mention" : "Nothing in Trinity's records mentions";
     parts.push(
-      `Nothing in Trinity's records mentions ${quoted(unmatchedTerms)}. These ${kind} matched ${quoted(matchedTerms)}. Show them to the user, say which words matched, and ask whether these are what they meant before treating them as the answer.`
+      `${opening} ${quoted(unmatchedTerms)}. These ${kind} matched ${quoted(matchedTerms)}. Show them to the user, say which words matched, and ask whether these are what they meant before treating them as the answer.`
     );
   }
   if (truncatedAt !== null) {
-    parts.push(`Showing the first ${truncatedAt}; ask the user for a date or a town to narrow it down.`);
+    parts.push(`Showing the first ${truncatedAt}; ask the user for ${advice} to narrow it down.`);
+  } else if (capped) {
+    parts.push(
+      `Some words matched more records than one search covers, so this list may be incomplete; ask the user for ${advice} to narrow it down.`
+    );
   }
   return parts.length > 0 ? parts.join(" ") : undefined;
 }

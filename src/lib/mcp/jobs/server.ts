@@ -30,6 +30,7 @@ import {
   type JobMatchOn,
   type Match,
 } from "./search";
+import type { Candidates } from "./searchQueries";
 
 export interface ScheduleDay {
   dateKey: string;
@@ -40,8 +41,8 @@ export type Revenue = Pick<DashboardSnapshot, "revenueBookedThisWeekCents" | "re
 
 // Injected so tests can stub every lookup without touching Supabase.
 export interface JobsDeps {
-  findCustomerCandidates(terms: string[], phoneDigits: string | null): Promise<CustomerCandidate[]>;
-  findJobCandidates(terms: string[]): Promise<JobCandidate[]>;
+  findCustomerCandidates(terms: string[], phoneDigits: string | null): Promise<Candidates<CustomerCandidate>>;
+  findJobCandidates(terms: string[]): Promise<Candidates<JobCandidate>>;
   getCustomerDetail(id: string): Promise<CustomerDetail | null>;
   getJobDetail(id: string): Promise<JobDetail | null>;
   getScheduleDays(anchor: Date, days: number): Promise<ScheduleDay[]>;
@@ -65,7 +66,7 @@ const SOURCE_NOTE =
 export const SERVER_INSTRUCTIONS =
   "Trinity Jobs searches Trinity Plumbing's copy of HouseCall Pro. People ask in plain language by business name or street (\"the jobs at Planet Fitness on Aviation Rd\"), and customers are often filed under an owner or company name instead. Use search_jobs for questions about work at a place, and find_customer for questions about a customer. When a result has unmatchedTerms, tell the user which words didn't match, show what did match, and ask them to confirm before answering. When nothing matches, ask for a street, town, customer name or rough date. Never invent jobs or customers that aren't in a result.";
 
-type ToolResult ={ isError?: boolean; content: { type: "text"; text: string }[] };
+type ToolResult = { isError?: boolean; content: { type: "text"; text: string }[] };
 
 function dateOf(iso: string | null): string | null {
   return iso ? localDateKey(new Date(iso)) : null;
@@ -159,18 +160,18 @@ export function createJobsMcpServer(deps: JobsDeps): McpServer {
           count: 0,
           truncated: false,
           customers: [],
-          note: searchNote("customers", [], [], [], 0, null),
+          note: searchNote("customers", [], [], [], 0, null, false),
         });
       }
       try {
-        const candidates = await deps.findCustomerCandidates(words.terms, words.phoneDigits);
+        const { candidates, capped } = await deps.findCustomerCandidates(words.terms, words.phoneDigits);
         const ranked = rankCustomers(
           candidates
             .map((customer) => ({ customer, ...matchCustomer(customer, words.terms, words.phoneDigits) }))
             .filter((r) => r.matched.length > 0)
         );
         const shown = ranked.slice(0, CUSTOMER_MATCH_LIMIT);
-        const truncated = ranked.length > CUSTOMER_MATCH_LIMIT;
+        const truncated = ranked.length > CUSTOMER_MATCH_LIMIT || capped;
         const { matchedTerms, unmatchedTerms } = termsMatched(terms, ranked.map((r) => r.matched));
         const note = searchNote(
           "customers",
@@ -178,7 +179,8 @@ export function createJobsMcpServer(deps: JobsDeps): McpServer {
           matchedTerms,
           unmatchedTerms,
           shown.length,
-          truncated ? CUSTOMER_MATCH_LIMIT : null
+          ranked.length > CUSTOMER_MATCH_LIMIT ? CUSTOMER_MATCH_LIMIT : null,
+          capped
         );
         return await ok(deps, ["customers"], {
           query,
@@ -402,7 +404,7 @@ export function createJobsMcpServer(deps: JobsDeps): McpServer {
     "search_jobs",
     {
       title: "Search jobs",
-      description: `Find jobs by place, business or kind of work: the job's street, town, description or job type, or the customer's name, company or tag. Pass the user's words as they said them. Each job lists which words matched it. Returns up to ${JOB_MATCH_LIMIT}, the jobs matching the most words first, then newest first. ${SOURCE_NOTE}`,
+      description: `Find jobs by place, business or kind of work: the job's street, town, description or job type, or the customer's name, company or tag. Pass the user's words as they said them. Each job lists which words matched it. Canceled jobs are included and marked Canceled. Returns up to ${JOB_MATCH_LIMIT}, the jobs matching the most words first, then newest first. ${SOURCE_NOTE}`,
       inputSchema: {
         query: z
           .string()
@@ -424,18 +426,26 @@ export function createJobsMcpServer(deps: JobsDeps): McpServer {
           count: 0,
           truncated: false,
           jobs: [],
-          note: searchNote("jobs", [], [], [], 0, null),
+          note: searchNote("jobs", [], [], [], 0, null, false),
         });
       }
       try {
-        const candidates = await deps.findJobCandidates(terms);
+        const { candidates, capped } = await deps.findJobCandidates(terms);
         const ranked = rankJobs(
           candidates.map((job) => ({ job, matched: matchJob(job, terms) })).filter((r) => r.matched.length > 0)
         );
         const shown = ranked.slice(0, JOB_MATCH_LIMIT);
-        const truncated = ranked.length > JOB_MATCH_LIMIT;
+        const truncated = ranked.length > JOB_MATCH_LIMIT || capped;
         const { matchedTerms, unmatchedTerms } = termsMatched(terms, ranked.map((r) => r.matched));
-        const note = searchNote("jobs", terms, matchedTerms, unmatchedTerms, shown.length, truncated ? JOB_MATCH_LIMIT : null);
+        const note = searchNote(
+          "jobs",
+          terms,
+          matchedTerms,
+          unmatchedTerms,
+          shown.length,
+          ranked.length > JOB_MATCH_LIMIT ? JOB_MATCH_LIMIT : null,
+          capped
+        );
         return await ok(deps, ["jobs", "customers"], {
           query,
           terms,

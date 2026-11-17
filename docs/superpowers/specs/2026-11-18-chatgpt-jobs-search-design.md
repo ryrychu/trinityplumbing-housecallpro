@@ -39,7 +39,7 @@ A pure function in `src/lib/mcp/jobs/search.ts`.
 3. Drop **street suffixes**: `rd, road, st, street, ave, av, avenue, dr, drive, ln, lane, blvd, boulevard, ct, court, pl, way, hwy, highway, rte, route, pkwy, parkway, tpke, turnpike, ext, extension, cir, circle, ter, terrace`.
 4. Drop tokens shorter than 2 characters. Numbers of 2 or more digits are kept, so a house number like "578" counts.
 5. De-duplicate, keeping first-seen order. Keep at most **5** terms. Extra terms go in `dropped`.
-6. **Phone:** this step runs first. The first run of digits joined only by spaces, dots, dashes, parentheses or `+` that holds **7 to 11 digits** is a phone number. `phoneDigits` is set to those digits, and the run is removed before the words are taken. Other numbers stay ordinary search words, such as a house number and a ZIP code with words between them ("578 Aviation Rd Queensbury 12804" has no phone number). Revised 2026-11-18 after review: the first rule, "7 or more digits in the whole query", read house number + ZIP as a phone.
+6. **Phone:** this step runs first. The first run of digits joined only by spaces, dots, dashes, parentheses or `+` that holds exactly **7 or 10 digits, or 11 digits starting with 1** is a phone number. Dates ("2026-11-18") and ZIP+4 codes have other digit counts, so they stay words. `phoneDigits` is set to those digits, and the run is removed before the words are taken. Other numbers stay ordinary search words, such as a house number and a ZIP code with words between them ("578 Aviation Rd Queensbury 12804" has no phone number). Revised 2026-11-18 after review: the first rule, "7 or more digits in the whole query", read house number + ZIP as a phone.
 
 Returns `{ terms: string[]; phoneDigits: string | null; dropped: string[] }`.
 
@@ -51,8 +51,8 @@ Example: "find the jobs we did at planet fitness on aviation rd" → `terms: ["p
 
 **Candidates:** `findJobCandidates(terms)` in `src/lib/mcp/jobs/searchQueries.ts`, a Supabase read. For each term, in parallel:
 
-- **Jobs by their own fields:** `jobs` rows where any of these contains the term (`ilike *term*`): `raw->address->>street`, `raw->address->>city`, `raw->>description`, `raw->job_fields->job_type->>name`. Limit 200 per term.
-- **Jobs by customer:** `customers` where `first_name`, `last_name`, `company` or `raw->>tags` contains the term (limit 50 per term). Then those customers' jobs (`.in("customer_id", ids)`, limit 300). A customer's *address* deliberately doesn't pull in its jobs: Ignitefh has 13 locations, and "aviation" must not return all 13 locations' jobs.
+- **Jobs by their own fields:** `jobs` rows where any of these contains the term (`ilike *term*`): `raw->address->>street`, `raw->address->>city`, `raw->>description`, `raw->job_fields->job_type->>name`. Newest first (`scheduled_start` descending, nulls last), limit 200 per term.
+- **Jobs by customer:** `customers` where `first_name`, `last_name`, `company` or `raw->>tags` contains the term (limit 50 per term). Then those customers' jobs (`.in("customer_id", ids)`, newest first, limit 300). A customer's *address* deliberately doesn't pull in its jobs: Ignitefh has 13 locations, and "aviation" must not return all 13 locations' jobs.
 
 The candidate rows are merged and de-duplicated by job id. Their customers are then loaded by id in chunks of 200 (`id, first_name, last_name, company, tags`). **A failed customer lookup fails the search** (`job search failed: …`). It must not silently drop jobs that matched only on a customer's name or tag. That's why it doesn't use the never-throwing `selectByIds`. Revised 2026-11-18 after review.
 
@@ -100,7 +100,7 @@ The database filter only pre-selects. **The matching in JavaScript decides what'
 
 **Input:** `query`, 1 to 200 characters (was 100).
 
-**Candidates:** `findCustomerCandidates(terms, phoneDigits)` in `searchQueries.ts`. For each term, in parallel: `customers` where any of `first_name`, `last_name`, `company`, `city`, `notes`, `raw->>addresses`, `raw->>tags` contains the term (limit 50 per term). If `phoneDigits` is set, also run the phone filters `searchCustomers` uses today: the digit substring, plus the separator-tolerant pattern. Select `id, first_name, last_name, company, phone, city, notes, tags, addresses:raw->addresses`.
+**Candidates:** `findCustomerCandidates(terms, phoneDigits)` in `searchQueries.ts`. For each term, in parallel: `customers` where any of `first_name`, `last_name`, `company`, `city`, `notes`, `address_line1` contains the term (limit 50 per term). `raw->>addresses` and `raw->>tags` are added too, unless the term is in `JSON_NOISE_WORDS` (`id, name, state, city, country, type, line, latitude, longitude, service, billing, zip, ny`), which would match JSON key names in every row. If `phoneDigits` is set, also run the phone filters `searchCustomers` uses today: the digit substring, plus the separator-tolerant pattern (an 11-digit number with a leading 1 uses its last 10 digits). Select `id, first_name, last_name, company, phone, city, notes, tags, addresses:raw->addresses`.
 
 **Matching:** `matchCustomer(candidate, terms, phoneDigits)` labels hits as `name`, `company`, `city`, `address`, `tag`, `note` or `phone`. For `address`, it records each matching saved address as `"street, city"` in `matchedAddresses`. Candidates with no labelled hit are dropped.
 
@@ -118,16 +118,19 @@ For reporting, `phoneDigits` counts as one more search word, shown as the digits
 
 ## Notes and instructions
 
-`searchNote(kind, terms, matchedTerms, unmatchedTerms, count)` is pure and builds the `note`:
+`searchNote(kind, terms, matchedTerms, unmatchedTerms, count, truncatedAt, capped)` is pure and builds the `note`:
 
 | Situation | Note |
 |---|---|
-| No usable search words (everything was filler) | `Give a name, business, street, town or phone number to search for.` (count 0) |
+| No usable search words (everything was filler) | customers: `Give a name, business, street, town or phone number to search for.` jobs: `Give a street, town, business or customer name, or kind of work to search for. To find jobs by phone number, use find_customer, then get_customer_history.` (count 0) |
 | Nothing matched | `Nothing in Trinity's records matched "a", "b". Ask the user for another detail: the street or town, the customer's name, or roughly when the work was done.` |
+| Nothing matched, and a query hit its cap | `Nothing among the records checked matched "a", but some words matched more records than one search covers. Ask the user for {ADVICE}.` |
 | Some words unmatched, results found | `Nothing in Trinity's records mentions "planet", "fitness". These {jobs|customers} matched "aviation". Show them to the user, say which words matched, and ask whether these are what they meant before treating them as the answer.` |
 | Every word matched | No `note` |
 
-If `truncated` is set, append: ` Showing the first {N}; ask the user for a date or a town to narrow it down.`
+With `capped`, the unmatched-words opening becomes `None of the records checked mention ...`. ADVICE is `a date, house number or customer name` for jobs and `the customer's name or street` for customers. If more than the limit matched, append ` Showing the first {N}; ask the user for {ADVICE} to narrow it down.` Otherwise, if `capped`, append ` Some words matched more records than one search covers, so this list may be incomplete; ask the user for {ADVICE} to narrow it down.`
+
+**Capped signal:** both candidate functions return `{ candidates, capped }`. `capped` is true when any query in the search returned exactly its limit (jobs 200, customers 50, a customer's jobs 300). The tools then set `truncated: true` even if fewer than the display limit matched.
 
 **Server instructions**, passed as `new McpServer({ name, version }, { instructions })`:
 

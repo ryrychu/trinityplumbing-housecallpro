@@ -138,8 +138,8 @@ export function scheduleRow(over: Partial<TodayScheduleRow>): TodayScheduleRow {
 export function stubDeps(over: Partial<JobsDeps> = {}) {
   const freshnessCalls: MirrorResource[][] = [];
   const deps: JobsDeps = {
-    findCustomerCandidates: async () => [CUSTOMER_CANDIDATE],
-    findJobCandidates: async () => [],
+    findCustomerCandidates: async () => ({ candidates: [CUSTOMER_CANDIDATE], capped: false }),
+    findJobCandidates: async () => ({ candidates: [], capped: false }),
     getCustomerDetail: async (id) => (id === CUSTOMER_DETAIL.id ? CUSTOMER_DETAIL : null),
     getJobDetail: async (id) => (id === JOB_DETAIL.id ? JOB_DETAIL : null),
     getScheduleDays: async () => [],
