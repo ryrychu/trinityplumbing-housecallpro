@@ -83,6 +83,19 @@ describe("searchTerms", () => {
     });
   });
 
+  it("finds a phone number among other words", () => {
+    expect(searchTerms("Kay at 518.555.0142")).toEqual({ terms: ["kay"], phoneDigits: "5185550142", dropped: [] });
+    expect(searchTerms("1-518-555-0142").phoneDigits).toBe("15185550142");
+  });
+
+  it("keeps a house number and ZIP code as words, not a phone number", () => {
+    expect(searchTerms("578 Aviation Rd Queensbury 12804")).toEqual({
+      terms: ["578", "aviation", "queensbury", "12804"],
+      phoneDigits: null,
+      dropped: [],
+    });
+  });
+
   it("returns no words for a question made only of filler", () => {
     expect(searchTerms("find the jobs")).toEqual({ terms: [], phoneDigits: null, dropped: [] });
   });
