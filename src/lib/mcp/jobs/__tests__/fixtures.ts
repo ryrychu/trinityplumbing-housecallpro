@@ -7,6 +7,7 @@ import type { JobDetail } from "@/lib/mobile/jobDetail";
 import type { MirrorResource } from "@/lib/mobile/mirrorFreshness";
 import type { TodayScheduleRow } from "@/lib/dashboard/queries";
 import { createJobsMcpServer, type JobsDeps } from "../server";
+import type { CustomerCandidate, JobCandidate } from "../search";
 
 export const SYNCED_AT = "2026-11-17T12:45:00.000Z";
 // 8:00 AM Eastern on Tue Nov 17 2026.
@@ -30,6 +31,73 @@ export const CUSTOMER_DETAIL: CustomerDetail = {
     { id: "job_2", scheduledStart: null, service: "Water heater repair", status: "Needs Scheduling", amountCents: null },
   ],
 };
+
+export const CUSTOMER_CANDIDATE: CustomerCandidate = {
+  id: "cus_1",
+  firstName: "Pat",
+  lastName: "Example",
+  company: null,
+  phone: "5185550142",
+  city: "Averill Park",
+  notes: null,
+  tags: [],
+  addresses: [{ street: "12 Elm St", city: "Averill Park" }],
+};
+
+// A gym owner billed under her own name with 13 locations; the Aviation Road
+// gym is the 10th saved address. Synthetic, modelled on the case that found
+// the gap.
+export const GYM_CUSTOMER: CustomerCandidate = {
+  id: "cus_gym",
+  firstName: "Kay ",
+  lastName: "Example",
+  company: "Gymco ",
+  phone: null,
+  city: "Albany",
+  notes: null,
+  tags: [],
+  addresses: Array.from({ length: 13 }, (_, i) =>
+    i === 9 ? { street: "99 Aviation Road", city: "Queensbury" } : { street: `${i + 1}0 Main St`, city: "Albany" }
+  ),
+};
+
+export function jobCandidate(over: Partial<JobCandidate> = {}): JobCandidate {
+  return {
+    id: "job_x",
+    customerId: "cus_gym",
+    scheduledStart: null,
+    workStatus: "complete rated",
+    onMyWayAt: null,
+    amountCents: 25000,
+    street: "99 Aviation Road",
+    city: "Queensbury",
+    description: "Commercial Service Call Fee",
+    jobType: null,
+    customer: { id: "cus_gym", name: "Kay Example", company: "Gymco", tags: [] },
+    ...over,
+  };
+}
+
+const GYM_JOB_DATES = [
+  "2026-11-23T18:00:00Z",
+  "2026-11-11T19:00:00Z",
+  "2026-10-02T16:00:00Z",
+  "2026-04-06T15:00:00Z",
+  "2026-04-03T13:00:00Z",
+  "2026-03-23T19:00:00Z",
+  "2026-03-09T17:00:00Z",
+  "2026-03-04T20:00:00Z",
+  "2025-07-16T17:00:00Z",
+  "2025-04-29T15:00:00Z",
+];
+
+// Ten jobs at the Aviation Road gym, newest first. Nothing in them says
+// "planet" or "fitness", like the real records.
+export function gymJobs(): JobCandidate[] {
+  return GYM_JOB_DATES.map((d, i) =>
+    jobCandidate({ id: `job_g${i + 1}`, scheduledStart: d, workStatus: i === 0 ? "scheduled" : "complete rated" })
+  );
+}
 
 export const JOB_DETAIL: JobDetail = {
   id: "job_1",
@@ -70,7 +138,8 @@ export function scheduleRow(over: Partial<TodayScheduleRow>): TodayScheduleRow {
 export function stubDeps(over: Partial<JobsDeps> = {}) {
   const freshnessCalls: MirrorResource[][] = [];
   const deps: JobsDeps = {
-    searchCustomers: async () => [CUSTOMER_HIT],
+    findCustomerCandidates: async () => ({ candidates: [CUSTOMER_CANDIDATE], capped: false }),
+    findJobCandidates: async () => ({ candidates: [], capped: false }),
     getCustomerDetail: async (id) => (id === CUSTOMER_DETAIL.id ? CUSTOMER_DETAIL : null),
     getJobDetail: async (id) => (id === JOB_DETAIL.id ? JOB_DETAIL : null),
     getScheduleDays: async () => [],

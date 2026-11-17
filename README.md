@@ -231,6 +231,21 @@ Spec: `docs/superpowers/specs/2026-11-17-chatgpt-jobs-connector-design.md`.
 
 To turn it off, unset `MCP_JOBS_ENABLED` and redeploy.
 
+**Searching.** `search_jobs` and `find_customer` take the user's words as
+typed ("the jobs at planet fitness on aviation rd"). They drop filler words
+and street suffixes, search each remaining word separately (job street, town,
+description and type; customer name, company, every saved address, tags and
+notes), and report which words matched and which didn't. When only some words
+match, the result tells ChatGPT to show what it found and ask the user to
+confirm. Customers billed under an owner or company name are easier to find if
+they carry a tag in HouseCall Pro (e.g. "Planet Fitness").
+
+**After changing the connector's tools,** click **Refresh** on the plugin in
+ChatGPT (workspace admin). ChatGPT doesn't pick up new or changed tools on its
+own.
+
+Spec for the search: `docs/superpowers/specs/2026-11-18-chatgpt-jobs-search-design.md`.
+
 ## Deploy
 
 ```bash

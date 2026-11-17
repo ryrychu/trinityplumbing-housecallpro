@@ -4,7 +4,7 @@
 // Spec: docs/superpowers/specs/2026-11-17-chatgpt-jobs-connector-design.md
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import type { CustomerDetail, CustomerHit } from "@/lib/mobile/customers";
+import type { CustomerDetail } from "@/lib/mobile/customers";
 import type { JobDetail } from "@/lib/mobile/jobDetail";
 import type { EstimateHit, InvoiceHit } from "@/lib/mobile/money";
 import type { MirrorResource } from "@/lib/mobile/mirrorFreshness";
@@ -12,6 +12,25 @@ import type { DashboardSnapshot, TodayScheduleRow } from "@/lib/dashboard/querie
 import { localDateKey } from "@/lib/notifications/schedule";
 import { dayLabelFromKey, timeLabel } from "@/lib/slack/format";
 import { formatMoney } from "@/lib/mcp/pricebook";
+import { scheduleStatus } from "@/lib/dashboard/queries";
+import {
+  JOB_MATCH_LIMIT,
+  customerName,
+  formatAddress,
+  matchCustomer,
+  matchJob,
+  rankCustomers,
+  rankJobs,
+  searchNote,
+  searchTerms,
+  termsMatched,
+  type CustomerCandidate,
+  type CustomerMatch,
+  type JobCandidate,
+  type JobMatchOn,
+  type Match,
+} from "./search";
+import type { Candidates } from "./searchQueries";
 
 export interface ScheduleDay {
   dateKey: string;
@@ -22,7 +41,8 @@ export type Revenue = Pick<DashboardSnapshot, "revenueBookedThisWeekCents" | "re
 
 // Injected so tests can stub every lookup without touching Supabase.
 export interface JobsDeps {
-  searchCustomers(query: string): Promise<CustomerHit[]>;
+  findCustomerCandidates(terms: string[], phoneDigits: string | null): Promise<Candidates<CustomerCandidate>>;
+  findJobCandidates(terms: string[]): Promise<Candidates<JobCandidate>>;
   getCustomerDetail(id: string): Promise<CustomerDetail | null>;
   getJobDetail(id: string): Promise<JobDetail | null>;
   getScheduleDays(anchor: Date, days: number): Promise<ScheduleDay[]>;
@@ -35,10 +55,16 @@ export interface JobsDeps {
 
 export const CUSTOMER_MATCH_LIMIT = 25;
 
-const READ_ONLY ={ readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false } as const;
+const READ_ONLY = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false } as const;
 
 const SOURCE_NOTE =
   "Data comes from Trinity's copy of HouseCall Pro, updated about every 15 minutes; dataAsOf is when it was last synced. Read-only.";
+
+// Sent to ChatGPT when it connects. MCP can't make ChatGPT ask the user
+// anything; this, the tool descriptions and each result's note are how the
+// connector gets it to check partial matches before answering.
+export const SERVER_INSTRUCTIONS =
+  "Trinity Jobs searches Trinity Plumbing's copy of HouseCall Pro. People ask in plain language by business name or street (\"the jobs at Planet Fitness on Aviation Rd\"), and customers are often filed under an owner or company name instead. Use search_jobs for questions about work at a place, and find_customer for questions about a customer. When a result has unmatchedTerms, tell the user which words didn't match, show what did match, and ask them to confirm before answering. When nothing matches, ask for a street, town, customer name or rough date. Never invent jobs or customers that aren't in a result.";
 
 type ToolResult = { isError?: boolean; content: { type: "text"; text: string }[] };
 
@@ -74,31 +100,97 @@ function scheduleJob(r: TodayScheduleRow) {
   };
 }
 
+function customerResult(c: CustomerCandidate, m: CustomerMatch) {
+  return {
+    id: c.id,
+    name: customerName(c),
+    company: c.company?.trim() || null,
+    phone: c.phone,
+    address: c.addresses[0] ? formatAddress(c.addresses[0]) : null,
+    addressCount: c.addresses.length,
+    matchedAddresses: m.matchedAddresses,
+    matched: m.matched,
+  };
+}
+
+function jobResult(j: JobCandidate, matched: Match<JobMatchOn>[]) {
+  return {
+    id: j.id,
+    date: dateOf(j.scheduledStart),
+    time: j.scheduledStart ? timeLabel(j.scheduledStart) : null,
+    status: scheduleStatus({ work_status: j.workStatus, raw: { work_timestamps: { on_my_way_at: j.onMyWayAt } } }),
+    service: j.jobType?.trim() || j.description?.split("\n")[0]?.trim() || null,
+    address: formatAddress({ street: j.street, city: j.city }),
+    customer: j.customer?.name ?? null,
+    company: j.customer?.company ?? null,
+    customerId: j.customerId,
+    amount: formatMoney(j.amountCents),
+    amountCents: j.amountCents,
+    matched,
+  };
+}
+
 export function createJobsMcpServer(deps: JobsDeps): McpServer {
-  const server = new McpServer({ name: "trinity-jobs", version: "1.0.0" });
+  const server = new McpServer({ name: "trinity-jobs", version: "1.0.0" }, { instructions: SERVER_INSTRUCTIONS });
 
   server.registerTool(
     "find_customer",
     {
       title: "Find customer",
-      description: `Find Trinity Plumbing customers by name or phone number. Returns up to 25 matches, each with the id that get_customer_history needs. ${SOURCE_NOTE}`,
+      description: `Find customers by name, company, any saved address, town, tag, note or phone number. Pass the user's words as they said them. Each customer lists which words matched, which saved addresses matched, and the id that get_customer_history needs. Returns up to ${CUSTOMER_MATCH_LIMIT}. ${SOURCE_NOTE}`,
       inputSchema: {
-        query: z.string().min(1).max(100).describe("A name or phone number, e.g. 'Smith' or '518 555 0142'."),
+        query: z
+          .string()
+          .min(1)
+          .max(200)
+          .describe("The user's words, e.g. 'Smith', 'planet fitness on aviation rd' or '518 555 0142'."),
       },
       annotations: READ_ONLY,
     },
     async ({ query }) => {
+      const words = searchTerms(query);
+      // The phone number counts as one more search word when reporting.
+      const terms = words.phoneDigits ? [...words.terms, words.phoneDigits] : words.terms;
+      if (terms.length === 0) {
+        return ok(deps, ["customers"], {
+          query,
+          terms,
+          matchedTerms: [],
+          unmatchedTerms: [],
+          count: 0,
+          truncated: false,
+          customers: [],
+          note: searchNote("customers", [], [], [], 0, null, false),
+        });
+      }
       try {
-        const customers = await deps.searchCustomers(query);
-        const truncated = customers.length >= CUSTOMER_MATCH_LIMIT;
+        const { candidates, capped } = await deps.findCustomerCandidates(words.terms, words.phoneDigits);
+        const ranked = rankCustomers(
+          candidates
+            .map((customer) => ({ customer, ...matchCustomer(customer, words.terms, words.phoneDigits) }))
+            .filter((r) => r.matched.length > 0)
+        );
+        const shown = ranked.slice(0, CUSTOMER_MATCH_LIMIT);
+        const truncated = ranked.length > CUSTOMER_MATCH_LIMIT || capped;
+        const { matchedTerms, unmatchedTerms } = termsMatched(terms, ranked.map((r) => r.matched));
+        const note = searchNote(
+          "customers",
+          terms,
+          matchedTerms,
+          unmatchedTerms,
+          shown.length,
+          ranked.length > CUSTOMER_MATCH_LIMIT ? CUSTOMER_MATCH_LIMIT : null,
+          capped
+        );
         return await ok(deps, ["customers"], {
           query,
-          count: customers.length,
+          terms,
+          matchedTerms,
+          unmatchedTerms,
+          count: shown.length,
           truncated,
-          ...(truncated && {
-            note: `Showing the first ${CUSTOMER_MATCH_LIMIT} matches. Ask with more of the name or the phone number to narrow it down.`,
-          }),
-          customers,
+          customers: shown.map((r) => customerResult(r.customer, r)),
+          ...(note && { note }),
         });
       } catch (err) {
         return fail("find_customer", "Couldn't search customers just now. Try again in a minute.", err);
@@ -304,6 +396,68 @@ export function createJobsMcpServer(deps: JobsDeps): McpServer {
         });
       } catch (err) {
         return fail("get_money_summary", "Couldn't read estimates and invoices just now. Try again in a minute.", err);
+      }
+    }
+  );
+
+  server.registerTool(
+    "search_jobs",
+    {
+      title: "Search jobs",
+      description: `Find jobs by place, business or kind of work: the job's street, town, description or job type, or the customer's name, company or tag. Pass the user's words as they said them. Each job lists which words matched it. Canceled jobs are included and marked Canceled. Returns up to ${JOB_MATCH_LIMIT}, the jobs matching the most words first, then newest first. ${SOURCE_NOTE}`,
+      inputSchema: {
+        query: z
+          .string()
+          .min(1)
+          .max(200)
+          .describe("The user's words, e.g. 'planet fitness on aviation rd' or 'water heater in Troy'."),
+      },
+      annotations: READ_ONLY,
+    },
+    async ({ query }) => {
+      // Jobs have no phone field, so a phone number in the question is ignored here.
+      const { terms } = searchTerms(query);
+      if (terms.length === 0) {
+        return ok(deps, ["jobs", "customers"], {
+          query,
+          terms,
+          matchedTerms: [],
+          unmatchedTerms: [],
+          count: 0,
+          truncated: false,
+          jobs: [],
+          note: searchNote("jobs", [], [], [], 0, null, false),
+        });
+      }
+      try {
+        const { candidates, capped } = await deps.findJobCandidates(terms);
+        const ranked = rankJobs(
+          candidates.map((job) => ({ job, matched: matchJob(job, terms) })).filter((r) => r.matched.length > 0)
+        );
+        const shown = ranked.slice(0, JOB_MATCH_LIMIT);
+        const truncated = ranked.length > JOB_MATCH_LIMIT || capped;
+        const { matchedTerms, unmatchedTerms } = termsMatched(terms, ranked.map((r) => r.matched));
+        const note = searchNote(
+          "jobs",
+          terms,
+          matchedTerms,
+          unmatchedTerms,
+          shown.length,
+          ranked.length > JOB_MATCH_LIMIT ? JOB_MATCH_LIMIT : null,
+          capped
+        );
+        return await ok(deps, ["jobs", "customers"], {
+          query,
+          terms,
+          matchedTerms,
+          unmatchedTerms,
+          count: shown.length,
+          truncated,
+          jobs: shown.map((r) => jobResult(r.job, r.matched)),
+          ...(note && { note }),
+        });
+      } catch (err) {
+        return fail("search_jobs", "Couldn't search jobs just now. Try again in a minute.", err);
       }
     }
   );
