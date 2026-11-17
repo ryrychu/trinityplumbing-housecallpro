@@ -7,6 +7,7 @@ import type { JobDetail } from "@/lib/mobile/jobDetail";
 import type { MirrorResource } from "@/lib/mobile/mirrorFreshness";
 import type { TodayScheduleRow } from "@/lib/dashboard/queries";
 import { createJobsMcpServer, type JobsDeps } from "../server";
+import type { CustomerCandidate } from "../search";
 
 export const SYNCED_AT = "2026-11-17T12:45:00.000Z";
 // 8:00 AM Eastern on Tue Nov 17 2026.
@@ -29,6 +30,35 @@ export const CUSTOMER_DETAIL: CustomerDetail = {
     { id: "job_1", scheduledStart: "2026-11-10T14:30:00Z", service: "Drain cleaning", status: "Completed", amountCents: 17500 },
     { id: "job_2", scheduledStart: null, service: "Water heater repair", status: "Needs Scheduling", amountCents: null },
   ],
+};
+
+export const CUSTOMER_CANDIDATE: CustomerCandidate = {
+  id: "cus_1",
+  firstName: "Pat",
+  lastName: "Example",
+  company: null,
+  phone: "5185550142",
+  city: "Averill Park",
+  notes: null,
+  tags: [],
+  addresses: [{ street: "12 Elm St", city: "Averill Park" }],
+};
+
+// A gym owner billed under her own name with 13 locations; the Aviation Road
+// gym is the 10th saved address. Synthetic, modelled on the case that found
+// the gap.
+export const GYM_CUSTOMER: CustomerCandidate = {
+  id: "cus_gym",
+  firstName: "Kay ",
+  lastName: "Example",
+  company: "Gymco ",
+  phone: null,
+  city: "Albany",
+  notes: null,
+  tags: [],
+  addresses: Array.from({ length: 13 }, (_, i) =>
+    i === 9 ? { street: "99 Aviation Road", city: "Queensbury" } : { street: `${i + 1}0 Main St`, city: "Albany" }
+  ),
 };
 
 export const JOB_DETAIL: JobDetail = {
@@ -70,7 +100,7 @@ export function scheduleRow(over: Partial<TodayScheduleRow>): TodayScheduleRow {
 export function stubDeps(over: Partial<JobsDeps> = {}) {
   const freshnessCalls: MirrorResource[][] = [];
   const deps: JobsDeps = {
-    searchCustomers: async () => [CUSTOMER_HIT],
+    findCustomerCandidates: async () => [CUSTOMER_CANDIDATE],
     getCustomerDetail: async (id) => (id === CUSTOMER_DETAIL.id ? CUSTOMER_DETAIL : null),
     getJobDetail: async (id) => (id === JOB_DETAIL.id ? JOB_DETAIL : null),
     getScheduleDays: async () => [],

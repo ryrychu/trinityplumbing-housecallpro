@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { CUSTOMER_HIT, NOW, SYNCED_AT, connect, scheduleRow, stubDeps, text } from "./fixtures";
-import { CUSTOMER_MATCH_LIMIT, type JobsDeps } from "../server";
+import { CUSTOMER_CANDIDATE, GYM_CUSTOMER, NOW, SYNCED_AT, connect, scheduleRow, stubDeps, text } from "./fixtures";
+import type { JobsDeps } from "../server";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -12,37 +12,6 @@ describe("createJobsMcpServer: customers and jobs", () => {
     for (const t of tools) {
       expect(t.annotations).toMatchObject({ readOnlyHint: true, destructiveHint: false });
     }
-  });
-
-  it("finds customers and stamps the customers sync time", async () => {
-    const queries: string[] = [];
-    const { deps, freshnessCalls } = stubDeps({
-      searchCustomers: async (q) => {
-        queries.push(q);
-        return [CUSTOMER_HIT];
-      },
-    });
-    const client = await connect(deps);
-    const body = JSON.parse(text(await client.callTool({ name: "find_customer", arguments: { query: "pat" } })));
-    expect(queries).toEqual(["pat"]);
-    expect(body).toMatchObject({ query: "pat", count: 1, dataAsOf: SYNCED_AT });
-    expect(body.customers[0]).toEqual(CUSTOMER_HIT);
-    expect(body.truncated).toBe(false);
-    expect(body.note).toBeUndefined();
-    expect(freshnessCalls).toEqual([["customers"]]);
-  });
-
-  it("flags results that hit the match cap", async () => {
-    const { deps } = stubDeps({
-      searchCustomers: async () => Array.from({ length: CUSTOMER_MATCH_LIMIT }, () => CUSTOMER_HIT),
-    });
-    const client = await connect(deps);
-    const body = JSON.parse(text(await client.callTool({ name: "find_customer", arguments: { query: "smith" } })));
-    expect(body.count).toBe(25);
-    expect(body.truncated).toBe(true);
-    expect(body.note).toBe(
-      "Showing the first 25 matches. Ask with more of the name or the phone number to narrow it down."
-    );
   });
 
   it("returns a customer's history with dates and money", async () => {
@@ -308,5 +277,103 @@ describe("get_money_summary", () => {
       "get_money_summary",
       "get_schedule",
     ]);
+  });
+});
+
+describe("find_customer", () => {
+  it("finds a customer by any saved address and says which words matched", async () => {
+    const calls: Array<[string[], string | null]> = [];
+    const { deps, freshnessCalls } = stubDeps({
+      findCustomerCandidates: async (terms, phone) => {
+        calls.push([terms, phone]);
+        return [CUSTOMER_CANDIDATE, GYM_CUSTOMER];
+      },
+    });
+    const client = await connect(deps);
+    const body = JSON.parse(
+      text(await client.callTool({ name: "find_customer", arguments: { query: "planet fitness on aviation rd" } }))
+    );
+
+    expect(calls).toEqual([[["planet", "fitness", "aviation"], null]]);
+    expect(body).toMatchObject({
+      query: "planet fitness on aviation rd",
+      terms: ["planet", "fitness", "aviation"],
+      matchedTerms: ["aviation"],
+      unmatchedTerms: ["planet", "fitness"],
+      count: 1,
+      truncated: false,
+      dataAsOf: SYNCED_AT,
+    });
+    expect(body.customers).toEqual([
+      {
+        id: "cus_gym",
+        name: "Kay Example",
+        company: "Gymco",
+        phone: null,
+        address: "10 Main St, Albany",
+        addressCount: 13,
+        matchedAddresses: ["99 Aviation Road, Queensbury"],
+        matched: [{ term: "aviation", on: "address" }],
+      },
+    ]);
+    expect(body.note).toBe(
+      'Nothing in Trinity\'s records mentions "planet", "fitness". These customers matched "aviation". Show them to the user, say which words matched, and ask whether these are what they meant before treating them as the answer.'
+    );
+    expect(freshnessCalls).toEqual([["customers"]]);
+  });
+
+  it("still finds a customer by phone number", async () => {
+    const calls: Array<[string[], string | null]> = [];
+    const { deps } = stubDeps({
+      findCustomerCandidates: async (terms, phone) => {
+        calls.push([terms, phone]);
+        return [CUSTOMER_CANDIDATE];
+      },
+    });
+    const client = await connect(deps);
+    const body = JSON.parse(text(await client.callTool({ name: "find_customer", arguments: { query: "518-555-0142" } })));
+    expect(calls).toEqual([[[], "5185550142"]]);
+    expect(body.terms).toEqual(["5185550142"]);
+    expect(body.customers[0]).toMatchObject({ id: "cus_1", matched: [{ term: "5185550142", on: "phone" }] });
+    expect(body.note).toBeUndefined();
+  });
+
+  it("flags results past the match cap", async () => {
+    const { deps } = stubDeps({
+      findCustomerCandidates: async () =>
+        Array.from({ length: 30 }, (_, i) => ({ ...CUSTOMER_CANDIDATE, id: `cus_${i}`, lastName: "Smith" })),
+    });
+    const client = await connect(deps);
+    const body = JSON.parse(text(await client.callTool({ name: "find_customer", arguments: { query: "smith" } })));
+    expect(body.count).toBe(25);
+    expect(body.truncated).toBe(true);
+    expect(body.note).toBe("Showing the first 25; ask the user for a date or a town to narrow it down.");
+  });
+
+  it("asks for something to search when the question is only filler, without querying", async () => {
+    let queried = false;
+    const { deps } = stubDeps({
+      findCustomerCandidates: async () => {
+        queried = true;
+        return [];
+      },
+    });
+    const client = await connect(deps);
+    const body = JSON.parse(text(await client.callTool({ name: "find_customer", arguments: { query: "find the customer" } })));
+    expect(queried).toBe(false);
+    expect(body).toMatchObject({ count: 0, customers: [], note: "Give a name, business, street, town or phone number to search for." });
+  });
+
+  it("hides the raw error when the search fails", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const { deps } = stubDeps({
+      findCustomerCandidates: async () => {
+        throw new Error("customer search failed: Pat Example, 12 Elm St");
+      },
+    });
+    const client = await connect(deps);
+    const res = await client.callTool({ name: "find_customer", arguments: { query: "pat" } });
+    expect(res.isError).toBe(true);
+    expect(text(res)).toBe("Couldn't search customers just now. Try again in a minute.");
   });
 });

@@ -4,7 +4,7 @@
 // Spec: docs/superpowers/specs/2026-11-17-chatgpt-jobs-connector-design.md
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import type { CustomerDetail, CustomerHit } from "@/lib/mobile/customers";
+import type { CustomerDetail } from "@/lib/mobile/customers";
 import type { JobDetail } from "@/lib/mobile/jobDetail";
 import type { EstimateHit, InvoiceHit } from "@/lib/mobile/money";
 import type { MirrorResource } from "@/lib/mobile/mirrorFreshness";
@@ -12,6 +12,17 @@ import type { DashboardSnapshot, TodayScheduleRow } from "@/lib/dashboard/querie
 import { localDateKey } from "@/lib/notifications/schedule";
 import { dayLabelFromKey, timeLabel } from "@/lib/slack/format";
 import { formatMoney } from "@/lib/mcp/pricebook";
+import {
+  customerName,
+  formatAddress,
+  matchCustomer,
+  rankCustomers,
+  searchNote,
+  searchTerms,
+  termsMatched,
+  type CustomerCandidate,
+  type CustomerMatch,
+} from "./search";
 
 export interface ScheduleDay {
   dateKey: string;
@@ -22,7 +33,7 @@ export type Revenue = Pick<DashboardSnapshot, "revenueBookedThisWeekCents" | "re
 
 // Injected so tests can stub every lookup without touching Supabase.
 export interface JobsDeps {
-  searchCustomers(query: string): Promise<CustomerHit[]>;
+  findCustomerCandidates(terms: string[], phoneDigits: string | null): Promise<CustomerCandidate[]>;
   getCustomerDetail(id: string): Promise<CustomerDetail | null>;
   getJobDetail(id: string): Promise<JobDetail | null>;
   getScheduleDays(anchor: Date, days: number): Promise<ScheduleDay[]>;
@@ -35,7 +46,7 @@ export interface JobsDeps {
 
 export const CUSTOMER_MATCH_LIMIT = 25;
 
-const READ_ONLY ={ readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false } as const;
+const READ_ONLY = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false } as const;
 
 const SOURCE_NOTE =
   "Data comes from Trinity's copy of HouseCall Pro, updated about every 15 minutes; dataAsOf is when it was last synced. Read-only.";
@@ -74,6 +85,19 @@ function scheduleJob(r: TodayScheduleRow) {
   };
 }
 
+function customerResult(c: CustomerCandidate, m: CustomerMatch) {
+  return {
+    id: c.id,
+    name: customerName(c),
+    company: c.company?.trim() || null,
+    phone: c.phone,
+    address: c.addresses[0] ? formatAddress(c.addresses[0]) : null,
+    addressCount: c.addresses.length,
+    matchedAddresses: m.matchedAddresses,
+    matched: m.matched,
+  };
+}
+
 export function createJobsMcpServer(deps: JobsDeps): McpServer {
   const server = new McpServer({ name: "trinity-jobs", version: "1.0.0" });
 
@@ -81,24 +105,59 @@ export function createJobsMcpServer(deps: JobsDeps): McpServer {
     "find_customer",
     {
       title: "Find customer",
-      description: `Find Trinity Plumbing customers by name or phone number. Returns up to 25 matches, each with the id that get_customer_history needs. ${SOURCE_NOTE}`,
+      description: `Find customers by name, company, any saved address, town, tag, note or phone number. Pass the user's words as they said them. Each customer lists which words matched, which saved addresses matched, and the id that get_customer_history needs. Returns up to ${CUSTOMER_MATCH_LIMIT}. ${SOURCE_NOTE}`,
       inputSchema: {
-        query: z.string().min(1).max(100).describe("A name or phone number, e.g. 'Smith' or '518 555 0142'."),
+        query: z
+          .string()
+          .min(1)
+          .max(200)
+          .describe("The user's words, e.g. 'Smith', 'planet fitness on aviation rd' or '518 555 0142'."),
       },
       annotations: READ_ONLY,
     },
     async ({ query }) => {
+      const words = searchTerms(query);
+      // The phone number counts as one more search word when reporting.
+      const terms = words.phoneDigits ? [...words.terms, words.phoneDigits] : words.terms;
+      if (terms.length === 0) {
+        return ok(deps, ["customers"], {
+          query,
+          terms,
+          matchedTerms: [],
+          unmatchedTerms: [],
+          count: 0,
+          truncated: false,
+          customers: [],
+          note: searchNote("customers", [], [], [], 0, null),
+        });
+      }
       try {
-        const customers = await deps.searchCustomers(query);
-        const truncated = customers.length >= CUSTOMER_MATCH_LIMIT;
+        const candidates = await deps.findCustomerCandidates(words.terms, words.phoneDigits);
+        const ranked = rankCustomers(
+          candidates
+            .map((customer) => ({ customer, ...matchCustomer(customer, words.terms, words.phoneDigits) }))
+            .filter((r) => r.matched.length > 0)
+        );
+        const shown = ranked.slice(0, CUSTOMER_MATCH_LIMIT);
+        const truncated = ranked.length > CUSTOMER_MATCH_LIMIT;
+        const { matchedTerms, unmatchedTerms } = termsMatched(terms, ranked.map((r) => r.matched));
+        const note = searchNote(
+          "customers",
+          terms,
+          matchedTerms,
+          unmatchedTerms,
+          shown.length,
+          truncated ? CUSTOMER_MATCH_LIMIT : null
+        );
         return await ok(deps, ["customers"], {
           query,
-          count: customers.length,
+          terms,
+          matchedTerms,
+          unmatchedTerms,
+          count: shown.length,
           truncated,
-          ...(truncated && {
-            note: `Showing the first ${CUSTOMER_MATCH_LIMIT} matches. Ask with more of the name or the phone number to narrow it down.`,
-          }),
-          customers,
+          customers: shown.map((r) => customerResult(r.customer, r)),
+          ...(note && { note }),
         });
       } catch (err) {
         return fail("find_customer", "Couldn't search customers just now. Try again in a minute.", err);

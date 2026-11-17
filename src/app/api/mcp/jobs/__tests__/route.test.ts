@@ -5,7 +5,7 @@ import { GET as metadataGET } from "@/app/.well-known/oauth-protected-resource/a
 import { serveMcp } from "@/lib/mcp/handler";
 import { JOBS_RESOURCE } from "@/lib/mcp/auth";
 import { createJobsMcpServer } from "@/lib/mcp/jobs/server";
-import { CUSTOMER_HIT, stubDeps } from "@/lib/mcp/jobs/__tests__/fixtures";
+import { stubDeps } from "@/lib/mcp/jobs/__tests__/fixtures";
 
 afterEach(() => vi.unstubAllEnvs());
 
@@ -74,7 +74,7 @@ describe("/api/mcp/jobs with a valid token", () => {
       params: { name: "find_customer", arguments: { query: "pat" } },
     });
     const body = JSON.parse((await res.json()).result.content[0].text);
-    expect(body.customers).toEqual([CUSTOMER_HIT]);
+    expect(body.customers.map((c: { id: string }) => c.id)).toEqual(["cus_1"]);
   });
 });
 
