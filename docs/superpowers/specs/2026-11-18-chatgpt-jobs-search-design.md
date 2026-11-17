@@ -35,7 +35,7 @@ For "find the jobs we did at planet fitness on aviation rd", ChatGPT answers alo
 A pure function in `src/lib/mcp/jobs/search.ts`.
 
 1. Lowercase. Take the tokens matching `/[a-z0-9]+/g`. Punctuation is dropped, so "troy-schenectady" becomes `troy`, `schenectady`. This also keeps PostgREST `or()` filters safe: no commas, parentheses, asterisks, dots or quotes can reach them.
-2. Drop **filler words**: `a, an, the, at, on, in, of, for, to, and, or, we, our, us, i, me, my, did, do, done, does, find, show, get, list, give, tell, what, which, where, when, any, all, job, jobs, work, worked, customer, customers, place, location, please, there, that, this, those, these, from, with, by`.
+2. Drop **filler words**: `a, an, the, at, on, in, of, for, to, and, or, we, our, us, i, me, my, did, do, done, does, find, show, get, list, give, tell, what, which, where, when, any, all, job, jobs, work, worked, customer, customers, place, location, please, there, that, this, those, these, from, with, by, who, has, have, had, is, are, was, about, phone, number, call, called, named, name`.
 3. Drop **street suffixes**: `rd, road, st, street, ave, av, avenue, dr, drive, ln, lane, blvd, boulevard, ct, court, pl, way, hwy, highway, rte, route, pkwy, parkway, tpke, turnpike, ext, extension, cir, circle, ter, terrace`.
 4. Drop tokens shorter than 2 characters. Numbers of 2 or more digits are kept, so a house number like "578" counts.
 5. De-duplicate, keeping first-seen order. Keep at most **5** terms. Extra terms go in `dropped`.
