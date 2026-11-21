@@ -2,7 +2,7 @@
 // that changed since: it stops for that item and reports what HCP holds now.
 // Once an undo starts, a partial result is returned, never thrown away.
 import type { PricebookItem } from "@/lib/mcp/pricebook";
-import { EditError, errorCode, isAuthError, logChange, type EditDeps } from "./apply";
+import { EditError, batchReader, errorCode, isAuthError, logChange, type EditDeps } from "./apply";
 import { changedKeys, fieldsDiffer, itemValues, toHcpFields } from "./changes";
 import type { ChangeRow, FieldValues } from "./types";
 
@@ -31,6 +31,7 @@ export async function undoChange(deps: EditDeps, ref: { changeId?: number; batch
   const nowIso = now.toISOString();
   const cutoff = now.getTime() - UNDO_DAYS * 86_400_000;
   const undoBatch = deps.newId();
+  const read = batchReader(deps.writer);
   const out: UndoResult = { aborted: null, undone: [], dismissed: [], skipped: [], unlogged: [], serviceBatches: [] };
 
   for (let i = 0; i < rows.length; i++) {
@@ -56,7 +57,7 @@ export async function undoChange(deps: EditDeps, ref: { changeId?: number; batch
 
     let current: PricebookItem | null;
     try {
-      current = await deps.writer.getMaterial(r.itemUuid, r.categoryUuid);
+      current = await read(r.itemUuid, r.categoryUuid);
     } catch (err) {
       out.skipped.push({ id: r.id, name: r.itemName, code: errorCode(err) });
       continue;

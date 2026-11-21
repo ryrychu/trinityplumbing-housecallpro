@@ -17,7 +17,8 @@ import { parseActionId } from "@/lib/tasks/render";
 import { liveServiceDeps, pricebookEditEnabled, pricebookSlackUsers, serviceConfigMissing } from "@/lib/pricebook/edit/deps";
 import { handleServiceTap, parsePbActionId } from "@/lib/pricebook/edit/serviceChecklist";
 
-export const maxDuration = 60;
+// A 50-item batch or a full-book tick check can pass 60s; cron/sync already uses 300.
+export const maxDuration = 300;
 
 const OK = () => new NextResponse(null, { status: 200 });
 

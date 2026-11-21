@@ -11,6 +11,28 @@ export interface MaterialWriter {
   updateMaterial(uuid: string, f: HcpMaterialFields): Promise<void>;
   createMaterial(categoryUuid: string, f: HcpMaterialFields & { name: string; price: number; cost: number }): Promise<{ uuid: string }>;
   getMaterial(uuid: string, categoryUuid: string): Promise<PricebookItem | null>;
+  /** Optional: every material in a category, so a batch lists each category once. */
+  listMaterials?(categoryUuid: string): Promise<PricebookItem[]>;
+}
+
+// Re-reads items for one batch, listing each category at most once (a 50-item
+// batch in one category is 1 list call, not 50). Each item is written at most once
+// per batch, so a listing taken at the start of the batch is current enough.
+export function batchReader(writer: MaterialWriter): (uuid: string, categoryUuid: string) => Promise<PricebookItem | null> {
+  const list = writer.listMaterials?.bind(writer);
+  if (!list) return (uuid, categoryUuid) => writer.getMaterial(uuid, categoryUuid);
+  // A category whose listing failed is read item by item instead, so one bad
+  // listing fails only the items whose own read fails.
+  const cache = new Map<string, Promise<Map<string, PricebookItem> | null>>();
+  return async (uuid, categoryUuid) => {
+    let p = cache.get(categoryUuid);
+    if (!p) {
+      p = list(categoryUuid).then((items) => new Map(items.map((i) => [i.uuid, i])), () => null);
+      cache.set(categoryUuid, p);
+    }
+    const byUuid = await p;
+    return byUuid ? byUuid.get(uuid) ?? null : writer.getMaterial(uuid, categoryUuid);
+  };
 }
 export type EditDeps = { store: PricebookEditStore; writer: MaterialWriter; loadItems(): Promise<PricebookItem[]>; now(): Date; newId(): string };
 
@@ -79,6 +101,7 @@ export async function applyPreview(deps: EditDeps, previewId: string, editorId: 
   const batchId = deps.newId();
   const result: ApplyResult = { batchId, aborted: null, applied: [], failed: [], skipped: [], unlogged: [] };
   const payload: PlannedChange[] = claimed.payload;
+  const read = batchReader(deps.writer);
 
   for (let i = 0; i < payload.length; i++) {
     const c = payload[i];
@@ -86,7 +109,7 @@ export async function applyPreview(deps: EditDeps, previewId: string, editorId: 
 
     let current: PricebookItem | null;
     try {
-      current = c.categoryUuid ? await deps.writer.getMaterial(c.uuid, c.categoryUuid) : null;
+      current = c.categoryUuid ? await read(c.uuid, c.categoryUuid) : null;
     } catch (err) {
       const code = errorCode(err);
       result.failed.push({ uuid: c.uuid, name: c.name, code });

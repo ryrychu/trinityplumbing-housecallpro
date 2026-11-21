@@ -60,3 +60,19 @@ describe("HousecallPricebookWriter", () => {
     expect(String(err.message)).not.toContain("secret");
   });
 });
+
+describe("HousecallPricebookWriter.listMaterials", () => {
+  it("lists every page of a category", async () => {
+    let call = 0;
+    const fetchImpl = (async () => {
+      call++;
+      const body = call === 1
+        ? { data: [{ uuid: "m1", name: "PEX tee", price: 250, cost: 90 }], total_pages_count: 2 }
+        : { data: [{ uuid: "m2", name: "PEX elbow", price: 300, cost: 100 }], total_pages_count: 2 };
+      return new Response(JSON.stringify(body), { status: 200 });
+    }) as unknown as typeof fetch;
+    const list = await new HousecallPricebookWriter("key-1", fetchImpl).listMaterials("cat-1");
+    expect(list.map((m) => [m.uuid, m.categoryUuid])).toEqual([["m1", "cat-1"], ["m2", "cat-1"]]);
+    expect(call).toBe(2);
+  });
+});

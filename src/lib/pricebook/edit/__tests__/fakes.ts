@@ -55,6 +55,7 @@ export function fakeWriter(initial: PricebookItem[]) {
   const items = new Map(initial.map((i) => [i.uuid, { ...i }]));
   const updates: Array<[string, HcpMaterialFields]> = [];
   const created: Array<[string, HcpMaterialFields]> = [];
+  const lists: string[] = [];
   let failStatus: number | null = null;
   let failOnUuid: string | null = null;
   let n = 0;
@@ -83,9 +84,13 @@ export function fakeWriter(initial: PricebookItem[]) {
       const it = items.get(uuid);
       return it && it.kind === "material" ? { ...it } : null;
     },
+    async listMaterials(categoryUuid: string) {
+      lists.push(categoryUuid);
+      return Array.from(items.values()).filter((i) => i.kind === "material" && i.categoryUuid === categoryUuid).map((i) => ({ ...i }));
+    },
   };
   return {
-    writer, items, updates, created,
+    writer, items, updates, created, lists,
     all: () => Array.from(items.values()).map((i) => ({ ...i })),
     /** Every write (or only writes to `uuid`) fails with this status; null clears it. */
     failWith(status: number | null, uuid: string | null = null) { failStatus = status; failOnUuid = uuid; },

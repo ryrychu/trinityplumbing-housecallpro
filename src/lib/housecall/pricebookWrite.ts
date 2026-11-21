@@ -96,4 +96,22 @@ export class HousecallPricebookWriter {
     }
     return null;
   }
+
+  // Every material in one category (up to MAX_PAGES pages), for batches that
+  // re-read many items in the same category.
+  async listMaterials(categoryUuid: string): Promise<PricebookItem[]> {
+    const path = "/api/price_book/materials";
+    const out: PricebookItem[] = [];
+    for (let page = 1; page <= MAX_PAGES; page++) {
+      const qs = new URLSearchParams({ page: String(page), page_size: String(PAGE_SIZE), material_category_uuid: categoryUuid });
+      const res = await this.fetchImpl(`${BASE_URL}${path}?${qs}`, { method: "GET", headers: this.headers(false) });
+      if (!res.ok) throw new HcpWriteError(res.status, path);
+      const json = (await res.json()) as Record<string, unknown>;
+      const raw = Array.isArray(json.data) ? json.data : Array.isArray(json.materials) ? json.materials : [];
+      for (const m of raw as HcpMaterial[]) out.push({ ...normalizeMaterial(m), categoryUuid });
+      const total = typeof json.total_pages_count === "number" ? json.total_pages_count : undefined;
+      if (total !== undefined ? page >= total : raw.length === 0) break;
+    }
+    return out;
+  }
 }

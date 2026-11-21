@@ -107,7 +107,8 @@ describe("createPreview / applyPreview", () => {
   it("records a per-item read error as failed and carries on with the next item", async () => {
     const { deps, hcp, mem } = setup();
     const p = await createPreview(deps, { items: [{ uuid: "m1", price: 2.75 }, { uuid: "m2", price: 3.25 }] }, DAVE);
-    const flaky = { ...hcp.writer, async getMaterial(uuid: string) {
+    // No category listing (or a failed one): items are read one by one.
+    const flaky = { ...hcp.writer, listMaterials: undefined, async getMaterial(uuid: string) {
       if (uuid === "m1") throw new HcpWriteError(500, "/api/price_book/materials");
       return hcp.writer.getMaterial(uuid);
     } };
@@ -214,5 +215,25 @@ describe("applyPreview and fields that were empty at preview time", () => {
     const r = await applyPreview(deps, p.previewId!, DAVE);
     expect(r.skipped[0].code).toBe("changed_since");
     expect(hcp.updates).toEqual([]);
+  });
+});
+
+describe("applyPreview batch reads", () => {
+  it("lists a category once for a batch in that category", async () => {
+    const { deps, hcp } = setup();
+    const p = await createPreview(deps, { items: [{ uuid: "m1", price: 2.75 }, { uuid: "m2", price: 3.25 }] }, DAVE);
+    const r = await applyPreview(deps, p.previewId!, DAVE);
+    expect(r.applied).toHaveLength(2);
+    expect(hcp.lists).toEqual(["c-pex"]);
+  });
+});
+
+describe("applyPreview when a category listing fails", () => {
+  it("falls back to reading each item", async () => {
+    const { deps, hcp } = setup();
+    const p = await createPreview(deps, { items: [{ uuid: "m1", price: 2.75 }, { uuid: "m2", price: 3.25 }] }, DAVE);
+    const writer = { ...hcp.writer, async listMaterials(): Promise<never> { throw new HcpWriteError(500, "/api/price_book/materials"); } };
+    const r = await applyPreview({ ...deps, writer }, p.previewId!, DAVE);
+    expect(r.applied.map((a) => a.uuid)).toEqual(["m1", "m2"]);
   });
 });

@@ -10,7 +10,8 @@ import { listAllCategories, liveEditDeps, liveServiceDeps, parseEditors, pricebo
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-export const maxDuration = 60;
+// A 50-item batch or a full-book tick check can pass 60s; cron/sync already uses 300.
+export const maxDuration = 300;
 
 let verify: ClaimsVerifier | null = null;
 
