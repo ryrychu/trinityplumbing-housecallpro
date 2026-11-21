@@ -31,9 +31,16 @@ export type ServiceDeps = { store: PricebookEditStore; slack: ChecklistSlack; ch
 export type ServiceRequestInput = { uuid: string; price?: Money; description?: string; name?: string };
 
 function label(r: ChangeRow): string {
-  if (r.after.priceCents !== undefined) return `${r.itemName}: ${r.before?.priceCents !== undefined ? formatMoney(r.before.priceCents) : "?"} → ${formatMoney(r.after.priceCents)}`;
-  if (r.after.name !== undefined) return `${r.itemName} → rename to "${r.after.name}"`;
-  return `${r.itemName}: new description`;
+  const parts: string[] = [];
+  if (r.after.priceCents !== undefined) parts.push(`${r.before?.priceCents !== undefined ? formatMoney(r.before.priceCents) : "?"} → ${formatMoney(r.after.priceCents)}`);
+  if (r.after.name !== undefined) parts.push(`rename to "${r.after.name}"`);
+  const head = `${r.itemName}: ${parts.join("; ")}`;
+  if (r.after.description === undefined) return head;
+  return parts.length ? `${head} · new description` : `${r.itemName}: new description`;
+}
+
+function descriptionReply(name: string, description: string): string {
+  return `*${escapeMrkdwn(name)}*, new description:\n${escapeMrkdwn(description)}`;
 }
 
 export function renderServiceBatch(rows: ChangeRow[], askedBy: string): { text: string; blocks: unknown[] } {
@@ -51,7 +58,7 @@ export function renderServiceBatch(rows: ChangeRow[], askedBy: string): { text: 
     const options = chunk.map((r) => ({
       text: { type: "mrkdwn", text: optionLabel(label(r), r.status === "done") },
       value: String(r.id),
-      ...(r.after.description !== undefined ? { description: { type: "plain_text", text: fitText(r.after.description, DESC_MAX) } } : {}),
+      ...(r.after.description !== undefined && r.after.description.trim() !== "" ? { description: { type: "plain_text", text: fitText(r.after.description, DESC_MAX) } } : {}),
     }));
     const initial = options.filter((_, k) => chunk[k].status === "done");
     elements.push({ type: "checkboxes", action_id: pbActionId(rows[0].batchId, i / PER_ELEMENT), options, ...(initial.length ? { initial_options: initial } : {}) });
@@ -79,16 +86,25 @@ export async function requestServiceChanges(
   const blocks: Issue[] = [];
   const warnings: Issue[] = [];
   const planned: Array<{ it: PricebookItem; before: FieldValues; after: FieldValues }> = [];
+  const seen = new Set<string>();
 
   for (const req of items) {
+    if (seen.has(req.uuid)) { blocks.push({ uuid: req.uuid, name: null, code: "duplicate_item", message: `${req.uuid} appears more than once in this request.` }); continue; }
+    seen.add(req.uuid);
     const it = byUuid.get(req.uuid);
     if (!it) { blocks.push({ uuid: req.uuid, name: null, code: "unknown_item", message: `No price book item has id ${req.uuid}.` }); continue; }
     if (it.kind !== "service") { blocks.push({ uuid: it.uuid, name: it.name, code: "material_use_preview", message: `${it.name} is a material; change it with preview_material_changes.` }); continue; }
     const cur = itemValues(it);
     const after: FieldValues = {};
     if (req.price !== undefined) { const c = parseMoney(req.price); if (c === null) { blocks.push({ uuid: it.uuid, name: it.name, code: "bad_money", message: `"${req.price}" isn't a price.` }); continue; } after.priceCents = c; }
-    if (req.name !== undefined) after.name = req.name.trim();
-    if (req.description !== undefined) after.description = req.description.trim();
+    if (req.name !== undefined) {
+      after.name = req.name.trim();
+      if (after.name === "") { blocks.push({ uuid: it.uuid, name: it.name, code: "bad_name", message: `${it.name}: the new name can't be empty.` }); continue; }
+    }
+    if (req.description !== undefined) {
+      after.description = req.description.trim();
+      if (after.description === "") { blocks.push({ uuid: it.uuid, name: it.name, code: "bad_description", message: `${it.name}: the new description can't be empty.` }); continue; }
+    }
     const bad = priceCheck(it.name, it.uuid, after.priceCents ?? it.priceCents, it.costCents, Boolean(opts.allowBelowCost));
     if (bad) { blocks.push(bad); continue; }
     if (after.priceCents !== undefined && it.priceCents && Math.abs(after.priceCents - it.priceCents) / it.priceCents > BIG_CHANGE) {
@@ -107,7 +123,14 @@ export async function requestServiceChanges(
   for (const p of planned) {
     const existing = pending.find((r) => r.itemUuid === p.it.uuid);
     if (existing) {
-      await deps.store.updateAfter(existing.id, { ...existing.after, ...p.after });
+      const before: FieldValues = { ...(existing.before ?? {}) };
+      for (const k of Object.keys(p.after) as Array<keyof FieldValues>) {
+        if (before[k] === undefined && p.before[k] !== undefined) (before as Record<string, unknown>)[k] = p.before[k];
+      }
+      await deps.store.updateChange(existing.id, { before, after: { ...existing.after, ...p.after } });
+      if (p.after.description !== undefined && existing.slackChannelId && existing.slackMessageTs) {
+        await deps.slack.reply(existing.slackChannelId, existing.slackMessageTs, descriptionReply(existing.itemName, p.after.description));
+      }
       merged.push({ id: existing.id, name: existing.itemName });
       if (!touchedBatches.includes(existing.batchId)) touchedBatches.push(existing.batchId);
     } else fresh.push(p);
@@ -120,20 +143,27 @@ export async function requestServiceChanges(
     fresh.map((p) => ({ batchId, kind: "service_request" as const, itemUuid: p.it.uuid, itemName: p.it.name, itemKind: "service" as const, categoryUuid: null, before: p.before, after: p.after, status: "pending" as const, requestedBy: editorId, errorCode: null }))
   );
   const msg = renderServiceBatch(rows, deps.nameOf(editorId));
-  const ts = await deps.slack.post(deps.channelId, msg.text, msg.blocks);
-  await deps.store.setSlackMessage(batchId, deps.channelId, ts);
+  let ts: string;
+  try {
+    ts = await deps.slack.post(deps.channelId, msg.text, msg.blocks);
+    await deps.store.setSlackMessage(batchId, deps.channelId, ts);
+  } catch (e) {
+    await deps.store.setStatus(rows.map((r) => r.id), "dismissed", { errorCode: "slack_post_failed" });
+    throw e;
+  }
   const withDesc = rows.filter((r) => r.after.description !== undefined);
   if (withDesc.length > 0) {
-    await deps.slack.reply(deps.channelId, ts, withDesc.map((r) => `*${escapeMrkdwn(r.itemName)}*, new description:\n${escapeMrkdwn(r.after.description ?? "")}`).join("\n\n"));
+    await deps.slack.reply(deps.channelId, ts, withDesc.map((r) => descriptionReply(r.itemName, r.after.description ?? "")).join("\n\n"));
   }
   return { batchId, requested: rows.map((r) => ({ id: r.id, name: r.itemName, change: describeChange(r.before, r.after) })), merged, blocks, warnings };
 }
 
 function hcpMismatch(r: ChangeRow, now: PricebookItem | undefined): string | null {
-  if (!now) return `HCP no longer lists ${r.itemName}.`;
-  if (r.after.priceCents !== undefined && now.priceCents !== r.after.priceCents) return `HCP still shows ${formatMoney(now.priceCents)} for ${r.itemName}.`;
-  if (r.after.name !== undefined && now.name.trim() !== r.after.name) return `HCP still shows the name "${now.name}" for ${r.itemName}.`;
-  if (r.after.description !== undefined && now.description.trim() !== r.after.description) return `HCP's description for ${r.itemName} doesn't match the request yet.`;
+  const name = escapeMrkdwn(r.itemName);
+  if (!now) return `HCP no longer lists ${name}.`;
+  if (r.after.priceCents !== undefined && now.priceCents !== r.after.priceCents) return `HCP still shows ${formatMoney(now.priceCents)} for ${name}.`;
+  if (r.after.name !== undefined && now.name.trim() !== r.after.name) return `HCP still shows the name "${escapeMrkdwn(now.name)}" for ${name}.`;
+  if (r.after.description !== undefined && now.description.trim() !== r.after.description) return `HCP's description for ${name} doesn't match the request yet.`;
   return null;
 }
 
@@ -173,7 +203,16 @@ export async function handleServiceTap(
     }
     await rerenderBatch(deps, parsed.batchId);
     if (tick.length > 0) {
-      const byUuid = new Map((await deps.loadItems()).map((i) => [i.uuid, i]));
+      let book: PricebookItem[];
+      try {
+        book = await deps.loadItems();
+      } catch (e) {
+        console.error("pricebook tick check failed:", e instanceof Error ? e.message : String(e));
+        const first = tick.find((r) => r.slackChannelId && r.slackMessageTs);
+        if (first?.slackChannelId && first.slackMessageTs) await deps.slack.reply(first.slackChannelId, first.slackMessageTs, "Couldn't check HCP just now; please double-check the change there.");
+        continue;
+      }
+      const byUuid = new Map(book.map((i) => [i.uuid, i]));
       for (const r of tick) {
         const msg = hcpMismatch(r, byUuid.get(r.itemUuid));
         if (msg && r.slackChannelId && r.slackMessageTs) await deps.slack.reply(r.slackChannelId, r.slackMessageTs, msg);

@@ -14,6 +14,7 @@ export interface PricebookEditStore {
   listPendingServices(): Promise<ChangeRow[]>;
   setStatus(ids: number[], status: ChangeStatus, opts?: { resolvedBy?: string | null; resolvedAt?: string | null; errorCode?: string | null }): Promise<void>;
   updateAfter(id: number, after: FieldValues): Promise<void>;
+  updateChange(id: number, patch: { before: FieldValues | null; after: FieldValues }): Promise<void>;
   setSlackMessage(batchId: string, channelId: string, ts: string): Promise<void>;
   createPreview(p: Omit<PreviewRow, "appliedAt">): Promise<void>;
   getPreview(id: string): Promise<PreviewRow | null>;

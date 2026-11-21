@@ -36,6 +36,7 @@ export function memoryStore(now: () => Date = () => NOW) {
       }
     },
     async updateAfter(id, after) { const c = changes.find((x) => x.id === id); if (c) c.after = after; },
+    async updateChange(id, patch) { const c = changes.find((x) => x.id === id); if (c) { c.before = patch.before; c.after = patch.after; } },
     async setSlackMessage(b, ch, ts) { for (const c of changes) if (c.batchId === b) { c.slackChannelId = ch; c.slackMessageTs = ts; } },
     async createPreview(p) { previews.set(p.id, { ...p, appliedAt: null }); },
     async getPreview(id) { const p = previews.get(id); return p ? { ...p } : null; },

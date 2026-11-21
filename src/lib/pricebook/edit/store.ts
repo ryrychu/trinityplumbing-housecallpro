@@ -116,6 +116,10 @@ export function supabasePricebookEditStore(db: SupabaseClient): PricebookEditSto
       const { error } = await db.from("pricebook_changes").update({ after }).eq("id", id);
       check("updateAfter", error);
     },
+    async updateChange(id, patch) {
+      const { error } = await db.from("pricebook_changes").update({ before: patch.before, after: patch.after }).eq("id", id);
+      check("updateChange", error);
+    },
     async setSlackMessage(batchId, channelId, ts) {
       const { error } = await db.from("pricebook_changes").update({ slack_channel_id: channelId, slack_message_ts: ts }).eq("batch_id", batchId);
       check("setSlackMessage", error);

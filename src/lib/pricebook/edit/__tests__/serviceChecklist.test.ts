@@ -49,7 +49,86 @@ describe("requestServiceChanges", () => {
   });
 });
 
+describe("requestServiceChanges review fixes", () => {
+  it("shows price and rename together in the label", async () => {
+    const { deps, slack } = setup();
+    await requestServiceChanges(deps, [{ uuid: "s1", price: 195, name: "Main drain" }], DAVE);
+    expect(JSON.stringify(slack.posts[0].blocks)).toContain('Drain cleaning: $175.00 → $195.00; rename to \\"Main drain\\"');
+  });
+
+  it("flags a description change in the label", async () => {
+    const { deps, slack } = setup();
+    await requestServiceChanges(deps, [{ uuid: "s1", price: 195, description: "New text" }], DAVE);
+    expect(JSON.stringify(slack.posts[0].blocks)).toContain("Drain cleaning: $175.00 → $195.00 · new description");
+  });
+
+  it("posts the full description when a merge adds one", async () => {
+    const { deps, slack } = setup();
+    await requestServiceChanges(deps, [{ uuid: "s1", price: 195 }], DAVE);
+    await requestServiceChanges(deps, [{ uuid: "s1", description: "Camera check included" }], ELLA);
+    expect(last(slack.replies)).toEqual({ channel: "C_PB", threadTs: "900.1", text: "*Drain cleaning*, new description:\nCamera check included" });
+  });
+
+  it("fills before on merge so the label isn't ? -> price", async () => {
+    const { deps, mem, slack } = setup();
+    await requestServiceChanges(deps, [{ uuid: "s1", description: "Camera check included" }], DAVE);
+    await requestServiceChanges(deps, [{ uuid: "s1", price: 199 }], ELLA);
+    expect(mem.changes[0].before?.priceCents).toBe(17500);
+    const text = JSON.stringify(last(slack.updates).blocks);
+    expect(text).toContain("$175.00 → $199.00");
+    expect(text).not.toContain("? →");
+  });
+
+  it("blocks empty descriptions and names", async () => {
+    const { deps, slack } = setup();
+    const r = await requestServiceChanges(deps, [{ uuid: "s1", description: "   " }, { uuid: "s2", name: " " }], DAVE);
+    expect(r.blocks.map((b) => b.code).sort()).toEqual(["bad_description", "bad_name"]);
+    expect(slack.posts).toEqual([]);
+  });
+
+  it("blocks the same uuid twice in one request", async () => {
+    const { deps } = setup();
+    const r = await requestServiceChanges(deps, [{ uuid: "s1", price: 195 }, { uuid: "s1", price: 196 }], DAVE);
+    expect(r.blocks.map((b) => b.code)).toEqual(["duplicate_item"]);
+  });
+
+  it("dismisses the rows when the Slack post fails, so a retry starts a fresh batch", async () => {
+    const { deps, mem, slack } = setup();
+    let fail = true;
+    const realPost = deps.slack.post;
+    deps.slack = { ...deps.slack, post: async (c, t, b) => { if (fail) throw new Error("slack down"); return realPost(c, t, b); } };
+    await expect(requestServiceChanges(deps, [{ uuid: "s1", price: 195 }], DAVE)).rejects.toThrow("slack down");
+    expect(mem.changes[0]).toMatchObject({ status: "dismissed", errorCode: "slack_post_failed" });
+    fail = false;
+    const r = await requestServiceChanges(deps, [{ uuid: "s1", price: 195 }], DAVE);
+    expect(r.merged).toEqual([]);
+    expect(r.batchId).not.toBeNull();
+    expect(slack.posts).toHaveLength(1);
+  });
+});
+
 describe("handleServiceTap", () => {
+  it("escapes the service name in a mismatch reply", async () => {
+    const { deps, mem, slack, setBook } = setup();
+    const tub = item({ uuid: "s3", kind: "service", name: "Tub & shower <valve>", priceCents: 10000, costCents: 1000 });
+    setBook([tub]);
+    await requestServiceChanges(deps, [{ uuid: "s3", price: 120 }], DAVE);
+    await handleServiceTap(tap(slack.lastBlocks(), pbActionId(mem.changes[0].batchId, 0), ["1"]), deps, { allowedUsers: ["U_DAVE"], note: async () => true });
+    expect(last(slack.replies).text).toContain("Tub &amp; shower &lt;valve&gt;");
+  });
+
+  it("tells the thread when the HCP check fails", async () => {
+    const { deps, mem, slack } = setup();
+    await requestServiceChanges(deps, [{ uuid: "s1", price: 195 }], DAVE);
+    deps.loadItems = async () => { throw new Error("hcp 500"); };
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    await handleServiceTap(tap(slack.lastBlocks(), pbActionId(mem.changes[0].batchId, 0), ["1"]), deps, { allowedUsers: ["U_DAVE"], note: async () => true });
+    expect(mem.changes[0].status).toBe("done");
+    expect(last(slack.replies).text).toBe("Couldn't check HCP just now; please double-check the change there.");
+    expect(spy).toHaveBeenCalledWith("pricebook tick check failed:", "hcp 500");
+    spy.mockRestore();
+  });
+
   it("marks a ticked service done and replies when HCP still differs", async () => {
     const { deps, mem, slack } = setup();
     await requestServiceChanges(deps, [{ uuid: "s1", price: 195 }], DAVE);
