@@ -43,8 +43,8 @@ function oldValues(before: FieldValues, after: FieldValues): string {
   if (after.costCents !== undefined) parts.push(`cost was ${before.costCents !== undefined ? formatMoney(before.costCents) : "unset"}`);
   if (after.name !== undefined) parts.push(`name was "${before.name ?? ""}"`);
   if (after.description !== undefined) parts.push(`description was "${before.description ?? ""}"`);
-  if (after.unit !== undefined) parts.push(`unit was ${before.unit ?? "unset"}`);
-  if (after.partNumber !== undefined) parts.push(`part number was ${before.partNumber ?? "unset"}`);
+  if (after.unit !== undefined) parts.push(`unit was ${before.unit || "unset"}`);
+  if (after.partNumber !== undefined) parts.push(`part number was ${before.partNumber || "unset"}`);
   if (after.taxable !== undefined) parts.push(`was ${before.taxable ? "taxable" : "not taxable"}`);
   return parts.join("; ");
 }
@@ -162,7 +162,9 @@ export function createPricebookEditMcpServer(deps: PricebookEditToolDeps, caller
     } else if (r.applied.length === 0) {
       notes.push("Nothing was applied. See failed and skipped for why.");
     } else {
-      notes.push("Applied in HCP. The read-only Trinity Price Book connector may show old values for up to 2 minutes. Undo with undo_change and this batchId.");
+      const total = r.applied.length + r.failed.length + r.skipped.length;
+      const head = r.applied.length < total ? `Applied ${r.applied.length} of ${total} in HCP; see failed/skipped.` : "Applied in HCP.";
+      notes.push(`${head} The read-only Trinity Price Book connector may show old values for up to 2 minutes. Undo with undo_change and this batchId.`);
     }
     const appliedIds = new Set(r.applied.map((x) => x.uuid));
     const changedUnlogged = r.unlogged.filter((u) => appliedIds.has(u.uuid));
@@ -231,10 +233,22 @@ export function createPricebookEditMcpServer(deps: PricebookEditToolDeps, caller
   }, async ({ changeId, batchId }) => run("undo_change", async (editorId) => {
     if (changeId === undefined && !batchId) return refuse("Give a changeId or a batchId from recent_changes.");
     const r = await undoChange(deps.edit, { changeId, batchId }, editorId);
-    for (const b of r.serviceBatches) await rerenderBatch(deps.service, b).catch(() => undefined);
+    for (const b of r.serviceBatches) {
+      await rerenderBatch(deps.service, b).catch((err) =>
+        console.error(`[mcp-pricebook-edit] checklist update after undo failed: ${err instanceof Error ? err.message : String(err)}`)
+      );
+    }
     const notes: string[] = [];
     if (r.aborted === KEY_CANNOT_WRITE_CODE) {
       notes.push(`Housecall Pro stopped accepting writes partway: the API key can't write. ${r.undone.length} item(s) were put back before it stopped; the rest were not changed. ${KEY_NEEDED}`);
+    } else if (r.undone.length === 0 && r.dismissed.length === 0) {
+      notes.push("Nothing was undone; see skipped.");
+    }
+    if (r.skipped.some((s) => s.code === "create_cannot_be_undone")) {
+      notes.push("A new material can't be deleted here. Rename it (e.g. prefix 'ZZ do not use') or change its price instead.");
+    }
+    if (r.skipped.some((s) => s.code === "cannot_restore_unset")) {
+      notes.push("Some fields had no value before and HCP can't clear them, so those changes weren't undone; set them by hand in HCP.");
     }
     if (r.unlogged.length > 0) {
       notes.push(`These were put back in HCP but the change log wasn't updated: ${r.unlogged.map((u) => u.name).join(", ")}.`);

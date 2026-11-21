@@ -170,3 +170,23 @@ describe("Trinity Price Book Editor", () => {
     expect(u.note).toContain("put back in HCP but the change log wasn't updated: PEX tee");
   });
 });
+
+describe("Trinity Price Book Editor notes", () => {
+  it("says how many applied when some were skipped", async () => {
+    const { client, hcp } = await connect(DAVE);
+    const p = JSON.parse(text(await client.callTool({ name: "preview_material_changes", arguments: { items: [{ uuid: "m1", price: 2.75 }, { uuid: "m2", price: 3.25 }] } })));
+    hcp.items.get("m2")!.priceCents = 999;
+    const a = JSON.parse(text(await client.callTool({ name: "apply_material_changes", arguments: { previewId: p.previewId } })));
+    expect(a.note).toMatch(/^Applied 1 of 2 in HCP; see failed\/skipped\./);
+  });
+
+  it("says nothing was undone, and why, when a create is undone", async () => {
+    const { client } = await connect(DAVE);
+    const c = JSON.parse(text(await client.callTool({ name: "add_material", arguments: { categoryUuid: "c-pex", name: "PEX cap", price: 1.25, cost: 0.4 } })));
+    expect(c.created).toBeTruthy();
+    const recent = JSON.parse(text(await client.callTool({ name: "recent_changes", arguments: {} })));
+    const u = JSON.parse(text(await client.callTool({ name: "undo_change", arguments: { changeId: recent.changes[0].id } })));
+    expect(u.note).toMatch(/Nothing was undone; see skipped\./);
+    expect(u.note).toMatch(/can't be deleted here\. Rename it/);
+  });
+});

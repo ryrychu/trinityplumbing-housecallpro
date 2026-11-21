@@ -183,7 +183,7 @@ describe("checkWriteAccess", () => {
   it("saves one material back unchanged", async () => {
     const { deps, hcp } = setup();
     expect(await checkWriteAccess(deps)).toEqual({ ok: true, item: "PEX tee" });
-    expect(hcp.updates).toEqual([["m1", { name: "PEX tee" }]]);
+    expect(hcp.updates).toEqual([["m1", { price: 250 }]]);
   });
   it("reports a read-only key", async () => {
     const { deps, hcp } = setup();
@@ -235,5 +235,25 @@ describe("applyPreview when a category listing fails", () => {
     const writer = { ...hcp.writer, async listMaterials(): Promise<never> { throw new HcpWriteError(500, "/api/price_book/materials"); } };
     const r = await applyPreview({ ...deps, writer }, p.previewId!, DAVE);
     expect(r.applied.map((a) => a.uuid)).toEqual(["m1", "m2"]);
+  });
+});
+
+describe("checkWriteAccess and addMaterial failures", () => {
+  it("saves a price back unchanged, so a name is never touched", async () => {
+    const { deps, hcp } = setup([item({ uuid: "m1", name: "PEX tee" })]);
+    await checkWriteAccess(deps);
+    expect(hcp.updates).toEqual([["m1", { price: 250 }]]);
+  });
+
+  it("says HCP may have created it when the result is unknown", async () => {
+    const { deps, hcp } = setup();
+    hcp.failWith(502);
+    await expect(addMaterial(deps, { categoryUuid: "c-pex", name: "PEX cap", price: 1.25, cost: 0.4 }, ELLA)).rejects.toThrow(/may have created it\. Use find_items/);
+  });
+
+  it("says nothing was created when HCP refuses the request", async () => {
+    const { deps, hcp } = setup();
+    hcp.failWith(422);
+    await expect(addMaterial(deps, { categoryUuid: "c-pex", name: "PEX cap", price: 1.25, cost: 0.4 }, ELLA)).rejects.toThrow(/nothing was created/);
   });
 });

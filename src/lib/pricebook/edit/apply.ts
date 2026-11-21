@@ -177,7 +177,13 @@ export async function addMaterial(deps: EditDeps, input: NewMaterial, editorId: 
     ({ uuid } = await deps.writer.createMaterial(input.categoryUuid, { ...toHcpFields(after), name, price, cost }));
   } catch (err) {
     if (isAuthError(err)) throw new EditError("key_cannot_write", KEY_CANNOT_WRITE);
-    throw err;
+    // A 4xx other than 401/403 is a clear refusal; anything else (5xx, a reply
+    // with no uuid, a timeout) may have created it, and there's no log row to check.
+    if (err instanceof HcpWriteError && err.status >= 400 && err.status < 500) {
+      throw new EditError("create_refused", `HCP refused the new material (http_${err.status}), so nothing was created.`);
+    }
+    console.error(`[pricebook] create material result unknown: ${err instanceof Error ? err.message : String(err)}`);
+    throw new EditError("create_unknown", "HCP may have created it. Use find_items to check before retrying.");
   }
   const logged = await logChange(deps, { batchId: deps.newId(), kind: "material_create", itemUuid: uuid, itemName: name, itemKind: "material", categoryUuid: input.categoryUuid, before: null, after, status: "applied", requestedBy: editorId, errorCode: null });
   // Created in HCP already, so a retry would duplicate it: report, don't throw.
@@ -187,14 +193,15 @@ export async function addMaterial(deps: EditDeps, input: NewMaterial, editorId: 
   return { created: { uuid, name }, blocks, warnings };
 }
 
-// Saves one material back unchanged to prove the key can write. Only a 401 or 403
-// counts as "can't write"; any other error is a real failure and is rethrown.
-// normalizeMaterial already trims names, so the first non-empty name is the best check.
+// Saves one material's price back unchanged to prove the key can write. The price
+// is an integer read fresh from HCP, so the write is exactly what HCP holds (a name
+// would be the trimmed copy and could change it). Only a 401 or 403 counts as
+// "can't write"; any other error is a real failure and is rethrown.
 export async function checkWriteAccess(deps: EditDeps): Promise<{ ok: boolean; status?: number; item?: string }> {
-  const m = (await deps.loadItems()).find((i) => i.kind === "material" && i.name.trim() !== "");
-  if (!m) throw new EditError("no_materials", "There are no materials in the price book to test with.");
+  const m = (await deps.loadItems()).find((i) => i.kind === "material" && i.name.trim() !== "" && i.priceCents !== null);
+  if (!m || m.priceCents === null) throw new EditError("no_materials", "There are no priced materials in the price book to test with.");
   try {
-    await deps.writer.updateMaterial(m.uuid, { name: m.name });
+    await deps.writer.updateMaterial(m.uuid, { price: m.priceCents });
     return { ok: true, item: m.name };
   } catch (err) {
     if (err instanceof HcpWriteError && isAuthError(err)) return { ok: false, status: err.status, item: m.name };
