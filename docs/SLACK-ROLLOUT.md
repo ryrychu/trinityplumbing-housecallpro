@@ -590,3 +590,55 @@ Set `SLACK_FIELDY_ENABLED` and `MCP_TASKS_ENABLED` to anything but `true` and
 redeploy. Nothing in Fieldy is deleted by this feature, ever. Checklist
 messages already posted stay in the channel; taps on them do nothing while
 `SLACK_FIELDY_ENABLED` is off.
+
+## Price book editor — Trinity Price Book Editor (ChatGPT) and #pricebook-changes
+
+Dave and Ella can change the HCP price book by asking ChatGPT. Materials
+(parts) change directly — always previewed first, logged, and undoable for 30
+days. Services can't be changed through HCP's API, so ChatGPT posts them to a
+Slack checklist; whoever makes the change in HCP ticks it, and the app checks
+HCP and replies in the thread if it doesn't match yet. Spec:
+`docs/superpowers/specs/2026-11-21-pricebook-edit-design.md`.
+
+### Go-live (Ryan)
+
+1. Run `supabase/migrations/0009_pricebook_changes.sql` in the ops Supabase
+   (`wrvaenkyrfvbooogqhev`) SQL editor — before merging is fine, it only adds
+   tables.
+2. Slack: create a **private** channel (e.g. `#pricebook-changes`), add Dave and
+   Ella, `/invite @<the Trinity bot>`, and copy its channel ID (channel name →
+   About → bottom, starts with `C`). The Interactivity URL is already set from
+   the Fieldy rollout — nothing to change in the Slack app.
+3. Vercel → Production:
+   - `MCP_PRICEBOOK_EDIT_ENABLED=true`
+   - `MCP_PRICEBOOK_EDITORS` — `<Dave's Supabase user id>:Dave,<Ella's>:Ella`
+     (Supabase → Authentication → Users → User UID)
+   - `SLACK_PRICEBOOK_CHANNEL_ID` — the `C…` id
+   - `SLACK_PRICEBOOK_ALLOWED_USERS` — Dave's and Ella's Slack member ids,
+     comma-separated (profile → ⋮ → Copy member ID)
+
+   Redeploy.
+4. ChatGPT (Trinity workspace) → Plugins → Add custom MCP server: name
+   `Trinity Price Book Editor`, URL
+   `https://ops.trinity.plumbing/api/mcp/pricebook-edit`, OAuth. Publish; Dave
+   and Ella connect with their ops logins.
+5. In ChatGPT: "check write access". If it says the key can't write, Dave makes
+   an HCP API key with write access and Ryan replaces `HOUSECALL_API_KEY`.
+6. Try it: change one part's price → undo it; preview +1% on a small category →
+   apply; request one service change → make it in HCP → tick it in Slack.
+
+### If something's off
+
+| What you see | Cause |
+|---|---|
+| "only available to Dave and Ella" for one of them | Their Supabase user id isn't in `MCP_PRICEBOOK_EDITORS` |
+| "The HCP API key can't write" | The key is read-only — make one with write access in HCP |
+| "That preview expired" | Previews last 15 minutes — preview again |
+| A service tick does nothing | `MCP_PRICEBOOK_EDIT_ENABLED` is off, or the bot isn't in the channel |
+| A tick snaps back with "Only Dave and Ella can check these off." | That person's Slack member id isn't in `SLACK_PRICEBOOK_ALLOWED_USERS` |
+| "HCP still shows $…" in the thread | The change isn't saved in HCP yet, or there's a typo — fix it in HCP, then untick and tick again |
+
+### Rollback
+
+Set `MCP_PRICEBOOK_EDIT_ENABLED` to anything but `true` and redeploy. Nothing
+already changed in HCP is reverted; use `undo_change` first if needed.
