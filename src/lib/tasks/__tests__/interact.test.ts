@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { FieldyApiError } from "@/lib/fieldy/client";
-import { buildChecklist } from "../checklist";
+import { buildChecklist, markDone } from "../checklist";
 import { NOT_ALLOWED_TEXT, handleChecklistTap, optionValuesFor, type BlockActionsPayload } from "../interact";
 import { validateGrouping } from "../organize";
 import { makeDeps, task } from "./fakes";
@@ -52,6 +52,34 @@ describe("handleChecklistTap", () => {
       ["t1", "approved"],
     ]);
     expect(items.get(id)!.find((i) => i.fieldyTaskId === "t3")!.doneAt).toBeNull();
+  });
+
+  it("ticks from an out-of-date message without reopening what was ticked since", async () => {
+    const { deps, fieldy, slack, items, id, note, tap } = await setup();
+    const stale = slack.lastBlocks(); // the message before t1 was ticked elsewhere
+    await markDone(deps, id, ["t1"], "chatgpt");
+    const payload = { ...tap(`fieldy_cb:${id}:0`, ["t2"]), message: { blocks: stale } };
+    await handleChecklistTap(payload, deps, { allowedUsers: [DAVE], note });
+    expect(fieldy.updates.map(([tid, u]) => [tid, u.status])).toEqual([
+      ["t1", "completed"],
+      ["t2", "completed"],
+    ]);
+    expect(fieldy.updates.some(([tid, u]) => tid === "t1" && u.status === "approved")).toBe(false);
+    const done = items.get(id)!.filter((i) => i.doneAt !== null).map((i) => i.fieldyTaskId);
+    expect(done).toEqual(["t1", "t2"]);
+  });
+
+  it("applies nothing and re-renders when a tap would untick two boxes at once", async () => {
+    const { deps, fieldy, slack, items, id, note, tap } = await setup();
+    await handleChecklistTap(tap(`fieldy_cb:${id}:0`, ["t1", "t2"]), deps, { allowedUsers: [DAVE], note });
+    const fieldyBefore = fieldy.updates.length;
+    const updatesBefore = slack.updates.length;
+    await handleChecklistTap(tap(`fieldy_cb:${id}:0`, []), deps, { allowedUsers: [DAVE], note });
+    expect(fieldy.updates).toHaveLength(fieldyBefore);
+    expect(slack.updates).toHaveLength(updatesBefore + 1);
+    const done = items.get(id)!.filter((i) => i.doneAt !== null).map((i) => i.fieldyTaskId);
+    expect(done).toEqual(["t1", "t2"]);
+    expect(note).not.toHaveBeenCalled();
   });
 
   it("snaps back and tells anyone else only Dave can tick", async () => {

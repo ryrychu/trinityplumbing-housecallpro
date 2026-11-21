@@ -79,10 +79,14 @@ export async function handleChecklistTap(
       if (!selected.has(v) && isDone) untick.push(v);
     }
 
+    // A real tap toggles one box. Unticked-looking boxes next to a tick are
+    // ones Dave's client hadn't caught up on, and more than one untick means
+    // the message is stale: neither may reopen a task. The re-render catches
+    // the message up.
     try {
       if (tick.length > 0) await markDone(deps, cl.id, tick, "slack");
-      if (untick.length > 0) await markNotDone(deps, cl.id, untick, "slack");
-      if (tick.length === 0 && untick.length === 0) await renderChecklist(deps, cl.id);
+      else if (untick.length === 1) await markNotDone(deps, cl.id, untick, "slack");
+      else await renderChecklist(deps, cl.id);
     } catch (err) {
       await renderChecklist(deps, cl.id).catch(() => undefined);
       if (err instanceof FieldyApiError) {
