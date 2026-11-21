@@ -16,7 +16,8 @@ export interface FieldyPort {
   /** new + approved + completed tasks; a task can appear twice if it changed between calls. */
   tasks(): Promise<FieldyTask[]>;
   completed(): Promise<FieldyTask[]>;
-  update(id: string, update: TaskUpdate): Promise<FieldyTask>;
+  /** Null when Fieldy accepted the change but sent no task back. */
+  update(id: string, update: TaskUpdate): Promise<FieldyTask | null>;
   create(input: { title: string; date: string }): Promise<FieldyTask>;
   conversations(startIso: string, endIso: string): Promise<ConversationSummary[]>;
 }

@@ -169,12 +169,16 @@ export async function listTasks(status: FieldyTaskStatus): Promise<FieldyTask[]>
   throw new FieldyApiError("too_many_pages");
 }
 
-/** Marks a task done (`completed` + completionDate) or open again (`approved`). */
-export async function updateTask(id: string, update: TaskUpdate): Promise<FieldyTask> {
+/**
+ * Marks a task done (`completed` + completionDate) or open again (`approved`).
+ * Null when Fieldy reports success without sending the task back.
+ */
+export async function updateTask(id: string, update: TaskUpdate): Promise<FieldyTask | null> {
   const op = "PATCH /tasks/{id}";
   const key = requireKey(op);
   const body = await request(key, "PATCH", `/tasks/${encodeURIComponent(id)}`, op, { body: update });
   if (body.success !== true) throw new FieldyApiError("update_failed", op);
+  if (body.task === null || body.task === undefined) return null;
   const task = toTask(body.task);
   if (!task) throw new FieldyApiError("bad_response", op);
   return task;

@@ -156,6 +156,18 @@ describe("updateTask", () => {
     await expect(updateTask("t1", { status: "approved" })).rejects.toMatchObject({ code: "update_failed", op: "PATCH /tasks/{id}" });
   });
 
+  it("accepts success: true without the task", async () => {
+    fetchMock.mockResolvedValueOnce(ok({ success: true, task: null }));
+    await expect(updateTask("t1", { status: "approved" })).resolves.toBeNull();
+    fetchMock.mockResolvedValueOnce(ok({ success: true }));
+    await expect(updateTask("t1", { status: "approved" })).resolves.toBeNull();
+  });
+
+  it("still throws bad_response for a malformed task", async () => {
+    fetchMock.mockResolvedValueOnce(ok({ success: true, task: { title: "no id" } }));
+    await expect(updateTask("t1", { status: "approved" })).rejects.toMatchObject({ code: "bad_response" });
+  });
+
   it("names the PATCH in the error message, never the body", async () => {
     fetchMock.mockResolvedValueOnce(new Response("task t1 'Call Mrs. Smith' not found", { status: 404 }));
     const err = await updateTask("t1", { status: "approved" }).catch((e) => e);
