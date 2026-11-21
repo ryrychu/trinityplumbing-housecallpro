@@ -24,10 +24,11 @@ describe("HousecallPricebookWriter", () => {
 
   it("POSTs a new material into its category and returns the uuid", async () => {
     const f = fakeFetch(() => ({ body: { uuid: "new-1", name: "Rheem XE50" } }));
-    const res = await new HousecallPricebookWriter("key-1", f.fn).createMaterial("cat-1", { name: "Rheem XE50", price: 120000 });
+    const res = await new HousecallPricebookWriter("key-1", f.fn).createMaterial("cat-1", { name: "Rheem XE50", price: 120000, cost: 80000 });
     expect(res).toEqual({ uuid: "new-1" });
     expect(f.calls[0].url).toBe("https://api.housecallpro.com/api/price_book/materials?material_category_uuid=cat-1");
     expect(f.calls[0].init.method).toBe("POST");
+    expect(JSON.parse(String(f.calls[0].init.body))).toEqual({ material_category_uuid: "cat-1", name: "Rheem XE50", price: 120000, cost: 80000 });
   });
 
   it("finds one material by listing its category", async () => {

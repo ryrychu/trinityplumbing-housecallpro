@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { addMaterial, applyPreview, checkWriteAccess, createPreview, type EditDeps } from "../apply";
+import { addMaterial, applyPreview, checkWriteAccess, createPreview, type EditDeps, type NewMaterial } from "../apply";
 import { HcpWriteError } from "@/lib/housecall/pricebookWrite";
 import type { PricebookItem } from "@/lib/mcp/pricebook";
 import type { NewChange } from "../types";
@@ -151,16 +151,26 @@ describe("addMaterial", () => {
   });
   it("blocks an empty name without creating anything", async () => {
     const { deps, hcp } = setup();
-    const r = await addMaterial(deps, { categoryUuid: "c-pex", name: "   ", price: 1.25 }, ELLA);
+    const r = await addMaterial(deps, { categoryUuid: "c-pex", name: "   ", price: 1.25, cost: 0.4 }, ELLA);
     expect(r.created).toBeNull();
     expect(r.blocks[0].code).toBe("bad_name");
+    expect(hcp.created).toEqual([]);
+  });
+  it("blocks a missing or blank cost with bad_money, without creating anything", async () => {
+    const { deps, hcp } = setup();
+    const missing = await addMaterial(deps, { categoryUuid: "c-pex", name: "PEX cap", price: 1.25 } as unknown as NewMaterial, ELLA);
+    expect(missing.created).toBeNull();
+    expect(missing.blocks.map((b) => b.code)).toEqual(["bad_money"]);
+    const blank = await addMaterial(deps, { categoryUuid: "c-pex", name: "PEX cap", price: 1.25, cost: "  " }, ELLA);
+    expect(blank.created).toBeNull();
+    expect(blank.blocks.map((b) => b.code)).toEqual(["bad_money"]);
     expect(hcp.created).toEqual([]);
   });
   it("reports an unlogged create as a warning instead of throwing", async () => {
     const { deps, hcp, mem } = setup();
     const store = { ...mem.store, async insertChanges(): Promise<never> { throw new Error("db down"); } };
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    const r = await addMaterial({ ...deps, store }, { categoryUuid: "c-pex", name: "PEX cap", price: 1.25 }, ELLA);
+    const r = await addMaterial({ ...deps, store }, { categoryUuid: "c-pex", name: "PEX cap", price: 1.25, cost: 0.4 }, ELLA);
     expect(r.created).toEqual({ uuid: "new-1", name: "PEX cap" });
     expect(hcp.created).toHaveLength(1);
     expect(r.warnings.map((w) => w.code)).toContain("unlogged");

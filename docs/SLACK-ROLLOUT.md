@@ -625,7 +625,9 @@ HCP and replies in the thread if it doesn't match yet. Spec:
 5. In ChatGPT: "check write access". If it says the key can't write, Dave makes
    an HCP API key with write access and Ryan replaces `HOUSECALL_API_KEY`.
 6. Try it: change one part's price → undo it; preview +1% on a small category →
-   apply; request one service change → make it in HCP → tick it in Slack.
+   apply; add one test material in a test category (then rename it to
+   `ZZ test – do not use`, since it can't be deleted); request one service
+   change → make it in HCP → tick it in Slack.
 
 ### If something's off
 

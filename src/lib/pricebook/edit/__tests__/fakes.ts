@@ -72,7 +72,7 @@ export function fakeWriter(initial: PricebookItem[]) {
       if (f.part_number !== undefined) it.partNumber = f.part_number;
       if (f.taxable !== undefined) it.taxable = f.taxable;
     },
-    async createMaterial(categoryUuid: string, f: HcpMaterialFields & { name: string; price: number }) {
+    async createMaterial(categoryUuid: string, f: HcpMaterialFields & { name: string; price: number; cost: number }) {
       if (failStatus) throw new HcpWriteError(failStatus, "/api/price_book/materials");
       const uuid = `new-${++n}`;
       items.set(uuid, item({ uuid, name: f.name, priceCents: f.price, costCents: f.cost ?? null, description: f.description ?? "", categoryUuid, category: null }));

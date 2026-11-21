@@ -9,7 +9,7 @@ import type { FieldValues, NewChange, PlannedChange, PricebookEditStore } from "
 
 export interface MaterialWriter {
   updateMaterial(uuid: string, f: HcpMaterialFields): Promise<void>;
-  createMaterial(categoryUuid: string, f: HcpMaterialFields & { name: string; price: number }): Promise<{ uuid: string }>;
+  createMaterial(categoryUuid: string, f: HcpMaterialFields & { name: string; price: number; cost: number }): Promise<{ uuid: string }>;
   getMaterial(uuid: string, categoryUuid: string): Promise<PricebookItem | null>;
 }
 export type EditDeps = { store: PricebookEditStore; writer: MaterialWriter; loadItems(): Promise<PricebookItem[]>; now(): Date; newId(): string };
@@ -120,28 +120,30 @@ export async function applyPreview(deps: EditDeps, previewId: string, editorId: 
   return result;
 }
 
-export type NewMaterial = { categoryUuid: string; name: string; price: Money; cost?: Money; description?: string; unit?: string; partNumber?: string; taxable?: boolean; allowBelowCost?: boolean };
+export type NewMaterial = { categoryUuid: string; name: string; price: Money; cost: Money; description?: string; unit?: string; partNumber?: string; taxable?: boolean; allowBelowCost?: boolean };
 
 export async function addMaterial(deps: EditDeps, input: NewMaterial, editorId: string): Promise<{ created: { uuid: string; name: string } | null; blocks: Issue[]; warnings: Issue[] }> {
   const name = input.name.trim();
   const price = parseMoney(input.price);
-  const cost = input.cost !== undefined ? parseMoney(input.cost) : null;
+  // HCP requires a cost on create; it is never defaulted to 0 (that would fake a 100% margin).
+  const cost = input.cost === undefined || input.cost === null ? null : parseMoney(input.cost);
   const blocks: Issue[] = [];
   const warnings: Issue[] = [];
   if (name === "") blocks.push({ uuid: null, name: null, code: "bad_name", message: "The material needs a name." });
   if (price === null) blocks.push({ uuid: null, name, code: "bad_money", message: `"${input.price}" isn't a price.` });
-  // A cost that doesn't parse is refused, not silently dropped.
-  if (input.cost !== undefined && cost === null) blocks.push({ uuid: null, name, code: "bad_money", message: `"${input.cost}" isn't a cost.` });
+  if (cost === null) {
+    const given = input.cost === undefined || input.cost === null ? "" : String(input.cost).trim();
+    blocks.push({ uuid: null, name, code: "bad_money", message: given === "" ? "A new material needs a cost (HCP requires one)." : `"${input.cost}" isn't a cost.` });
+  }
   const bad = priceCheck(name, "", price, cost, Boolean(input.allowBelowCost));
   if (bad) blocks.push(bad);
-  if (blocks.length > 0 || price === null) return { created: null, blocks, warnings };
+  if (blocks.length > 0 || price === null || cost === null) return { created: null, blocks, warnings };
 
   const items = await deps.loadItems();
   if (items.some((i) => i.kind === "material" && i.name.trim().toLowerCase() === name.toLowerCase())) {
     warnings.push({ uuid: null, name, code: "duplicate_name", message: `Another material is already called "${name}".` });
   }
-  const after: FieldValues = { name, priceCents: price };
-  if (cost !== null) after.costCents = cost;
+  const after: FieldValues = { name, priceCents: price, costCents: cost };
   if (input.description !== undefined) after.description = input.description.trim();
   if (input.unit !== undefined) after.unit = input.unit.trim();
   if (input.partNumber !== undefined) after.partNumber = input.partNumber.trim();
@@ -149,7 +151,7 @@ export async function addMaterial(deps: EditDeps, input: NewMaterial, editorId: 
 
   let uuid: string;
   try {
-    ({ uuid } = await deps.writer.createMaterial(input.categoryUuid, { ...toHcpFields(after), name, price }));
+    ({ uuid } = await deps.writer.createMaterial(input.categoryUuid, { ...toHcpFields(after), name, price, cost }));
   } catch (err) {
     if (isAuthError(err)) throw new EditError("key_cannot_write", KEY_CANNOT_WRITE);
     throw err;

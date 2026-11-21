@@ -66,13 +66,14 @@ export class HousecallPricebookWriter {
     if (!res.ok) throw new HcpWriteError(res.status, path);
   }
 
-  async createMaterial(categoryUuid: string, fields: HcpMaterialFields & { name: string; price: number }): Promise<{ uuid: string }> {
+  // HCP requires material_category_uuid (query and body), name, price and cost.
+  async createMaterial(categoryUuid: string, fields: HcpMaterialFields & { name: string; price: number; cost: number }): Promise<{ uuid: string }> {
     const path = "/api/price_book/materials";
     const qs = new URLSearchParams({ material_category_uuid: categoryUuid });
     const res = await this.fetchImpl(`${BASE_URL}${path}?${qs}`, {
       method: "POST",
       headers: this.headers(true),
-      body: JSON.stringify(fields),
+      body: JSON.stringify({ material_category_uuid: categoryUuid, ...fields }),
     });
     if (!res.ok) throw new HcpWriteError(res.status, path);
     const body = (await res.json().catch(() => null)) as { uuid?: unknown } | null;

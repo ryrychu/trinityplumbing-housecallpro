@@ -182,12 +182,12 @@ export function createPricebookEditMcpServer(deps: PricebookEditToolDeps, caller
 
   server.registerTool("add_material", {
     title: "Add a material",
-    description: "Creates a new material in a category (ids from list_categories). Checks price vs cost first. Can't be deleted afterwards.",
+    description: "Creates a new material in a category (ids from list_categories). Price and cost are both required (HCP needs a cost). Checks price vs cost first. Can't be deleted afterwards.",
     inputSchema: {
       categoryUuid: z.string().min(1).max(200),
       name: z.string().min(1).max(200),
       price: MONEY,
-      cost: MONEY.optional(),
+      cost: MONEY,
       description: z.string().max(2000).optional(),
       unit: z.string().max(50).optional(),
       partNumber: z.string().max(100).optional(),
