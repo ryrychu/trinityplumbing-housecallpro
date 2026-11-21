@@ -522,12 +522,27 @@ grouped by date. Spec: `docs/superpowers/specs/2026-11-21-fieldy-checklist-desig
 
 ### Go-live (Ryan)
 
+Order matters: the migration goes in **before** the merge, and steps 2 and 3
+are done before the first morning after the deploy.
+
 0. **Test Dave's key first** (works with the code before this branch too):
-   Vercel → Production → set `FIELDY_API_KEY`, `SLACK_FIELDY_CHANNEL_ID`,
-   `SLACK_FIELDY_ENABLED=true`; redeploy; `/trinity fieldy preview` should list
-   his real tasks.
-1. Merge, then run `supabase/migrations/0008_task_checklists.sql` in the ops
-   Supabase SQL editor.
+   - **The key:** Dave creates it in the Fieldy app → Settings → Developer
+     Settings. It starts with `sk-fieldy-`. He sends it to you privately, never
+     in Slack.
+   - **The channel:** create a **private** channel, type
+     `/invite @<the Trinity bot>` in it, then copy the channel ID from the
+     channel name → About (it starts with `C`).
+   - Vercel → Production → set `FIELDY_API_KEY`, `SLACK_FIELDY_CHANNEL_ID`,
+     `SLACK_FIELDY_ENABLED=true`; redeploy; `/trinity fieldy preview` should
+     list his real tasks.
+
+   > **Warning:** on the code before this branch, `SLACK_FIELDY_ENABLED=true`
+   > (with `SLACK_ALERTS_ENABLED` on) also turns on the old raw 7am Fieldy
+   > post. Either accept that for a day, or do step 0 right after merging.
+1. Run `supabase/migrations/0008_task_checklists.sql` in the ops Supabase SQL
+   editor, **then** merge. The migration only adds tables and functions, so the
+   old code doesn't notice it, and running it first avoids
+   `relation does not exist` errors every 15 minutes after the deploy.
 2. Vercel → Production:
    - `OPENAI_API_KEY` — from platform.openai.com (billed separately from ChatGPT Business)
    - `OPENAI_MODEL` — optional; default `gpt-6-luna`
@@ -545,7 +560,18 @@ grouped by date. Spec: `docs/superpowers/specs/2026-11-21-fieldy-checklist-desig
 5. With Dave: "organize my Fieldy tasks" → a checklist appears in the channel;
    tick one box in Slack and say "done with …" in ChatGPT for another → both
    show completed in the Fieldy app; "add: call the Navien rep" → appears in
-   Fieldy and under **Added**. Next morning: one post, not two.
+   Fieldy and under **Added**. A tap by anyone else snaps back with "Only Dave
+   can check these off." Next morning: one post, not two.
+
+### Kill switches
+
+- `SLACK_FIELDY_ENABLED` covers the morning post, `/trinity fieldy preview`
+  and Slack taps.
+- ChatGPT posting and changes go through the connector, controlled by
+  `MCP_TASKS_ENABLED`.
+- The 15-minute sync (ticks made in the Fieldy app, re-posting a message that
+  didn't update) only runs while `SLACK_ALERTS_ENABLED` is on, as well as
+  `SLACK_FIELDY_ENABLED`.
 
 ### If something's off
 
@@ -561,4 +587,6 @@ grouped by date. Spec: `docs/superpowers/specs/2026-11-21-fieldy-checklist-desig
 ### Rollback
 
 Set `SLACK_FIELDY_ENABLED` and `MCP_TASKS_ENABLED` to anything but `true` and
-redeploy. Nothing in Fieldy is deleted by this feature, ever.
+redeploy. Nothing in Fieldy is deleted by this feature, ever. Checklist
+messages already posted stay in the channel; taps on them do nothing while
+`SLACK_FIELDY_ENABLED` is off.
