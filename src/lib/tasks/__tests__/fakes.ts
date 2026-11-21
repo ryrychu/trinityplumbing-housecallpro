@@ -1,5 +1,6 @@
 // Test doubles shared by the checklist, morning, connector and Slack-tap tests.
 import { FieldyApiError, type ConversationSummary, type FieldyTask, type TaskUpdate } from "@/lib/fieldy/client";
+import type { ChecklistDeps } from "../checklist";
 import type { ChecklistRow, ChecklistStore, ItemRow } from "../store";
 
 // 8:00 AM Eastern, Mon Nov 23 2026.
@@ -174,4 +175,19 @@ export function fakeSlack(opts: { onUpdate?: () => Promise<void> } = {}) {
       return all.length ? all[all.length - 1].blocks : [];
     },
   };
+}
+
+/** A full set of fakes wired as ChecklistDeps, clock fixed at NOW unless given. */
+export function makeDeps(opts: { tasks?: FieldyTask[]; now?: Date; onUpdate?: () => Promise<void> } = {}) {
+  const mem = memoryStore();
+  const fieldy = fakeFieldy(opts.tasks ?? []);
+  const slack = fakeSlack({ onUpdate: opts.onUpdate });
+  const deps: ChecklistDeps = {
+    fieldy: fieldy.port,
+    store: mem.store,
+    slack: slack.port,
+    channelId: "C_FIELDY",
+    now: () => opts.now ?? NOW,
+  };
+  return { deps, fieldy, slack, ...mem };
 }
