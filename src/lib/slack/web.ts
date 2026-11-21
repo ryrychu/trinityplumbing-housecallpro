@@ -1,7 +1,7 @@
-// The two Slack Web API calls the bot token is used for: reading
-// #declined-calls (conversations.history) and posting the Monday summary there
-// (chat.postMessage). Everything else in this app posts through incoming
-// webhooks and needs no token.
+// The Slack Web API calls the bot token is used for: reading
+// #declined-calls (conversations.history), posting (chat.postMessage) and
+// editing the Fieldy checklist (chat.update). Everything else in this app posts
+// through incoming webhooks and needs no token.
 //
 // Errors THROW. The declined-calls report reads before it claims and posts, so
 // a failed read must stop the pass rather than look like an empty week.
@@ -60,6 +60,7 @@ type SlackResponse = {
   ok: boolean;
   error?: string;
   needed?: string;
+  ts?: string;
   messages?: SlackMessage[];
   has_more?: boolean;
   response_metadata?: { next_cursor?: string };
@@ -124,8 +125,15 @@ export async function fetchChannelHistory(
   throw new SlackApiError("conversations.history", "too_many_pages");
 }
 
-export async function postMessage(token: string, channel: string, text: string): Promise<void> {
-  await call("chat.postMessage", token, {
-    json: { channel, text, unfurl_links: false, unfurl_media: false },
+/** Posts a message; returns its ts ("" if Slack sent none). */
+export async function postMessage(token: string, channel: string, text: string, blocks?: unknown[]): Promise<string> {
+  const data = await call("chat.postMessage", token, {
+    json: { channel, text, unfurl_links: false, unfurl_media: false, ...(blocks ? { blocks } : {}) },
   });
+  return data.ts ?? "";
+}
+
+/** Replaces a message the bot posted. Same chat:write scope as postMessage. */
+export async function updateMessage(token: string, channel: string, ts: string, text: string, blocks: unknown[]): Promise<void> {
+  await call("chat.update", token, { json: { channel, ts, text, blocks } });
 }

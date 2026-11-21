@@ -104,7 +104,9 @@ export type FieldyReportDeps = { source: TaskSource; post: (text: string) => Pro
 function defaultDeps(): FieldyReportDeps {
   return {
     source: fieldyTaskSource(),
-    post: (text) => postMessage(process.env.SLACK_BOT_TOKEN!, process.env.SLACK_FIELDY_CHANNEL_ID!, text),
+    post: async (text) => {
+      await postMessage(process.env.SLACK_BOT_TOKEN!, process.env.SLACK_FIELDY_CHANNEL_ID!, text);
+    },
   };
 }
 
