@@ -9,7 +9,7 @@ import { type RehostBudget } from "@/lib/sync/attachments";
 import { notifyPaidInvoices, notifyApprovedEstimates } from "@/lib/notifications/dispatch";
 import { claim } from "@/lib/notifications/dedupe";
 import { runDeclinedMonthlyReportPass, runDeclinedReportPass } from "@/lib/declined/declined";
-import { runFieldyDailyPass } from "@/lib/fieldy/fieldy";
+import { runFieldyChecklistPasses } from "@/lib/tasks/cron";
 import {
   isDailyDigestDue,
   isWeeklyLookaheadDue,
@@ -416,13 +416,13 @@ export async function GET(req: Request) {
       console.error("[cron] declined-calls monthly report pass failed:", err);
     }
 
-    // Dave's Fieldy tasks, 7-11am. Its own switch (SLACK_FIELDY_ENABLED) and
-    // its own claim, checked inside. Logged by message only: a FieldyApiError
-    // carries just the HTTP status, never task text.
+    // Dave's Fieldy checklist: the 7-11am morning post and the 15-minute sync
+    // with Fieldy. Its own switch (SLACK_FIELDY_ENABLED), checks and claim,
+    // and it catches its own errors; this try is belt and braces.
     try {
-      await runFieldyDailyPass(supabase, now);
+      await runFieldyChecklistPasses(supabase, now);
     } catch (err) {
-      console.error("[cron] fieldy daily pass failed:", err instanceof Error ? err.message : String(err));
+      console.error("[cron] fieldy checklist passes failed:", err instanceof Error ? err.message : String(err));
     }
 
     // Split from the daily digest below into its own try/catch: sharing one

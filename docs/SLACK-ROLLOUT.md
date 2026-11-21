@@ -511,77 +511,82 @@ Monday post but leaves `/trinity declined` working on its own entries.
 
 ---
 
-## Dave's Fieldy tasks — morning post and `/trinity fieldy preview`
+## Dave's Fieldy checklist — Slack, ChatGPT and `/trinity fieldy preview`
 
-Fieldy (Dave's recording pendant) turns his conversations into tasks. Every
-morning between 7 and 11 Eastern the bot posts them to one channel: the open
-ones, oldest first, and the ones he marked done yesterday:
-
-> **Dave's Fieldy tasks, Sat Nov 14**
-> **Pending: 3**, oldest first
-> • Call back about the boiler (12 days)
-> • Order PRV valve (3 days)
-> • Quote for the bathroom (due Nov 20)
-> **Completed yesterday (Fri Nov 13): 1**
-> • Return Ferguson parts
-> _A task only shows as completed here once Dave marks it done in Fieldy._
-
-- **Pending** = Fieldy status `new` (not reviewed yet) or `approved`. Rejected,
-  skipped, cancelled and expired tasks are not shown.
-- **Completed** = status `completed` with a completion time between midnight
-  and midnight Eastern yesterday. A task ticked off at 8am today, after the
-  post, shows tomorrow; nothing is listed twice.
-- **Age** counts calendar days from the task's Fieldy `date`. The API has no
-  "created" time and documents `date` as the due date, so a future date shows
-  as "due Nov 20" and a task with no date shows no age. If real tasks show this
-  is the wrong field, it's one line: `taskAgeAnchor()` in
-  `src/lib/fieldy/report.ts`.
-- 25 tasks per section at most, then "… and N more". A day with nothing open
-  and nothing done says so in one line.
-- **Done means tapped done in Fieldy.** Everything else stays pending. No AI
-  guesses what got done.
-
-**Nothing is stored.** The bot reads Fieldy (three GETs, by status) when it
-posts or previews, and keeps nothing: no task text in the database or logs.
-Task titles can hold customer names and addresses, so pick a channel only
-Dave and the office can read. `/trinity fieldy preview` shows the same text to
-whoever types it (ephemeral, like every `/trinity` reply).
-
-**Once a day:** `fieldy_daily` in `notifications_sent`, keyed by the Eastern
-date. No migration. If Fieldy can't be reached it posts nothing and tries
-again on the next 15-minute run, until 11am.
+Each morning between 7 and 11 (Eastern) the bot posts Dave's open Fieldy tasks
+as one grouped checklist in a private channel. Ticking a box in Slack, or
+telling ChatGPT "done with X" through the **Trinity Tasks** connector, marks the
+task completed in Fieldy too. ChatGPT can also rebuild the checklist and add
+tasks. Grouping uses the OpenAI API; if that fails the post still goes out,
+grouped by date. Spec: `docs/superpowers/specs/2026-11-21-fieldy-checklist-design.md`.
 
 ### Go-live (Ryan)
 
-1. **Dave makes an API key:** Fieldy app → Settings → Developer Settings. It
-   starts `sk-fieldy-` and is shown once. Check with Fieldy (hey@fieldy.ai)
-   whether his plan includes the Public API if the key is refused.
-2. Pick or create the channel (private is best). Type `/invite @<app name>`
-   there, then copy its ID (`C…`) from the bottom of the About tab.
-3. The bot token (`SLACK_BOT_TOKEN`) and its `chat:write` scope are already set
-   up for #declined-calls; nothing changes in the Slack app. If the channel is
-   private, the bot only needs to be invited.
-4. Set in Vercel (Production), then redeploy:
-   ```bash
-   vercel env add FIELDY_API_KEY           # sk-fieldy-…
-   vercel env add SLACK_FIELDY_CHANNEL_ID  # C…
-   vercel env add SLACK_FIELDY_ENABLED     # true
-   ```
-5. Check: `/trinity fieldy preview` shows this morning's post, only to you. If
-   Fieldy fails, the reply names the HTTP status and the fix (`http_401`: the
-   key was refused; `key_not_set`: step 4).
+Order matters: the migration goes in **before** the merge, and steps 2 and 3
+are done before the first morning after the deploy.
 
-The first post goes out the next morning between 7 and 11. It also needs
-`SLACK_ALERTS_ENABLED=true`, like the other scheduled posts. With the switch on
-but the key, token or channel ID missing, each run in the window logs
-`[fieldy] daily post skipped: … is not set` and does nothing else.
+0. **Test Dave's key first** (works with the code before this branch too):
+   - **The key:** Dave creates it in the Fieldy app → Settings → Developer
+     Settings. It starts with `sk-fieldy-`. He sends it to you privately, never
+     in Slack.
+   - **The channel:** create a **private** channel, type
+     `/invite @<the Trinity bot>` in it, then copy the channel ID from the
+     channel name → About (it starts with `C`).
+   - Vercel → Production → set `FIELDY_API_KEY`, `SLACK_FIELDY_CHANNEL_ID`,
+     `SLACK_FIELDY_ENABLED=true`; redeploy; `/trinity fieldy preview` should
+     list his real tasks.
 
-**Fieldy API** (checked 2026-11-14, https://api.fieldy.ai/docs): base
-`https://api.fieldy.ai/api/public/v2`, `Authorization: Bearer sk-fieldy-…`,
-`GET /tasks?status=…` (one status per call) returning `{ items: [...] }`,
-100 requests a minute per key. `/tasks` documents no date filter and no
-paging; if Fieldy adds paging the client follows `nextCursor` (the convention
-of its other list endpoints), up to 10 pages.
+   > **Warning:** on the code before this branch, `SLACK_FIELDY_ENABLED=true`
+   > (with `SLACK_ALERTS_ENABLED` on) also turns on the old raw 7am Fieldy
+   > post. Either accept that for a day, or do step 0 right after merging.
+1. Run `supabase/migrations/0008_task_checklists.sql` in the ops Supabase SQL
+   editor, **then** merge. The migration only adds tables and functions, so the
+   old code doesn't notice it, and running it first avoids
+   `relation does not exist` errors every 15 minutes after the deploy.
+2. Vercel → Production:
+   - `OPENAI_API_KEY` — from platform.openai.com (billed separately from ChatGPT Business)
+   - `OPENAI_MODEL` — optional; default `gpt-6-luna`
+   - `MCP_TASKS_ENABLED=true`
+   - `MCP_TASKS_OWNER_USER_ID` — Dave's user id (Supabase → Authentication → Users)
+   - `SLACK_FIELDY_ALLOWED_USERS` — Dave's Slack member id (profile → ⋮ → Copy member ID)
+   - confirm `SLACK_SIGNING_SECRET` is set (the `/trinity` command already uses it)
 
-**Rollback:** set `SLACK_FIELDY_ENABLED` to anything but `true` and redeploy.
-Removing `FIELDY_API_KEY` alone also stops it (with a warning each morning).
+   Redeploy.
+3. Slack app → **Interactivity & Shortcuts** → On → Request URL
+   `https://ops.trinity.plumbing/api/slack/interact` → Save.
+4. ChatGPT (Trinity workspace) → Plugins → Add custom MCP server: name
+   `Trinity Tasks`, URL `https://ops.trinity.plumbing/api/mcp/tasks`, OAuth.
+   Publish to the workspace; Dave connects with his ops login.
+5. With Dave: "organize my Fieldy tasks" → a checklist appears in the channel;
+   tick one box in Slack and say "done with …" in ChatGPT for another → both
+   show completed in the Fieldy app; "add: call the Navien rep" → appears in
+   Fieldy and under **Added**. A tap by anyone else snaps back with "Only Dave
+   can check these off." Next morning: one post, not two.
+
+### Kill switches
+
+- `SLACK_FIELDY_ENABLED` covers the morning post, `/trinity fieldy preview`
+  and Slack taps.
+- ChatGPT posting and changes go through the connector, controlled by
+  `MCP_TASKS_ENABLED`.
+- The 15-minute sync (ticks made in the Fieldy app, re-posting a message that
+  didn't update) only runs while `SLACK_ALERTS_ENABLED` is on, as well as
+  `SLACK_FIELDY_ENABLED`.
+
+### If something's off
+
+| What you see | Cause |
+|---|---|
+| Preview says Fieldy isn't set up | `FIELDY_API_KEY` missing or not redeployed |
+| No morning post | `SLACK_FIELDY_ENABLED` not exactly `true`, `SLACK_ALERTS_ENABLED` off, bot not in the channel, or a checklist already exists today |
+| Footer says "AI grouping didn't run" | `OPENAI_API_KEY` missing or OpenAI failed; logs show `[tasks] AI grouping skipped: <code>` |
+| Tapping a box does nothing | Interactivity URL not saved, or `SLACK_SIGNING_SECRET` missing |
+| "Only Dave can check these off." for Dave | His member id isn't in `SLACK_FIELDY_ALLOWED_USERS` |
+| ChatGPT says "only available to Dave's login" for Dave | `MCP_TASKS_OWNER_USER_ID` isn't his Supabase user id |
+
+### Rollback
+
+Set `SLACK_FIELDY_ENABLED` and `MCP_TASKS_ENABLED` to anything but `true` and
+redeploy. Nothing in Fieldy is deleted by this feature, ever. Checklist
+messages already posted stay in the channel; taps on them do nothing while
+`SLACK_FIELDY_ENABLED` is off.

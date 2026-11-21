@@ -90,11 +90,11 @@ vi.mock("@/lib/declined/declined", () => ({
   runDeclinedMonthlyReportPass: runDeclinedMonthlyReportPassMock,
 }));
 
-const { runFieldyDailyPassMock } = vi.hoisted(() => ({
-  runFieldyDailyPassMock: vi.fn().mockResolvedValue(false),
+const { runFieldyChecklistPassesMock } = vi.hoisted(() => ({
+  runFieldyChecklistPassesMock: vi.fn().mockResolvedValue(undefined),
 }));
-vi.mock("@/lib/fieldy/fieldy", () => ({
-  runFieldyDailyPass: runFieldyDailyPassMock,
+vi.mock("@/lib/tasks/cron", () => ({
+  runFieldyChecklistPasses: runFieldyChecklistPassesMock,
 }));
 
 import { GET } from "../route";
@@ -582,24 +582,24 @@ describe("GET /api/cron/sync", () => {
 
     // Same shape as the declined pass: it gates itself (SLACK_FIELDY_ENABLED,
     // 7-11am Eastern, config, claim); the route calls it and survives it.
-    it("runs the Fieldy daily pass and still posts the digest when it throws", async () => {
+    it("runs the Fieldy checklist passes and still posts the digest when it throws", async () => {
       vi.setSystemTime(new Date("2026-07-29T10:00:00Z")); // Wed 06:00 EDT
-      runFieldyDailyPassMock.mockRejectedValueOnce(new Error("[fieldy] GET /tasks failed: http_503"));
+      runFieldyChecklistPassesMock.mockRejectedValueOnce(new Error("[fieldy] GET /tasks failed: http_503"));
 
       const res = await GET(authorizedRequest());
 
       expect(res.status).toBe(200);
-      expect(runFieldyDailyPassMock).toHaveBeenCalledWith(expect.anything(), new Date("2026-07-29T10:00:00Z"));
+      expect(runFieldyChecklistPassesMock).toHaveBeenCalledWith(expect.anything(), new Date("2026-07-29T10:00:00Z"));
       expect(postSlackMock.mock.calls.some(([, text]) => String(text).includes("Today —"))).toBe(true);
     });
 
-    it("does not run the Fieldy daily pass when Slack alerts are disabled", async () => {
+    it("does not run the Fieldy checklist passes when Slack alerts are disabled", async () => {
       slackAlertsEnabledMock.mockReturnValue(false);
       vi.setSystemTime(new Date("2026-07-29T12:00:00Z"));
 
       await GET(authorizedRequest());
 
-      expect(runFieldyDailyPassMock).not.toHaveBeenCalled();
+      expect(runFieldyChecklistPassesMock).not.toHaveBeenCalled();
     });
   });
 

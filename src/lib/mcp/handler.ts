@@ -8,6 +8,7 @@ import {
   verifyMcpToken,
   wwwAuthenticate,
   type ClaimsVerifier,
+  type McpCaller,
   type McpResource,
 } from "./auth";
 import type { PricebookLoader } from "./pricebook";
@@ -16,7 +17,7 @@ import { createPricebookMcpServer } from "./server";
 export interface ServeMcpDeps {
   verify: ClaimsVerifier;
   resource: McpResource;
-  createServer: () => McpServer;
+  createServer: (caller: McpCaller) => McpServer;
 }
 
 export async function serveMcp(req: Request, deps: ServeMcpDeps): Promise<Response> {
@@ -33,7 +34,7 @@ export async function serveMcp(req: Request, deps: ServeMcpDeps): Promise<Respon
   }
 
   // Stateless: a fresh server and transport per request, plain JSON replies.
-  const server = deps.createServer();
+  const server = deps.createServer(caller);
   const transport = new WebStandardStreamableHTTPServerTransport({
     sessionIdGenerator: undefined,
     enableJsonResponse: true,

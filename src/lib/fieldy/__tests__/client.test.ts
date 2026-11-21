@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { listTasks, toTask, nextCursorOf, FieldyApiError, FIELDY_API_BASE } from "../client";
+import { listTasks, toTask, nextCursorOf, FieldyApiError, FIELDY_API_BASE, updateTask, createTask, listConversations, CONVERSATION_MAX } from "../client";
 
 const KEY = "sk-fieldy-test-not-real";
 const fetchMock = vi.fn();
@@ -131,5 +131,122 @@ describe("nextCursorOf", () => {
     expect(nextCursorOf({ items: [] })).toBeNull();
     expect(nextCursorOf({ items: [], nextCursor: "" })).toBeNull();
     expect(nextCursorOf({ items: [], nextCursor: 3 })).toBeNull();
+  });
+});
+
+describe("updateTask", () => {
+  it("PATCHes /tasks/{id} with the new status and completion date", async () => {
+    fetchMock.mockResolvedValueOnce(
+      ok({ success: true, task: { id: "t 1", title: "Call back", status: "completed", completionDate: "2026-11-23T15:00:00.000Z" } })
+    );
+
+    const task = await updateTask("t 1", { status: "completed", completionDate: "2026-11-23T15:00:00.000Z" });
+
+    expect(task).toMatchObject({ id: "t 1", status: "completed", completionDate: "2026-11-23T15:00:00.000Z" });
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe(`${FIELDY_API_BASE}/tasks/t%201`);
+    expect(init.method).toBe("PATCH");
+    expect(init.headers.Authorization).toBe(`Bearer ${KEY}`);
+    expect(init.headers["Content-Type"]).toBe("application/json");
+    expect(JSON.parse(init.body)).toEqual({ status: "completed", completionDate: "2026-11-23T15:00:00.000Z" });
+  });
+
+  it("throws update_failed when Fieldy answers success: false", async () => {
+    fetchMock.mockResolvedValueOnce(ok({ success: false, task: null }));
+    await expect(updateTask("t1", { status: "approved" })).rejects.toMatchObject({ code: "update_failed", op: "PATCH /tasks/{id}" });
+  });
+
+  it("accepts success: true without the task", async () => {
+    fetchMock.mockResolvedValueOnce(ok({ success: true, task: null }));
+    await expect(updateTask("t1", { status: "approved" })).resolves.toBeNull();
+    fetchMock.mockResolvedValueOnce(ok({ success: true }));
+    await expect(updateTask("t1", { status: "approved" })).resolves.toBeNull();
+  });
+
+  it("still throws bad_response for a malformed task", async () => {
+    fetchMock.mockResolvedValueOnce(ok({ success: true, task: { title: "no id" } }));
+    await expect(updateTask("t1", { status: "approved" })).rejects.toMatchObject({ code: "bad_response" });
+  });
+
+  it("names the PATCH in the error message, never the body", async () => {
+    fetchMock.mockResolvedValueOnce(new Response("task t1 'Call Mrs. Smith' not found", { status: 404 }));
+    const err = await updateTask("t1", { status: "approved" }).catch((e) => e);
+    expect(err).toBeInstanceOf(FieldyApiError);
+    expect(err.message).toBe("[fieldy] PATCH /tasks/{id} failed: http_404");
+  });
+
+  it("refuses without a key and makes no request", async () => {
+    delete process.env.FIELDY_API_KEY;
+    await expect(updateTask("t1", { status: "approved" })).rejects.toMatchObject({ code: "key_not_set" });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("createTask", () => {
+  it("POSTs the title and due date and returns the new task", async () => {
+    fetchMock.mockResolvedValueOnce(ok({ id: "t9", title: "Call the Navien rep", status: "new", date: "2026-11-23T17:00:00.000Z" }));
+
+    const task = await createTask({ title: "Call the Navien rep", date: "2026-11-23T17:00:00.000Z" });
+
+    expect(task).toEqual({ id: "t9", title: "Call the Navien rep", status: "new", date: "2026-11-23T17:00:00.000Z", completionDate: null });
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe(`${FIELDY_API_BASE}/tasks`);
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(init.body)).toEqual({ title: "Call the Navien rep", date: "2026-11-23T17:00:00.000Z" });
+  });
+
+  it("throws bad_response when the reply isn't a task", async () => {
+    fetchMock.mockResolvedValueOnce(ok({ ok: true }));
+    await expect(createTask({ title: "x", date: "2026-11-23T17:00:00.000Z" })).rejects.toMatchObject({ code: "bad_response" });
+  });
+});
+
+describe("listConversations", () => {
+  it("asks for the time range and keeps only id, title, summary and startTime", async () => {
+    fetchMock.mockResolvedValueOnce(
+      ok({
+        items: [
+          {
+            id: "c1",
+            title: "Troy boiler walkthrough",
+            summary: "Talked through the Navien install.",
+            content: "FULL TRANSCRIPT",
+            quotes: [{ text: "q", context: null }],
+            speakers: ["Dave"],
+            location: { address: "1 Main St" },
+            startTime: "2026-11-22T15:00:00.000Z",
+            locked: false,
+          },
+          { id: "c2", title: null, summary: null, startTime: "2026-11-22T16:00:00.000Z", locked: true },
+        ],
+        nextCursor: null,
+      })
+    );
+
+    const convs = await listConversations("2026-11-22T13:00:00.000Z", "2026-11-23T13:00:00.000Z");
+
+    expect(convs).toEqual([
+      { id: "c1", title: "Troy boiler walkthrough", summary: "Talked through the Navien install.", startTime: "2026-11-22T15:00:00.000Z" },
+    ]);
+    const url = new URL(fetchMock.mock.calls[0][0]);
+    expect(url.pathname).toBe("/api/public/v2/conversations");
+    expect(url.searchParams.get("startTime")).toBe("2026-11-22T13:00:00.000Z");
+    expect(url.searchParams.get("endTime")).toBe("2026-11-23T13:00:00.000Z");
+    expect(url.searchParams.get("pageSize")).toBe(String(CONVERSATION_MAX));
+  });
+
+  it("follows nextCursor and stops at CONVERSATION_MAX", async () => {
+    const page = (from: number, n: number, next: string | null) =>
+      ok({
+        items: Array.from({ length: n }, (_, i) => ({ id: `c${from + i}`, title: "t", summary: "s", startTime: "2026-11-22T15:00:00.000Z" })),
+        nextCursor: next,
+      });
+    fetchMock.mockResolvedValueOnce(page(0, 15, "p2")).mockResolvedValueOnce(page(15, 15, "p3"));
+
+    const convs = await listConversations("a", "b");
+
+    expect(convs).toHaveLength(CONVERSATION_MAX);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(new URL(fetchMock.mock.calls[1][0]).searchParams.get("cursor")).toBe("p2");
   });
 });

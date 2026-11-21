@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { postToResponseUrl } from "../respond";
+import { postEphemeralNote, postToResponseUrl } from "../respond";
 
 const URL_ = "https://hooks.slack.com/commands/T1/2/abc";
 
@@ -38,5 +38,18 @@ describe("postToResponseUrl", () => {
   it("returns false and does not throw when the request errors", async () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("network down")));
     expect(await postToResponseUrl(URL_, "hi")).toBe(false);
+  });
+});
+
+describe("postEphemeralNote", () => {
+  it("posts an ephemeral reply that leaves the original message alone", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response("ok", { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    expect(await postEphemeralNote("https://hooks.slack.com/actions/x", "Only Dave can check these off.")).toBe(true);
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
+      response_type: "ephemeral",
+      replace_original: false,
+      text: "Only Dave can check these off.",
+    });
   });
 });

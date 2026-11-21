@@ -1,15 +1,7 @@
-// The daily Fieldy post: Dave's open tasks and what he marked done yesterday.
-// Pure: tasks and a clock in, Slack mrkdwn out.
+// Fieldy task helpers: which tasks are open, which were done yesterday, and their dates. Pure.
 import { dayRange } from "@/lib/dashboard/week";
 import { localDateKey } from "@/lib/notifications/schedule";
-import { dayLabelFromKey } from "@/lib/slack/format";
 import type { FieldyTask } from "./client";
-
-/** At most this many tasks per section; the rest are summed up. Same cap as the declined-calls list. */
-export const LIST_MAX = 25;
-const TITLE_MAX = 150;
-
-export const FOOTNOTE = "_A task only shows as completed here once Dave marks it done in Fieldy._";
 
 export type TaskBucket = "pending" | "completed" | "closed";
 export type Range = { startIso: string; endIso: string };
@@ -79,7 +71,7 @@ export function ageLabel(task: FieldyTask, now: Date): string | null {
 }
 
 /** One entry per task id. A task read as new and then as completed (it changed between calls) counts as completed. */
-function uniqueById(tasks: FieldyTask[]): FieldyTask[] {
+export function uniqueById(tasks: FieldyTask[]): FieldyTask[] {
   const byId = new Map<string, FieldyTask>();
   for (const t of tasks) {
     const seen = byId.get(t.id);
@@ -116,56 +108,4 @@ export function completedTasks(tasks: FieldyTask[], now: Date): FieldyTask[] {
     .filter(({ at }) => at >= from && at < to)
     .sort((a, b) => a.at - b.at)
     .map(({ t }) => t);
-}
-
-function cleanTitle(title: string): string {
-  const flat = title.replace(/\s+/g, " ").trim();
-  const short = flat.length > TITLE_MAX ? `${flat.slice(0, TITLE_MAX - 1).trimEnd()}…` : flat;
-  // Escaped so a title can't ping the channel (<!channel>) or a person.
-  return short.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-}
-
-function capped(lines: string[]): string[] {
-  if (lines.length <= LIST_MAX) return lines;
-  return [...lines.slice(0, LIST_MAX), `… and ${lines.length - LIST_MAX} more`];
-}
-
-/**
- * The post for the morning of `now`. With `preview` the heading says so;
- * the body is identical, so the preview shows exactly what will be posted.
- */
-export function formatFieldyPost(tasks: FieldyTask[], now: Date, opts: { preview?: boolean } = {}): string {
-  const all = uniqueById(tasks);
-  const pending = pendingTasks(all);
-  const done = completedTasks(all, now);
-  const yesterday = dayLabelFromKey(localDateKey(new Date(completedWindow(now).startIso)));
-
-  const lines = [`*${opts.preview ? "Preview: " : ""}Dave's Fieldy tasks, ${dayLabelFromKey(localDateKey(now))}*`];
-
-  if (pending.length === 0 && done.length === 0) {
-    lines.push(`No open tasks, and nothing marked done yesterday (${yesterday}).`);
-  } else {
-    if (pending.length === 0) {
-      lines.push("*Pending:* none");
-    } else {
-      lines.push(`*Pending: ${pending.length}*, oldest first`);
-      lines.push(
-        ...capped(
-          pending.map((t) => {
-            const age = ageLabel(t, now);
-            return `• ${cleanTitle(t.title)}${age ? ` (${age})` : ""}`;
-          })
-        )
-      );
-    }
-    if (done.length === 0) {
-      lines.push(`*Completed yesterday (${yesterday}):* none`);
-    } else {
-      lines.push(`*Completed yesterday (${yesterday}): ${done.length}*`);
-      lines.push(...capped(done.map((t) => `• ${cleanTitle(t.title)}`)));
-    }
-  }
-
-  lines.push(FOOTNOTE);
-  return lines.join("\n");
 }

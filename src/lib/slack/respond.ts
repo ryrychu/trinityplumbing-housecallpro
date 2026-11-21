@@ -6,7 +6,7 @@
 // answer land where the person typed and needs no bot token or OAuth scopes.
 const TIMEOUT_MS = 10_000;
 
-export async function postToResponseUrl(responseUrl: string, text: string): Promise<boolean> {
+async function send(responseUrl: string, text: string, replaceOriginal: boolean): Promise<boolean> {
   try {
     const res = await fetch(responseUrl, {
       method: "POST",
@@ -16,9 +16,7 @@ export async function postToResponseUrl(responseUrl: string, text: string): Prom
         // numbers, and only the person who asked needs to see them. Switching
         // to "in_channel" is a deliberate decision, not a default.
         response_type: "ephemeral",
-        // Replaces the "Working on it…" acknowledgement rather than stacking
-        // a second message under it.
-        replace_original: true,
+        replace_original: replaceOriginal,
         text,
       }),
       signal: AbortSignal.timeout(TIMEOUT_MS),
@@ -36,4 +34,21 @@ export async function postToResponseUrl(responseUrl: string, text: string): Prom
     console.error("[slack] response_url post threw:", err instanceof Error ? err.message : String(err));
     return false;
   }
+}
+
+/**
+ * A slash-command answer. replace_original replaces the "Working on it…"
+ * acknowledgement rather than stacking a second message under it.
+ */
+export async function postToResponseUrl(responseUrl: string, text: string): Promise<boolean> {
+  return send(responseUrl, text, true);
+}
+
+/**
+ * A private note after a button or checkbox tap. replace_original stays false:
+ * for a block action, response_url points at the message that was tapped, and
+ * true would replace Dave's checklist with this note.
+ */
+export async function postEphemeralNote(responseUrl: string, text: string): Promise<boolean> {
+  return send(responseUrl, text, false);
 }
