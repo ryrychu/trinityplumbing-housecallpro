@@ -89,3 +89,32 @@ describe("undoChange", () => {
     expect(u.undone).toEqual([]);
   });
 });
+
+describe("undoChange with fields that were empty before", () => {
+  it("clears a part number that was set where there was none", async () => {
+    const hcp = fakeWriter([item({ uuid: "m1", partNumber: null })]);
+    const mem = memoryStore(() => NOW);
+    const deps: EditDeps = { store: mem.store, writer: hcp.writer, loadItems: async () => hcp.all(), now: () => NOW, newId: ids() };
+    const p = await createPreview(deps, { items: [{ uuid: "m1", partNumber: "ABC-1" }] }, DAVE);
+    expect(p.changes[0].before).toEqual({ partNumber: "" });
+    const r = await applyPreview(deps, p.previewId!, DAVE);
+    const u = await undoChange(deps, { batchId: r.batchId }, DAVE);
+    expect(u.undone).toHaveLength(1);
+    expect(hcp.updates[hcp.updates.length - 1]).toEqual(["m1", { part_number: "" }]);
+    expect(hcp.items.get("m1")!.partNumber).toBe("");
+  });
+
+  it("won't report a number it can't clear as undone", async () => {
+    const hcp = fakeWriter([item({ uuid: "m1", costCents: null })]);
+    const mem = memoryStore(() => NOW);
+    const deps: EditDeps = { store: mem.store, writer: hcp.writer, loadItems: async () => hcp.all(), now: () => NOW, newId: ids() };
+    const p = await createPreview(deps, { items: [{ uuid: "m1", cost: 1 }] }, DAVE);
+    const r = await applyPreview(deps, p.previewId!, DAVE);
+    const writes = hcp.updates.length;
+    const u = await undoChange(deps, { batchId: r.batchId }, DAVE);
+    expect(u.undone).toEqual([]);
+    expect(u.skipped[0]).toMatchObject({ code: "cannot_restore_unset", fields: ["costCents"] });
+    expect(hcp.updates).toHaveLength(writes);
+    expect(mem.changes.find((c) => c.kind === "material_update")!.status).toBe("applied");
+  });
+});

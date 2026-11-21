@@ -4,7 +4,7 @@
 // thrown away: the caller must always learn what reached HCP.
 import { HcpWriteError, type HcpMaterialFields } from "@/lib/housecall/pricebookWrite";
 import type { PricebookItem } from "@/lib/mcp/pricebook";
-import { buildPreview, describeChange, fieldsDiffer, itemValues, parseMoney, priceCheck, toHcpFields, type Issue, type Money, type Preview, type PreviewRequest } from "./changes";
+import { buildPreview, changedKeys, describeChange, fieldsDiffer, itemValues, parseMoney, priceCheck, toHcpFields, type Issue, type Money, type Preview, type PreviewRequest } from "./changes";
 import type { FieldValues, NewChange, PlannedChange, PricebookEditStore } from "./types";
 
 export interface MaterialWriter {
@@ -94,7 +94,7 @@ export async function applyPreview(deps: EditDeps, previewId: string, editorId: 
       continue;
     }
     if (!current) { result.skipped.push({ uuid: c.uuid, name: c.name, code: "not_found", current: null }); continue; }
-    if (fieldsDiffer(current, c.before)) { result.skipped.push({ uuid: c.uuid, name: c.name, code: "changed_since", current: itemValues(current) }); continue; }
+    if (fieldsDiffer(current, c.before, changedKeys(c.after))) { result.skipped.push({ uuid: c.uuid, name: c.name, code: "changed_since", current: itemValues(current) }); continue; }
 
     try {
       await deps.writer.updateMaterial(c.uuid, toHcpFields(c.after));

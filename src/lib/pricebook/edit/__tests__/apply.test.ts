@@ -195,3 +195,24 @@ describe("checkWriteAccess", () => {
     await expect(checkWriteAccess(deps)).rejects.toMatchObject({ status: 500 });
   });
 });
+
+describe("applyPreview and fields that were empty at preview time", () => {
+  it("skips an item whose empty description was filled in since the preview", async () => {
+    const { deps, hcp } = setup([item({ uuid: "m1", description: "" })]);
+    const p = await createPreview(deps, { items: [{ uuid: "m1", description: "1/2 inch PEX brass tee fitting, lead free" }] }, DAVE);
+    hcp.items.get("m1")!.description = "Someone else's description";
+    const r = await applyPreview(deps, p.previewId!, DAVE);
+    expect(r.applied).toEqual([]);
+    expect(r.skipped[0].code).toBe("changed_since");
+    expect(hcp.updates).toEqual([]);
+  });
+
+  it("skips an item whose unset cost was set since the preview", async () => {
+    const { deps, hcp } = setup([item({ uuid: "m1", costCents: null })]);
+    const p = await createPreview(deps, { items: [{ uuid: "m1", cost: 1 }] }, DAVE);
+    hcp.items.get("m1")!.costCents = 80;
+    const r = await applyPreview(deps, p.previewId!, DAVE);
+    expect(r.skipped[0].code).toBe("changed_since");
+    expect(hcp.updates).toEqual([]);
+  });
+});

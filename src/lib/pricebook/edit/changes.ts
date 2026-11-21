@@ -37,23 +37,34 @@ export function applyPercent(cents: number, pct: number, round: "cent" | "dollar
   return Math.round(raw);
 }
 
+// Text fields are always present ("" when unset), so a change's `before` can put
+// an empty field back. Numbers and taxable are left out when HCP has none: HCP
+// can't be told to clear them, and undo refuses rather than pretend (see undo.ts).
 export function itemValues(i: PricebookItem): FieldValues {
   return {
     name: i.name,
     description: i.description,
     ...(i.priceCents !== null ? { priceCents: i.priceCents } : {}),
     ...(i.costCents !== null ? { costCents: i.costCents } : {}),
-    ...(i.unit !== null ? { unit: i.unit } : {}),
-    ...(i.partNumber !== null ? { partNumber: i.partNumber } : {}),
+    unit: i.unit ?? "",
+    partNumber: i.partNumber ?? "",
     ...(i.taxable !== null ? { taxable: i.taxable } : {}),
   };
 }
 
 const KEYS: Array<keyof FieldValues> = ["name", "description", "priceCents", "costCents", "unit", "partNumber", "taxable"];
 
-export function fieldsDiffer(i: PricebookItem, values: FieldValues): boolean {
+// True if HCP's item no longer matches `values` on any of `keys` (default: the
+// keys `values` has). A key missing from `values` means "was unset", so it
+// differs once HCP holds a value for it.
+export function fieldsDiffer(i: PricebookItem, values: FieldValues, keys?: Array<keyof FieldValues>): boolean {
   const cur = itemValues(i);
-  return KEYS.some((k) => values[k] !== undefined && values[k] !== cur[k]);
+  const ks = keys ?? KEYS.filter((k) => values[k] !== undefined);
+  return ks.some((k) => values[k] !== cur[k]);
+}
+
+export function changedKeys(after: FieldValues): Array<keyof FieldValues> {
+  return KEYS.filter((k) => after[k] !== undefined);
 }
 
 export function toHcpFields(v: FieldValues): HcpMaterialFields {

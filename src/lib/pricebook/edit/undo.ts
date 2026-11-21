@@ -3,7 +3,7 @@
 // Once an undo starts, a partial result is returned, never thrown away.
 import type { PricebookItem } from "@/lib/mcp/pricebook";
 import { EditError, errorCode, isAuthError, logChange, type EditDeps } from "./apply";
-import { fieldsDiffer, itemValues, toHcpFields } from "./changes";
+import { changedKeys, fieldsDiffer, itemValues, toHcpFields } from "./changes";
 import type { ChangeRow, FieldValues } from "./types";
 
 export const UNDO_DAYS = 30;
@@ -12,7 +12,7 @@ export type UndoResult = {
   aborted: string | null;
   undone: Array<{ id: number; name: string }>;
   dismissed: Array<{ id: number; name: string }>;
-  skipped: Array<{ id: number; name: string; code: string; current?: FieldValues | null }>;
+  skipped: Array<{ id: number; name: string; code: string; current?: FieldValues | null; fields?: string[] }>;
   unlogged: Array<{ uuid: string; name: string }>;
   serviceBatches: string[];
 };
@@ -47,6 +47,12 @@ export async function undoChange(deps: EditDeps, ref: { changeId?: number; batch
       out.skipped.push({ id: r.id, name: r.itemName, code: "not_undoable" });
       continue;
     }
+
+    // A field that had no value before (a number or taxable) can't be cleared in
+    // HCP, so this row can't be fully undone: say so instead of reporting "undone".
+    const before = r.before;
+    const unset = changedKeys(r.after).filter((k) => before[k] === undefined);
+    if (unset.length > 0) { out.skipped.push({ id: r.id, name: r.itemName, code: "cannot_restore_unset", fields: unset }); continue; }
 
     let current: PricebookItem | null;
     try {
