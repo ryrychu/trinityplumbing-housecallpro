@@ -79,7 +79,7 @@ export function ageLabel(task: FieldyTask, now: Date): string | null {
 }
 
 /** One entry per task id. A task read as new and then as completed (it changed between calls) counts as completed. */
-function uniqueById(tasks: FieldyTask[]): FieldyTask[] {
+export function uniqueById(tasks: FieldyTask[]): FieldyTask[] {
   const byId = new Map<string, FieldyTask>();
   for (const t of tasks) {
     const seen = byId.get(t.id);
