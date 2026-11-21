@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { PB_NOT_ALLOWED_TEXT, handleServiceTap, parsePbActionId, pbActionId, requestServiceChanges, type ServiceDeps } from "../serviceChecklist";
+import { PB_NOT_ALLOWED_TEXT, SlackPostFailed, handleServiceTap, parsePbActionId, pbActionId, requestServiceChanges, type ServiceDeps } from "../serviceChecklist";
 import type { PricebookItem } from "@/lib/mcp/pricebook";
 import { DAVE, ELLA, NOW, fakeSlack, ids, item, memoryStore } from "./fakes";
 
@@ -97,13 +97,67 @@ describe("requestServiceChanges review fixes", () => {
     let fail = true;
     const realPost = deps.slack.post;
     deps.slack = { ...deps.slack, post: async (c, t, b) => { if (fail) throw new Error("slack down"); return realPost(c, t, b); } };
-    await expect(requestServiceChanges(deps, [{ uuid: "s1", price: 195 }], DAVE)).rejects.toThrow("slack down");
+    await expect(requestServiceChanges(deps, [{ uuid: "s1", price: 195 }], DAVE)).rejects.toBeInstanceOf(SlackPostFailed);
     expect(mem.changes[0]).toMatchObject({ status: "dismissed", errorCode: "slack_post_failed" });
     fail = false;
     const r = await requestServiceChanges(deps, [{ uuid: "s1", price: 195 }], DAVE);
     expect(r.merged).toEqual([]);
     expect(r.batchId).not.toBeNull();
     expect(slack.posts).toHaveLength(1);
+  });
+});
+
+describe("requestServiceChanges after the post", () => {
+  it("keeps the request and warns when a description reply fails", async () => {
+    const { deps, mem } = setup();
+    deps.slack = { ...deps.slack, reply: async () => { throw new Error("msg_too_long"); } };
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    const r = await requestServiceChanges(deps, [{ uuid: "s1", description: "Main line drain cleaning up to 150 ft, camera check included" }], DAVE);
+    expect(r.batchId).not.toBeNull();
+    expect(r.warnings.map((w) => w.code)).toContain("slack_reply_failed");
+    expect(mem.changes[0].status).toBe("pending");
+    err.mockRestore();
+  });
+
+  it("keeps the rows pending and warns when the message link can't be saved", async () => {
+    const { deps, mem, slack } = setup();
+    deps.store = { ...deps.store, async setSlackMessage() { throw new Error("db down"); } };
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    const r = await requestServiceChanges(deps, [{ uuid: "s1", price: 195 }], DAVE);
+    expect(slack.posts).toHaveLength(1);
+    expect(mem.changes[0].status).toBe("pending");
+    expect(r.warnings.map((w) => w.code)).toContain("slack_link_not_saved");
+    err.mockRestore();
+  });
+
+  it("warns instead of throwing when a merge's Slack update fails", async () => {
+    const { deps } = setup();
+    await requestServiceChanges(deps, [{ uuid: "s1", price: 195 }], DAVE);
+    deps.slack = { ...deps.slack, update: async () => { throw new Error("slack down"); }, reply: async () => { throw new Error("slack down"); } };
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    const r = await requestServiceChanges(deps, [{ uuid: "s1", description: "Main line drain cleaning up to 150 ft, camera check included" }], DAVE);
+    expect(r.merged).toHaveLength(1);
+    expect(r.warnings.map((w) => w.code)).toContain("slack_reply_failed");
+    err.mockRestore();
+  });
+
+  it("splits long description replies so none is over 3,500 characters", async () => {
+    const book = Array.from({ length: 5 }, (_, k) => item({ uuid: `s${k}`, kind: "service", name: `Service ${k}`, priceCents: 10000, costCents: 1000 }));
+    const { deps, slack, setBook } = setup();
+    setBook(book);
+    await requestServiceChanges(deps, book.map((b, k) => ({ uuid: b.uuid, description: String(k).repeat(2000) })), DAVE);
+    expect(slack.replies.length).toBeGreaterThan(1);
+    expect(slack.replies.every((r) => r.text.length <= 3500)).toBe(true);
+    const all = slack.replies.map((r) => r.text).join("");
+    for (let k = 0; k < 5; k++) expect(all).toContain(String(k).repeat(2000));
+  });
+
+  it("doesn't price-check a request that leaves the price alone", async () => {
+    const { deps, setBook } = setup();
+    setBook([item({ uuid: "s9", kind: "service", name: "Odd job", priceCents: 1000, costCents: 5000 })]);
+    const r = await requestServiceChanges(deps, [{ uuid: "s9", description: "A clearer description of the odd job" }], DAVE);
+    expect(r.blocks).toEqual([]);
+    expect(r.batchId).not.toBeNull();
   });
 });
 

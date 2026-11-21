@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { createPricebookEditMcpServer, type PricebookEditToolDeps } from "../server";
@@ -92,6 +92,17 @@ describe("Trinity Price Book Editor", () => {
     const r = await client.callTool({ name: "request_service_changes", arguments: { items: [{ uuid: "s1", price: 195 }] } });
     expect(r.isError).toBe(true);
     expect(text(r)).toBe("Couldn't post to the Slack checklist, so nothing was requested. It's safe to try again.");
+  });
+
+  it("doesn't claim nothing was requested when a later step fails", async () => {
+    const { client, mem } = await connect(DAVE);
+    mem.store.listPendingServices = async () => { throw new Error("db down"); };
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    const r = await client.callTool({ name: "request_service_changes", arguments: { items: [{ uuid: "s1", price: 195 }] } });
+    expect(r.isError).toBe(true);
+    expect(text(r)).not.toMatch(/nothing was requested/);
+    expect(text(r)).toMatch(/recent_changes/);
+    err.mockRestore();
   });
 
   it("shows recent changes with who made them", async () => {

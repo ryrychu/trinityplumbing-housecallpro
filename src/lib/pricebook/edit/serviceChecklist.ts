@@ -43,6 +43,44 @@ function descriptionReply(name: string, description: string): string {
   return `*${escapeMrkdwn(name)}*, new description:\n${escapeMrkdwn(description)}`;
 }
 
+// Slack truncates long messages, so description replies go out in pieces of at
+// most REPLY_MAX characters. A piece never ends inside an HTML entity (&amp; …)
+// or between the halves of a surrogate pair.
+export const REPLY_MAX = 3500;
+export function splitReplies(parts: string[], max = REPLY_MAX): string[] {
+  const pieces: string[] = [];
+  for (const part of parts) {
+    let rest = part;
+    while (rest.length > max) {
+      let cut = max;
+      const amp = rest.lastIndexOf("&", cut - 1);
+      if (amp > cut - 6 && rest.indexOf(";", amp) >= cut) cut = amp;
+      const code = rest.charCodeAt(cut - 1);
+      if (code >= 0xd800 && code <= 0xdbff) cut -= 1;
+      pieces.push(rest.slice(0, cut));
+      rest = rest.slice(cut);
+    }
+    pieces.push(rest);
+  }
+  const out: string[] = [];
+  for (const p of pieces) {
+    const i = out.length - 1;
+    if (i >= 0 && out[i].length + 2 + p.length <= max) out[i] = `${out[i]}\n\n${p}`;
+    else out.push(p);
+  }
+  return out;
+}
+
+/** The new checklist couldn't be posted: its rows were dismissed, so a retry is clean. */
+export class SlackPostFailed extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "SlackPostFailed";
+  }
+}
+
+const msgOf = (e: unknown) => (e instanceof Error ? e.message : String(e));
+
 export function renderServiceBatch(rows: ChangeRow[], askedBy: string): { text: string; blocks: unknown[] } {
   const live = rows.filter((r) => r.status !== "dismissed");
   const done = live.filter((r) => r.status === "done").length;
@@ -105,7 +143,8 @@ export async function requestServiceChanges(
       after.description = req.description.trim();
       if (after.description === "") { blocks.push({ uuid: it.uuid, name: it.name, code: "bad_description", message: `${it.name}: the new description can't be empty.` }); continue; }
     }
-    const bad = priceCheck(it.name, it.uuid, after.priceCents ?? it.priceCents, it.costCents, Boolean(opts.allowBelowCost));
+    // Only a price change is checked against cost (as for materials).
+    const bad = after.priceCents !== undefined ? priceCheck(it.name, it.uuid, after.priceCents, it.costCents, Boolean(opts.allowBelowCost)) : null;
     if (bad) { blocks.push(bad); continue; }
     if (after.priceCents !== undefined && it.priceCents && Math.abs(after.priceCents - it.priceCents) / it.priceCents > BIG_CHANGE) {
       warnings.push({ uuid: it.uuid, name: it.name, code: "big_change", message: `${it.name}: price moves more than 25%.` });
@@ -115,6 +154,16 @@ export async function requestServiceChanges(
     planned.push({ it, before, after });
   }
   if (blocks.length > 0 || planned.length === 0) return { batchId: null, requested: [], merged: [], blocks, warnings };
+
+  // A Slack reply that fails after the request is recorded is a warning, not an error.
+  async function replyAll(channel: string, threadTs: string, parts: string[], name: string | null): Promise<void> {
+    try {
+      for (const text of splitReplies(parts)) await deps.slack.reply(channel, threadTs, text);
+    } catch (e) {
+      console.error(`[pricebook] description reply failed: ${msgOf(e)}`);
+      warnings.push({ uuid: null, name, code: "slack_reply_failed", message: "Recorded, but the full description couldn't be posted in the Slack thread." });
+    }
+  }
 
   const pending = await deps.store.listPendingServices();
   const merged: Array<{ id: number; name: string }> = [];
@@ -129,13 +178,20 @@ export async function requestServiceChanges(
       }
       await deps.store.updateChange(existing.id, { before, after: { ...existing.after, ...p.after } });
       if (p.after.description !== undefined && existing.slackChannelId && existing.slackMessageTs) {
-        await deps.slack.reply(existing.slackChannelId, existing.slackMessageTs, descriptionReply(existing.itemName, p.after.description));
+        await replyAll(existing.slackChannelId, existing.slackMessageTs, [descriptionReply(existing.itemName, p.after.description)], existing.itemName);
       }
       merged.push({ id: existing.id, name: existing.itemName });
       if (!touchedBatches.includes(existing.batchId)) touchedBatches.push(existing.batchId);
     } else fresh.push(p);
   }
-  for (const b of touchedBatches) await rerenderBatch(deps, b);
+  for (const b of touchedBatches) {
+    try {
+      await rerenderBatch(deps, b);
+    } catch (e) {
+      console.error(`[pricebook] checklist update failed: ${msgOf(e)}`);
+      warnings.push({ uuid: null, name: null, code: "slack_reply_failed", message: "Recorded, but the Slack checklist couldn't be updated; it catches up on the next tick." });
+    }
+  }
   if (fresh.length === 0) return { batchId: null, requested: [], merged, blocks, warnings };
 
   const batchId = deps.newId();
@@ -146,14 +202,20 @@ export async function requestServiceChanges(
   let ts: string;
   try {
     ts = await deps.slack.post(deps.channelId, msg.text, msg.blocks);
-    await deps.store.setSlackMessage(batchId, deps.channelId, ts);
   } catch (e) {
     await deps.store.setStatus(rows.map((r) => r.id), "dismissed", { errorCode: "slack_post_failed" });
-    throw e;
+    throw new SlackPostFailed(msgOf(e));
+  }
+  try {
+    await deps.store.setSlackMessage(batchId, deps.channelId, ts);
+  } catch (e) {
+    // The message is live, so the rows stay pending (dismissing them would leave dead ticks).
+    console.error(`[pricebook] saving the checklist link failed: ${msgOf(e)}`);
+    warnings.push({ uuid: null, name: null, code: "slack_link_not_saved", message: "Posted to Slack, but ticks on that message may not register; Ryan should check the logs." });
   }
   const withDesc = rows.filter((r) => r.after.description !== undefined);
   if (withDesc.length > 0) {
-    await deps.slack.reply(deps.channelId, ts, withDesc.map((r) => descriptionReply(r.itemName, r.after.description ?? "")).join("\n\n"));
+    await replyAll(deps.channelId, ts, withDesc.map((r) => descriptionReply(r.itemName, r.after.description ?? "")), null);
   }
   return { batchId, requested: rows.map((r) => ({ id: r.id, name: r.itemName, change: describeChange(r.before, r.after) })), merged, blocks, warnings };
 }

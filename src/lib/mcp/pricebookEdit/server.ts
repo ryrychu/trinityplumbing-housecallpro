@@ -8,7 +8,7 @@ import { formatMoney, searchPricebook } from "@/lib/mcp/pricebook";
 import { EditError, addMaterial, applyPreview, checkWriteAccess, createPreview, type EditDeps } from "@/lib/pricebook/edit/apply";
 import { describeChange } from "@/lib/pricebook/edit/changes";
 import { NOT_EDITOR_TEXT } from "@/lib/pricebook/edit/deps";
-import { requestServiceChanges, rerenderBatch, type ServiceDeps } from "@/lib/pricebook/edit/serviceChecklist";
+import { SlackPostFailed, requestServiceChanges, rerenderBatch, type ServiceDeps } from "@/lib/pricebook/edit/serviceChecklist";
 import type { ChangeRow, FieldValues } from "@/lib/pricebook/edit/types";
 import { undoChange } from "@/lib/pricebook/edit/undo";
 
@@ -216,8 +216,9 @@ export function createPricebookEditMcpServer(deps: PricebookEditToolDeps, caller
     try {
       return json(await requestServiceChanges(deps.service, items, editorId, { allowBelowCost }));
     } catch (err) {
-      if (err instanceof EditError) throw err;
-      console.error(`[mcp-pricebook-edit] request_service_changes failed: ${err instanceof Error ? err.message : String(err)}`);
+      // Only a failed first post means nothing was requested; anything else gets run()'s generic answer.
+      if (!(err instanceof SlackPostFailed)) throw err;
+      console.error(`[mcp-pricebook-edit] request_service_changes failed: ${err.message}`);
       return refuse("Couldn't post to the Slack checklist, so nothing was requested. It's safe to try again.");
     }
   }));
