@@ -31,6 +31,12 @@ export const JOBS_RESOURCE: McpResource = {
   name: "Trinity Plumbing jobs & customers (read-only)",
 };
 
+export const TASKS_RESOURCE: McpResource = {
+  path: "/api/mcp/tasks",
+  metadataPath: "/.well-known/oauth-protected-resource/api/mcp/tasks",
+  name: "Trinity Plumbing tasks (Dave only)",
+};
+
 export interface McpCaller {
   userId: string;
   clientId: string;
