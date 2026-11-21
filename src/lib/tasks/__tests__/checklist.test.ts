@@ -250,3 +250,43 @@ describe("syncWithFieldy fault isolation", () => {
     expect(console.error).toHaveBeenCalledWith(expect.stringMatching(/^\[tasks\] sync Fieldy ticks failed: /));
   });
 });
+
+describe("a Slack failure after Fieldy and the tables are written", () => {
+  beforeEach(() => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("addTask still resolves with the checklist, left for the sync to re-render", async () => {
+    const { deps, slack, items, lists, id } = await built();
+    slack.failUpdates = true;
+    const r = await addTask(deps, { title: "Pick up flux" });
+    expect(r.checklistId).toBe(id);
+    expect(items.get(id)!.slice(-1)[0]).toMatchObject({ text: "Pick up flux" });
+    expect(lists.get(id)!.renderedVersion).toBeLessThan(lists.get(id)!.version);
+    expect(console.warn).toHaveBeenCalledWith("[tasks] render deferred to next sync: [slack] chat.update failed: http_503");
+  });
+
+  it("markDone still resolves with the change, and the item is done", async () => {
+    const { deps, fieldy, slack, items, id } = await built();
+    slack.failUpdates = true;
+    const r = await markDone(deps, id, ["t2"], "chatgpt");
+    expect(r).toEqual({ changed: ["t2"], unchanged: [], notOnChecklist: [] });
+    expect(fieldy.updates).toHaveLength(1);
+    expect(items.get(id)!.find((i) => i.fieldyTaskId === "t2")!.doneAt).toBe(NOW.toISOString());
+  });
+
+  it("buildChecklist still returns the id when the rebuild can't update Slack", async () => {
+    const { deps, slack, id } = await built();
+    slack.failUpdates = true;
+    expect(await buildChecklist(deps, GROUPING, "chatgpt", 2)).toBe(id);
+  });
+
+  it("renderChecklist itself still throws", async () => {
+    const { deps, slack, id } = await built();
+    slack.failUpdates = true;
+    await expect(renderChecklist(deps, id)).rejects.toThrow(/http_503/);
+  });
+});

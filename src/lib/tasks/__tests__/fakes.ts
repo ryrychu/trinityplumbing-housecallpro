@@ -162,7 +162,10 @@ export function fakeFieldy(initial: FieldyTask[] = []) {
   };
 }
 
-/** Slack that records posts, updates and deletes. `onUpdate` runs inside each update, before it returns. */
+/**
+ * Slack that records posts, updates and deletes. `onUpdate` runs inside each
+ * update, before it returns. Set `failUpdates` to make every chat.update throw.
+ */
 export function fakeSlack(opts: { onUpdate?: () => Promise<void> } = {}) {
   const posts: Array<{ channel: string; text: string; blocks: unknown[] }> = [];
   const updates: Array<{ channel: string; ts: string; text: string; blocks: unknown[] }> = [];
@@ -175,6 +178,7 @@ export function fakeSlack(opts: { onUpdate?: () => Promise<void> } = {}) {
       return `171.${n}`;
     },
     async update(channel: string, ts: string, text: string, blocks: unknown[]): Promise<void> {
+      if (self.failUpdates) throw new Error("[slack] chat.update failed: http_503");
       updates.push({ channel, ts, text, blocks });
       if (opts.onUpdate) await opts.onUpdate();
     },
@@ -182,17 +186,19 @@ export function fakeSlack(opts: { onUpdate?: () => Promise<void> } = {}) {
       deletes.push({ channel, ts });
     },
   };
-  return {
+  const self = {
     port,
     posts,
     updates,
     deletes,
+    failUpdates: false,
     /** The blocks Slack is showing now. */
     lastBlocks(): unknown[] {
       const all = [...posts, ...updates];
       return all.length ? all[all.length - 1].blocks : [];
     },
   };
+  return self;
 }
 
 /** A full set of fakes wired as ChecklistDeps, clock fixed at NOW unless given. */

@@ -4,7 +4,8 @@
 //
 // Order on every change: Fieldy first, then the tables, then the version bump,
 // then a full re-render of the Slack message from the tables. If Fieldy fails,
-// that task's change doesn't happen.
+// that task's change doesn't happen. If only the re-render fails, the change
+// stands and syncWithFieldy re-renders later.
 import type { ConversationSummary, FieldyTask, TaskUpdate } from "@/lib/fieldy/client";
 import { localDateKey } from "@/lib/notifications/schedule";
 import { GROUP_NAME_MAX, fitText, type Grouping } from "./organize";
@@ -80,6 +81,19 @@ export async function renderChecklist(deps: ChecklistDeps, checklistId: number):
   }
 }
 
+/**
+ * For callers that already wrote Fieldy and the tables: a Slack failure now
+ * isn't theirs to report. The version stays ahead of rendered_version, so
+ * syncWithFieldy re-renders on its next run.
+ */
+async function renderOrDefer(deps: ChecklistDeps, checklistId: number): Promise<void> {
+  try {
+    await renderChecklist(deps, checklistId);
+  } catch (err) {
+    console.warn(`[tasks] render deferred to next sync: ${errorMessage(err)}`);
+  }
+}
+
 /** Today's checklist from a validated grouping: created and posted, or rebuilt in place. Returns its id. */
 export async function buildChecklist(
   deps: ChecklistDeps,
@@ -123,7 +137,7 @@ export async function buildChecklist(
   await deps.store.replaceItems(cl.id, items);
   await deps.store.updateMeta(cl.id, { builtBy, overflow: grouping.overflow, finishedYesterday });
   await deps.store.touch(cl.id);
-  await renderChecklist(deps, cl.id);
+  await renderOrDefer(deps, cl.id);
   return cl.id;
 }
 
@@ -159,7 +173,7 @@ async function changeTasks(
   if (checklistId !== null && result.changed.length > 0) {
     await deps.store.setDone(checklistId, result.changed, to === "done" ? nowIso : null, to === "done" ? via : null);
     await deps.store.touch(checklistId);
-    await renderChecklist(deps, checklistId);
+    await renderOrDefer(deps, checklistId);
   }
   // Thrown after recording the ones Fieldy accepted, so the checklist matches Fieldy.
   if (failure) throw failure;
@@ -189,7 +203,7 @@ export async function addTask(
     fieldyTaskId: task.id,
   });
   await deps.store.touch(cl.id);
-  await renderChecklist(deps, cl.id);
+  await renderOrDefer(deps, cl.id);
   return { task, checklistId: cl.id };
 }
 
