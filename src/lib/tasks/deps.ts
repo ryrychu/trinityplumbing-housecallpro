@@ -3,7 +3,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createTask, fieldyApiKey, listConversations, listTasks, updateTask } from "@/lib/fieldy/client";
 import { fieldyTaskSource } from "@/lib/fieldy/fieldy";
-import { postMessage, updateMessage } from "@/lib/slack/web";
+import { deleteMessage, postMessage, updateMessage } from "@/lib/slack/web";
 import { getSupabaseServerClient } from "@/lib/supabase/client";
 import type { ChecklistDeps, FieldyPort } from "./checklist";
 import { groupWithOpenAI } from "./openai";
@@ -38,6 +38,7 @@ export function liveChecklistDeps(supabase: SupabaseClient = getSupabaseServerCl
     slack: {
       post: (channel, text, blocks) => postMessage(process.env.SLACK_BOT_TOKEN ?? "", channel, text, blocks),
       update: (channel, ts, text, blocks) => updateMessage(process.env.SLACK_BOT_TOKEN ?? "", channel, ts, text, blocks),
+      delete: (channel, ts) => deleteMessage(process.env.SLACK_BOT_TOKEN ?? "", channel, ts),
     },
     channelId: process.env.SLACK_FIELDY_CHANNEL_ID ?? "",
     now,

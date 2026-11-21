@@ -16,6 +16,10 @@ export function memoryStore() {
   let nextId = 1;
   const lists = new Map<number, ChecklistRow>();
   const items = new Map<number, ItemRow[]>();
+  const stamp = (id: number) => {
+    const row = lists.get(id);
+    if (row) row.updatedAt = new Date().toISOString();
+  };
 
   const store: ChecklistStore = {
     async getByDay(day) {
@@ -39,21 +43,27 @@ export function memoryStore() {
         renderedVersion: 0,
         overflow: 0,
         finishedYesterday: 0,
+        updatedAt: new Date().toISOString(),
       };
       lists.set(row.id, row);
       items.set(row.id, []);
       return { ...row };
     },
     async updateMeta(id, meta) {
-      Object.assign(lists.get(id)!, meta);
+      Object.assign(lists.get(id)!, meta, { updatedAt: new Date().toISOString() });
     },
-    async setMessageTs(id, ts) {
-      lists.get(id)!.messageTs = ts;
+    async claimMessageTs(id, ts) {
+      const row = lists.get(id)!;
+      if (row.messageTs !== null) return false;
+      row.messageTs = ts;
+      row.updatedAt = new Date().toISOString();
+      return true;
     },
     async listItems(id) {
       return (items.get(id) ?? []).map((i) => ({ ...i })).sort((a, b) => a.position - b.position);
     },
     async replaceItems(id, next) {
+      stamp(id);
       items.set(
         id,
         next.map((i) => ({ ...i, checklistId: id }))
@@ -61,11 +71,13 @@ export function memoryStore() {
     },
     async appendItem(id, item) {
       const list = items.get(id)!;
+      stamp(id);
       if (list.some((i) => i.fieldyTaskId === item.fieldyTaskId)) return;
       const position = list.reduce((max, i) => Math.max(max, i.position), 0) + 1;
       list.push({ checklistId: id, position, ...item, doneAt: null, doneVia: null });
     },
     async setDone(id, ids, doneAt, via) {
+      stamp(id);
       for (const i of items.get(id) ?? []) {
         if (ids.includes(i.fieldyTaskId)) {
           i.doneAt = doneAt;
@@ -76,6 +88,7 @@ export function memoryStore() {
     async touch(id) {
       const row = lists.get(id)!;
       row.version += 1;
+      row.updatedAt = new Date().toISOString();
       return row.version;
     },
     async markRendered(id, version) {
@@ -149,10 +162,11 @@ export function fakeFieldy(initial: FieldyTask[] = []) {
   };
 }
 
-/** Slack that records posts and updates. `onUpdate` runs inside each update, before it returns. */
+/** Slack that records posts, updates and deletes. `onUpdate` runs inside each update, before it returns. */
 export function fakeSlack(opts: { onUpdate?: () => Promise<void> } = {}) {
   const posts: Array<{ channel: string; text: string; blocks: unknown[] }> = [];
   const updates: Array<{ channel: string; ts: string; text: string; blocks: unknown[] }> = [];
+  const deletes: Array<{ channel: string; ts: string }> = [];
   let n = 0;
   const port = {
     async post(channel: string, text: string, blocks: unknown[]): Promise<string> {
@@ -164,11 +178,15 @@ export function fakeSlack(opts: { onUpdate?: () => Promise<void> } = {}) {
       updates.push({ channel, ts, text, blocks });
       if (opts.onUpdate) await opts.onUpdate();
     },
+    async delete(channel: string, ts: string): Promise<void> {
+      deletes.push({ channel, ts });
+    },
   };
   return {
     port,
     posts,
     updates,
+    deletes,
     /** The blocks Slack is showing now. */
     lastBlocks(): unknown[] {
       const all = [...posts, ...updates];

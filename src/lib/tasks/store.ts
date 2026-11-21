@@ -17,6 +17,8 @@ export type ChecklistRow = {
   renderedVersion: number;
   overflow: number;
   finishedYesterday: number;
+  /** Last change to the row (ISO). */
+  updatedAt: string;
 };
 
 export type ItemRow = {
@@ -37,7 +39,8 @@ export interface ChecklistStore {
   /** The day's checklist, created if missing. Safe to call twice for the same day. */
   create(input: { day: string; channelId: string; builtBy: BuiltBy }): Promise<ChecklistRow>;
   updateMeta(id: number, meta: { builtBy: BuiltBy; overflow: number; finishedYesterday: number }): Promise<void>;
-  setMessageTs(id: number, ts: string): Promise<void>;
+  /** Records the Slack message only if none is recorded yet; true if this call set it. */
+  claimMessageTs(id: number, ts: string): Promise<boolean>;
   /** Items in position order. */
   listItems(id: number): Promise<ItemRow[]>;
   replaceItems(id: number, items: NewItem[]): Promise<void>;
@@ -51,7 +54,7 @@ export interface ChecklistStore {
   listBehind(sinceDay: string): Promise<ChecklistRow[]>;
 }
 
-const CHECKLIST_COLS = "id, day, channel_id, message_ts, built_by, version, rendered_version, overflow, finished_yesterday";
+const CHECKLIST_COLS = "id, day, channel_id, message_ts, built_by, version, rendered_version, overflow, finished_yesterday, updated_at";
 const ITEM_COLS = "checklist_id, position, group_name, text, fieldy_task_id, done_at, done_via";
 
 type Err = { message: string } | null;
@@ -72,6 +75,7 @@ function toChecklist(r: Record<string, unknown>): ChecklistRow {
     renderedVersion: Number(r.rendered_version),
     overflow: Number(r.overflow),
     finishedYesterday: Number(r.finished_yesterday),
+    updatedAt: String(r.updated_at),
   };
 }
 
@@ -126,9 +130,15 @@ export function supabaseChecklistStore(db: SupabaseClient): ChecklistStore {
       check("updateMeta", error);
     },
 
-    async setMessageTs(id, ts) {
-      const { error } = await db.from("task_checklists").update({ message_ts: ts }).eq("id", id);
-      check("setMessageTs", error);
+    async claimMessageTs(id, ts) {
+      const { data, error } = await db
+        .from("task_checklists")
+        .update({ message_ts: ts, updated_at: new Date().toISOString() })
+        .eq("id", id)
+        .is("message_ts", null)
+        .select("id");
+      check("claimMessageTs", error);
+      return Array.isArray(data) && data.length === 1;
     },
 
     async listItems(id) {

@@ -23,6 +23,7 @@ export interface FieldyPort {
 export interface SlackPort {
   post(channel: string, text: string, blocks: unknown[]): Promise<string>;
   update(channel: string, ts: string, text: string, blocks: unknown[]): Promise<void>;
+  delete(channel: string, ts: string): Promise<void>;
 }
 
 export interface ChecklistDeps {
@@ -49,9 +50,17 @@ export function dueDateIso(dayKey: string): string {
   return `${dayKey}T17:00:00.000Z`;
 }
 
-/** Rebuilds the Slack message from the tables. If the checklist changed meanwhile, renders once more. */
+/** A never-posted checklist this fresh is left to the run that is building it. */
+const UNPOSTED_GRACE_MS = 2 * 60_000;
+
+/**
+ * Rebuilds the Slack message from the tables. If the checklist changed
+ * meanwhile, renders once more. Two runs can both find no message yet (ChatGPT
+ * and the cron at once): both post, only one claim wins, and the loser deletes
+ * its own post and updates the winner's on its next pass.
+ */
 export async function renderChecklist(deps: ChecklistDeps, checklistId: number): Promise<void> {
-  for (let attempt = 0; attempt < 2; attempt++) {
+  for (let attempt = 0; attempt < 3; attempt++) {
     const cl = await deps.store.getById(checklistId);
     if (!cl) return;
     const msg = renderChecklistMessage(cl, await deps.store.listItems(checklistId));
@@ -60,7 +69,10 @@ export async function renderChecklist(deps: ChecklistDeps, checklistId: number):
     } else {
       const ts = await deps.slack.post(cl.channelId, msg.text, msg.blocks);
       if (!ts) throw new Error("[tasks] Slack returned no message ts");
-      await deps.store.setMessageTs(checklistId, ts);
+      if (!(await deps.store.claimMessageTs(checklistId, ts))) {
+        await deps.slack.delete(cl.channelId, ts);
+        continue;
+      }
     }
     await deps.store.markRendered(checklistId, cl.version);
     const after = await deps.store.getById(checklistId);
@@ -184,26 +196,46 @@ export async function addTask(
 /**
  * Every 15 minutes from the cron: tick items Dave marked done in the Fieldy
  * app itself, then re-render any recent checklist Slack is behind on (a failed
- * chat.update, or a first post that never landed).
+ * chat.update, or a first post that never landed). Each step fails on its
+ * own: a Fieldy error or one bad render doesn't skip the rest.
  */
 export async function syncWithFieldy(deps: ChecklistDeps): Promise<{ ticked: number; rerendered: number }> {
   const now = deps.now();
   let ticked = 0;
-  const today = await deps.store.getByDay(localDateKey(now));
-  if (today) {
-    const open = (await deps.store.listItems(today.id)).filter((i) => i.doneAt === null);
-    if (open.length > 0) {
-      const completed = new Set((await deps.fieldy.completed()).map((t) => t.id));
-      const ids = open.filter((i) => completed.has(i.fieldyTaskId)).map((i) => i.fieldyTaskId);
-      if (ids.length > 0) {
-        await deps.store.setDone(today.id, ids, now.toISOString(), "fieldy");
-        await deps.store.touch(today.id);
-        ticked = ids.length;
+  try {
+    const today = await deps.store.getByDay(localDateKey(now));
+    if (today) {
+      const open = (await deps.store.listItems(today.id)).filter((i) => i.doneAt === null);
+      if (open.length > 0) {
+        const completed = new Set((await deps.fieldy.completed()).map((t) => t.id));
+        const ids = open.filter((i) => completed.has(i.fieldyTaskId)).map((i) => i.fieldyTaskId);
+        if (ids.length > 0) {
+          await deps.store.setDone(today.id, ids, now.toISOString(), "fieldy");
+          await deps.store.touch(today.id);
+          ticked = ids.length;
+        }
       }
     }
+  } catch (err) {
+    console.error(`[tasks] sync Fieldy ticks failed: ${errorMessage(err)}`);
   }
+
   const yesterday = localDateKey(new Date(now.getTime() - 24 * 3_600_000));
   const behind = await deps.store.listBehind(yesterday);
-  for (const cl of behind) await renderChecklist(deps, cl.id);
-  return { ticked, rerendered: behind.length };
+  let rerendered = 0;
+  for (const cl of behind) {
+    // Not posted yet and just changed: the run building it is still posting.
+    if (cl.messageTs === null && now.getTime() - Date.parse(cl.updatedAt) < UNPOSTED_GRACE_MS) continue;
+    try {
+      await renderChecklist(deps, cl.id);
+      rerendered += 1;
+    } catch (err) {
+      console.error(`[tasks] sync render failed: ${errorMessage(err)}`);
+    }
+  }
+  return { ticked, rerendered };
+}
+
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
 }

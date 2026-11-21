@@ -49,6 +49,7 @@ const ROW = {
   rendered_version: 2,
   overflow: 0,
   finished_yesterday: 4,
+  updated_at: "2026-11-23T13:00:00+00:00",
 };
 
 describe("supabaseChecklistStore", () => {
@@ -65,9 +66,28 @@ describe("supabaseChecklistStore", () => {
       renderedVersion: 2,
       overflow: 0,
       finishedYesterday: 4,
+      updatedAt: "2026-11-23T13:00:00+00:00",
     });
     expect(calls[0].table).toBe("task_checklists");
     expect(calls[0].ops).toContainEqual(["eq", ["day", "2026-11-23"]]);
+    expect(String(calls[0].ops.find(([op]) => op === "select")![1][0])).toContain("updated_at");
+  });
+
+  it("claims the message ts only while none is recorded, and wins with one row back", async () => {
+    const { db, calls } = fakeDb({ data: [{ id: 7 }] });
+    expect(await supabaseChecklistStore(db).claimMessageTs(7, "171.9")).toBe(true);
+    expect(calls[0].table).toBe("task_checklists");
+    const [op, args] = calls[0].ops[0];
+    expect(op).toBe("update");
+    expect(args[0]).toMatchObject({ message_ts: "171.9", updated_at: expect.any(String) });
+    expect(calls[0].ops).toContainEqual(["eq", ["id", 7]]);
+    expect(calls[0].ops).toContainEqual(["is", ["message_ts", null]]);
+    expect(calls[0].ops).toContainEqual(["select", ["id"]]);
+  });
+
+  it("loses the claim when another run already recorded a message", async () => {
+    const { db } = fakeDb({ data: [] });
+    expect(await supabaseChecklistStore(db).claimMessageTs(7, "171.9")).toBe(false);
   });
 
   it("returns null when there's no checklist that day", async () => {

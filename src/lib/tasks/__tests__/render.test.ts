@@ -12,6 +12,7 @@ const CL: ChecklistRow = {
   renderedVersion: 1,
   overflow: 0,
   finishedYesterday: 3,
+  updatedAt: "2026-11-23T13:00:00.000Z",
 };
 
 function item(n: number, group: string, done = false): ItemRow {

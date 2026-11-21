@@ -1,6 +1,7 @@
 // The Slack Web API calls the bot token is used for: reading
 // #declined-calls (conversations.history), posting (chat.postMessage) and
-// editing the Fieldy checklist (chat.update). Everything else in this app posts
+// editing the Fieldy checklist (chat.update; chat.delete for a duplicate first
+// post). Everything else in this app posts
 // through incoming webhooks and needs no token.
 //
 // Errors THROW. The declined-calls report reads before it claims and posts, so
@@ -136,4 +137,9 @@ export async function postMessage(token: string, channel: string, text: string, 
 /** Replaces a message the bot posted. Same chat:write scope as postMessage. */
 export async function updateMessage(token: string, channel: string, ts: string, text: string, blocks: unknown[]): Promise<void> {
   await call("chat.update", token, { json: { channel, ts, text, blocks } });
+}
+
+/** Deletes a message the bot posted. Same chat:write scope as postMessage. */
+export async function deleteMessage(token: string, channel: string, ts: string): Promise<void> {
+  await call("chat.delete", token, { json: { channel, ts } });
 }

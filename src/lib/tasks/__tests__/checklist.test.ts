@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { FieldyApiError } from "@/lib/fieldy/client";
 import { ADDED_GROUP, addTask, buildChecklist, markDone, markNotDone, renderChecklist, syncWithFieldy } from "../checklist";
 import { validateGrouping } from "../organize";
@@ -170,5 +170,83 @@ describe("syncWithFieldy", () => {
     const { deps, slack } = makeDeps({ tasks: TASKS });
     expect(await syncWithFieldy(deps)).toEqual({ ticked: 0, rerendered: 0 });
     expect(slack.posts).toHaveLength(0);
+  });
+});
+
+describe("first post races", () => {
+  it("deletes its own post and updates the other run's message when it loses the claim", async () => {
+    const ctx = makeDeps({ tasks: TASKS });
+    const claim = ctx.deps.store.claimMessageTs;
+    let raced = false;
+    ctx.deps.store.claimMessageTs = async (id, ts) => {
+      if (raced) return claim(id, ts);
+      raced = true;
+      ctx.lists.get(id)!.messageTs = "999.1"; // another run posted and claimed first
+      return false;
+    };
+    const id = await buildChecklist(ctx.deps, GROUPING, "chatgpt", 0);
+    expect(ctx.slack.posts).toHaveLength(1);
+    expect(ctx.slack.deletes).toEqual([{ channel: "C_FIELDY", ts: "171.1" }]);
+    expect(ctx.slack.updates.map((u) => u.ts)).toEqual(["999.1"]);
+    const row = ctx.lists.get(id)!;
+    expect(row.messageTs).toBe("999.1");
+    expect(row.renderedVersion).toBe(row.version);
+  });
+});
+
+describe("syncWithFieldy fault isolation", () => {
+  beforeEach(() => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  async function unposted(ctx: ReturnType<typeof makeDeps>, day: string, ageMs: number) {
+    const cl = await ctx.deps.store.create({ day, channelId: "C_FIELDY", builtBy: "morning_ai" });
+    ctx.lists.get(cl.id)!.updatedAt = new Date(NOW.getTime() - ageMs).toISOString();
+    return cl.id;
+  }
+
+  it("leaves a never-posted checklist changed in the last 2 minutes to the run building it", async () => {
+    const ctx = makeDeps({ tasks: TASKS });
+    const fresh = await unposted(ctx, TODAY, 30_000);
+    const stale = await unposted(ctx, "2026-11-22", 5 * 60_000);
+    const r = await syncWithFieldy(ctx.deps);
+    expect(r.rerendered).toBe(1);
+    expect(ctx.slack.posts).toHaveLength(1);
+    expect(ctx.lists.get(fresh)!.messageTs).toBeNull();
+    expect(ctx.lists.get(stale)!.messageTs).toBe("171.1");
+  });
+
+  it("still renders the other checklists when one render throws", async () => {
+    const ctx = makeDeps({ tasks: TASKS });
+    const a = await unposted(ctx, "2026-11-22", 5 * 60_000);
+    const b = await unposted(ctx, TODAY, 5 * 60_000);
+    ctx.lists.get(a)!.messageTs = "100.1";
+    ctx.lists.get(b)!.messageTs = "100.2";
+    const update = ctx.deps.slack.update;
+    ctx.deps.slack.update = async (channel, ts, text, blocks) => {
+      if (ts === "100.1") throw new Error("[slack] chat.update failed: message_not_found");
+      return update(channel, ts, text, blocks);
+    };
+    const r = await syncWithFieldy(ctx.deps);
+    expect(r.rerendered).toBe(1);
+    expect(ctx.slack.updates.map((u) => u.ts)).toEqual(["100.2"]);
+    expect(ctx.lists.get(b)!.renderedVersion).toBe(ctx.lists.get(b)!.version);
+    expect(ctx.lists.get(a)!.renderedVersion).toBeLessThan(ctx.lists.get(a)!.version);
+    expect(console.error).toHaveBeenCalledWith("[tasks] sync render failed: [slack] chat.update failed: message_not_found");
+  });
+
+  it("still re-renders when reading Fieldy fails", async () => {
+    const { deps, slack, id } = await built();
+    await deps.store.touch(id);
+    deps.fieldy.completed = async () => {
+      throw new FieldyApiError("http_503", "GET /tasks");
+    };
+    const r = await syncWithFieldy(deps);
+    expect(r).toEqual({ ticked: 0, rerendered: 1 });
+    expect(slack.updates).toHaveLength(1);
+    expect(console.error).toHaveBeenCalledWith(expect.stringMatching(/^\[tasks\] sync Fieldy ticks failed: /));
   });
 });

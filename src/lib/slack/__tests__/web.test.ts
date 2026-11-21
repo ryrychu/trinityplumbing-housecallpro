@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { fetchChannelHistory, postMessage, updateMessage, SlackApiError } from "../web";
+import { deleteMessage, fetchChannelHistory, postMessage, updateMessage, SlackApiError } from "../web";
 
 const TOKEN = "xoxb-test-not-real";
 const fetchMock = vi.fn();
@@ -108,5 +108,21 @@ describe("updateMessage", () => {
   it("throws on a Slack error", async () => {
     fetchMock.mockResolvedValueOnce(json({ ok: false, error: "message_not_found" }));
     await expect(updateMessage(TOKEN, "C1", "1", "t", [])).rejects.toThrow(/message_not_found/);
+  });
+});
+
+describe("deleteMessage", () => {
+  it("calls chat.delete with the channel and ts", async () => {
+    fetchMock.mockResolvedValueOnce(json({ ok: true }));
+    await deleteMessage(TOKEN, "C1", "171.6");
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("https://slack.com/api/chat.delete");
+    expect(init.headers.Authorization).toBe(`Bearer ${TOKEN}`);
+    expect(JSON.parse(init.body)).toEqual({ channel: "C1", ts: "171.6" });
+  });
+
+  it("throws on a Slack error", async () => {
+    fetchMock.mockResolvedValueOnce(json({ ok: false, error: "message_not_found" }));
+    await expect(deleteMessage(TOKEN, "C1", "1")).rejects.toThrow(/chat\.delete failed: message_not_found/);
   });
 });
