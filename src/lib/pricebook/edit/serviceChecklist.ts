@@ -258,10 +258,17 @@ export async function handleServiceTap(
       if (!selected.has(v) && r.status === "done") untick.push(r);
     }
     const nowIso = deps.now().toISOString();
-    if (tick.length > 0) {
-      await deps.store.setStatus(tick.map((r) => r.id), "done", { resolvedBy: userId, resolvedAt: nowIso });
-    } else if (untick.length === 1) {
-      await deps.store.setStatus([untick[0].id], "pending", { resolvedBy: null, resolvedAt: null });
+    try {
+      if (tick.length > 0) {
+        await deps.store.setStatus(tick.map((r) => r.id), "done", { resolvedBy: userId, resolvedAt: nowIso });
+      } else if (untick.length === 1) {
+        await deps.store.setStatus([untick[0].id], "pending", { resolvedBy: null, resolvedAt: null });
+      }
+    } catch (e) {
+      // Not saved: snap the boxes back to what's stored, then let the route log it.
+      console.error(`[pricebook] saving a tick failed: ${msgOf(e)}`);
+      await rerenderBatch(deps, parsed.batchId);
+      throw e;
     }
     await rerenderBatch(deps, parsed.batchId);
     if (tick.length > 0) {
@@ -269,7 +276,7 @@ export async function handleServiceTap(
       try {
         book = await deps.loadItems();
       } catch (e) {
-        console.error("pricebook tick check failed:", e instanceof Error ? e.message : String(e));
+        console.error(`[pricebook] tick check failed: ${msgOf(e)}`);
         const first = tick.find((r) => r.slackChannelId && r.slackMessageTs);
         if (first?.slackChannelId && first.slackMessageTs) await deps.slack.reply(first.slackChannelId, first.slackMessageTs, "Couldn't check HCP just now; please double-check the change there.");
         continue;

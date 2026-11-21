@@ -171,6 +171,20 @@ describe("handleServiceTap", () => {
     expect(last(slack.replies).text).toContain("Tub &amp; shower &lt;valve&gt;");
   });
 
+  it("snaps the tick back when saving it fails", async () => {
+    const { deps, mem, slack } = setup();
+    await requestServiceChanges(deps, [{ uuid: "s1", price: 195 }], DAVE);
+    const blocks = slack.lastBlocks();
+    deps.store = { ...deps.store, async setStatus() { throw new Error("db down"); } };
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const updatesBefore = slack.updates.length;
+    await expect(handleServiceTap(tap(blocks, pbActionId(mem.changes[0].batchId, 0), ["1"]), deps, { allowedUsers: ["U_DAVE"], note: async () => true })).rejects.toThrow("db down");
+    expect(slack.updates.length).toBe(updatesBefore + 1);
+    expect(JSON.stringify(slack.lastBlocks())).not.toContain("initial_options");
+    expect(mem.changes[0].status).toBe("pending");
+    spy.mockRestore();
+  });
+
   it("tells the thread when the HCP check fails", async () => {
     const { deps, mem, slack } = setup();
     await requestServiceChanges(deps, [{ uuid: "s1", price: 195 }], DAVE);
@@ -179,7 +193,7 @@ describe("handleServiceTap", () => {
     await handleServiceTap(tap(slack.lastBlocks(), pbActionId(mem.changes[0].batchId, 0), ["1"]), deps, { allowedUsers: ["U_DAVE"], note: async () => true });
     expect(mem.changes[0].status).toBe("done");
     expect(last(slack.replies).text).toBe("Couldn't check HCP just now; please double-check the change there.");
-    expect(spy).toHaveBeenCalledWith("pricebook tick check failed:", "hcp 500");
+    expect(spy).toHaveBeenCalledWith("[pricebook] tick check failed: hcp 500");
     spy.mockRestore();
   });
 
