@@ -6,12 +6,15 @@
 // checkboxes element holds at most 10 options, an actions block at most 25
 // elements, a message at most 50 blocks. validateGrouping caps a checklist at
 // 40 items in 12 groups: 1 header + 12 × (label + actions) + 1 footer = 26 blocks.
+// Appends and rebuilds can pass those caps, so the message itself also stops at
+// MAX_RENDERED_GROUPS (1 + 20 × 2 + 1 = 42 blocks).
 import { dayLabelFromKey } from "@/lib/slack/format";
-import type { Grouping } from "./organize";
+import { OTHER_GROUP, type Grouping } from "./organize";
 import type { BuiltBy, ChecklistRow, ItemRow } from "./store";
 
 export const OPTION_TEXT_MAX = 75;
 export const OPTIONS_PER_ELEMENT = 10;
+export const MAX_RENDERED_GROUPS = 20;
 export const ACTION_PREFIX = "fieldy_cb";
 
 export type SlackBlock = Record<string, unknown>;
@@ -59,6 +62,24 @@ export function layoutChecklist(items: ItemRow[]): GroupLayout[] {
   });
 }
 
+/**
+ * At most MAX_RENDERED_GROUPS groups: past that, the first ones stay as they
+ * are and the rest share one Other group. Taps match by option value, so
+ * moving an item between groups is safe; chunk indexes keep running on.
+ */
+function capGroups(layout: GroupLayout[]): GroupLayout[] {
+  if (layout.length <= MAX_RENDERED_GROUPS) return layout;
+  const kept = layout.slice(0, MAX_RENDERED_GROUPS - 1);
+  const rest = layout.slice(MAX_RENDERED_GROUPS - 1).flatMap((g) => g.chunks.flatMap((c) => c.items));
+  const lastKept = kept[kept.length - 1].chunks;
+  let index = lastKept[lastKept.length - 1].index + 1;
+  const chunks: GroupLayout["chunks"] = [];
+  for (let i = 0; i < rest.length; i += OPTIONS_PER_ELEMENT) {
+    chunks.push({ index: index++, items: rest.slice(i, i + OPTIONS_PER_ELEMENT) });
+  }
+  return [...kept, { name: OTHER_GROUP, chunks }];
+}
+
 export function actionId(checklistId: number, chunk: number): string {
   return `${ACTION_PREFIX}:${checklistId}:${chunk}`;
 }
@@ -86,7 +107,7 @@ function option(item: ItemRow) {
 export function renderChecklistMessage(cl: ChecklistRow, items: ItemRow[]): ChecklistMessage {
   const done = items.filter((i) => i.doneAt !== null).length;
   const blocks: SlackBlock[] = [{ type: "header", text: { type: "plain_text", text: heading(cl.day) } }];
-  const layout = layoutChecklist(items);
+  const layout = capGroups(layoutChecklist(items));
   if (layout.length === 0) {
     blocks.push({ type: "section", text: { type: "mrkdwn", text: "No open Fieldy tasks." } });
   }

@@ -57,6 +57,23 @@ describe("renderChecklistMessage", () => {
     expect(new Set(ids).size).toBe(ids.length);
   });
 
+  it("merges groups past 20 into one Other group, under 50 blocks with unique action ids", () => {
+    // Appends and rebuilds can carry a checklist past validateGrouping's caps.
+    const items = Array.from({ length: 50 }, (_, i) => item(i + 1, `G${Math.floor(i / 2)}`)); // 25 groups of 2
+    const blocks = renderChecklistMessage(CL, items).blocks as Block[];
+    expect(blocks.length).toBeLessThanOrEqual(50);
+    const labels = blocks.filter((b) => b.type === "section").map((b) => b.text!.text);
+    expect(labels).toHaveLength(20);
+    expect(labels.slice(0, 19)).toEqual(Array.from({ length: 19 }, (_, g) => `*G${g}*`));
+    expect(labels[19]).toBe("*Other*");
+    const elements = blocks.flatMap((b) => (b.type === "actions" ? b.elements! : []));
+    const ids = elements.map((e) => e.action_id);
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(elements.every((e) => e.options.length <= 10)).toBe(true);
+    const values = elements.flatMap((e) => e.options.map((o: { value: string }) => o.value));
+    expect(values).toEqual(items.map((i) => i.fieldyTaskId));
+  });
+
   it("adds the overflow and the no-AI notes to the footer", () => {
     const blocks = renderChecklistMessage({ ...CL, overflow: 4, builtBy: "morning_rules" }, [item(1, "A")]).blocks as Block[];
     expect(blocks[blocks.length - 1].elements![0].text).toBe(
