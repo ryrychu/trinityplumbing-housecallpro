@@ -1,9 +1,12 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { addMaterial, applyPreview, checkWriteAccess, createPreview, type EditDeps } from "../apply";
+import { HcpWriteError } from "@/lib/housecall/pricebookWrite";
+import type { PricebookItem } from "@/lib/mcp/pricebook";
+import type { NewChange } from "../types";
 import { DAVE, ELLA, NOW, fakeWriter, ids, item, memoryStore } from "./fakes";
 
-function setup() {
-  const hcp = fakeWriter([item({ uuid: "m1" }), item({ uuid: "m2", name: "PEX elbow", priceCents: 300, costCents: 100 })]);
+function setup(items: PricebookItem[] = [item({ uuid: "m1" }), item({ uuid: "m2", name: "PEX elbow", priceCents: 300, costCents: 100 })]) {
+  const hcp = fakeWriter(items);
   let clock = NOW;
   const mem = memoryStore(() => clock);
   const deps: EditDeps = { store: mem.store, writer: hcp.writer, loadItems: async () => hcp.all(), now: () => clock, newId: ids() };
@@ -40,6 +43,11 @@ describe("createPreview / applyPreview", () => {
     await expect(applyPreview(deps, b.previewId!, DAVE)).rejects.toMatchObject({ code: "preview_expired" });
   });
 
+  it("rejects an unknown preview id with preview_not_found", async () => {
+    const { deps } = setup();
+    await expect(applyPreview(deps, "nope", DAVE)).rejects.toMatchObject({ code: "preview_not_found" });
+  });
+
   it("skips an item changed in HCP since the preview", async () => {
     const { deps, hcp } = setup();
     const p = await createPreview(deps, { items: [{ uuid: "m1", price: 2.75 }] }, DAVE);
@@ -57,13 +65,72 @@ describe("createPreview / applyPreview", () => {
     expect(r.applied.map((a) => a.uuid)).toEqual(["m1"]);
     expect(r.failed).toEqual([{ uuid: "m2", name: "PEX elbow", code: "http_500" }]);
     expect(mem.changes.map((c) => c.status)).toEqual(["applied", "failed"]);
+    expect(r.aborted).toBeNull();
   });
 
-  it("turns a 401/403 into key_cannot_write", async () => {
-    const { deps, hcp } = setup();
+  it("returns the 403 as an aborted result instead of throwing", async () => {
+    const { deps, hcp, mem } = setup();
     const p = await createPreview(deps, { items: [{ uuid: "m1", price: 2.75 }] }, DAVE);
     hcp.failWith(403);
-    await expect(applyPreview(deps, p.previewId!, DAVE)).rejects.toMatchObject({ code: "key_cannot_write" });
+    const r = await applyPreview(deps, p.previewId!, DAVE);
+    expect(r.aborted).toBe("key_cannot_write");
+    expect(r.failed).toEqual([{ uuid: "m1", name: "PEX tee", code: "key_cannot_write" }]);
+    expect(mem.changes[0]).toMatchObject({ status: "failed", errorCode: "key_cannot_write" });
+  });
+
+  it("on a 403 mid-batch, keeps the earlier applied item and keeps the preview claimed", async () => {
+    const { deps, hcp, mem } = setup();
+    const p = await createPreview(deps, { items: [{ uuid: "m1", price: 2.75 }, { uuid: "m2", price: 3.25 }] }, DAVE);
+    hcp.failWith(403, "m2");
+    const r = await applyPreview(deps, p.previewId!, DAVE);
+    expect(r.applied.map((a) => a.uuid)).toEqual(["m1"]);
+    expect(mem.changes.find((c) => c.itemUuid === "m1")).toMatchObject({ status: "applied" });
+    expect(r.failed).toEqual([{ uuid: "m2", name: "PEX elbow", code: "key_cannot_write" }]);
+    expect(mem.changes.find((c) => c.itemUuid === "m2")).toMatchObject({ status: "failed", errorCode: "key_cannot_write" });
+    expect(r.aborted).toBe("key_cannot_write");
+    expect(mem.previews.get(p.previewId!)!.appliedAt).not.toBeNull();
+  });
+
+  it("on a 403, skips every item after the failing one without writing it", async () => {
+    const { deps, hcp } = setup([
+      item({ uuid: "m1" }),
+      item({ uuid: "m2", name: "PEX elbow", priceCents: 300, costCents: 100 }),
+      item({ uuid: "m3", name: "PEX coupling", priceCents: 400, costCents: 100 }),
+    ]);
+    const p = await createPreview(deps, { items: [{ uuid: "m1", price: 2.75 }, { uuid: "m2", price: 3.25 }, { uuid: "m3", price: 4.25 }] }, DAVE);
+    hcp.failWith(403, "m2");
+    const r = await applyPreview(deps, p.previewId!, DAVE);
+    expect(r.skipped).toEqual([{ uuid: "m3", name: "PEX coupling", code: "key_cannot_write", current: null }]);
+    expect(hcp.updates.map((u) => u[0])).toEqual(["m1"]);
+  });
+
+  it("records a per-item read error as failed and carries on with the next item", async () => {
+    const { deps, hcp, mem } = setup();
+    const p = await createPreview(deps, { items: [{ uuid: "m1", price: 2.75 }, { uuid: "m2", price: 3.25 }] }, DAVE);
+    const flaky = { ...hcp.writer, async getMaterial(uuid: string) {
+      if (uuid === "m1") throw new HcpWriteError(500, "/api/price_book/materials");
+      return hcp.writer.getMaterial(uuid);
+    } };
+    const r = await applyPreview({ ...deps, writer: flaky }, p.previewId!, DAVE);
+    expect(r.failed).toEqual([{ uuid: "m1", name: "PEX tee", code: "http_500" }]);
+    expect(r.applied.map((a) => a.uuid)).toEqual(["m2"]);
+    expect(mem.changes.map((c) => c.status)).toEqual(["failed", "applied"]);
+  });
+
+  it("keeps an applied item in applied and unlogged when its log write fails, and carries on", async () => {
+    const { deps, mem } = setup();
+    const p = await createPreview(deps, { items: [{ uuid: "m1", price: 2.75 }, { uuid: "m2", price: 3.25 }] }, DAVE);
+    let calls = 0;
+    const store = { ...mem.store, async insertChanges(rows: NewChange[]) {
+      if (++calls === 1) throw new Error("db down");
+      return mem.store.insertChanges(rows);
+    } };
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const r = await applyPreview({ ...deps, store }, p.previewId!, DAVE);
+    expect(r.applied.map((a) => a.uuid)).toEqual(["m1", "m2"]);
+    expect(r.unlogged).toEqual([{ uuid: "m1", name: "PEX tee" }]);
+    expect(errSpy).toHaveBeenCalledWith("[pricebook] change log write failed: db down");
+    errSpy.mockRestore();
   });
 });
 
@@ -82,6 +149,23 @@ describe("addMaterial", () => {
     expect(r.blocks[0].code).toBe("below_cost");
     expect(hcp.created).toEqual([]);
   });
+  it("blocks an empty name without creating anything", async () => {
+    const { deps, hcp } = setup();
+    const r = await addMaterial(deps, { categoryUuid: "c-pex", name: "   ", price: 1.25 }, ELLA);
+    expect(r.created).toBeNull();
+    expect(r.blocks[0].code).toBe("bad_name");
+    expect(hcp.created).toEqual([]);
+  });
+  it("reports an unlogged create as a warning instead of throwing", async () => {
+    const { deps, hcp, mem } = setup();
+    const store = { ...mem.store, async insertChanges(): Promise<never> { throw new Error("db down"); } };
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const r = await addMaterial({ ...deps, store }, { categoryUuid: "c-pex", name: "PEX cap", price: 1.25 }, ELLA);
+    expect(r.created).toEqual({ uuid: "new-1", name: "PEX cap" });
+    expect(hcp.created).toHaveLength(1);
+    expect(r.warnings.map((w) => w.code)).toContain("unlogged");
+    errSpy.mockRestore();
+  });
 });
 
 describe("checkWriteAccess", () => {
@@ -94,5 +178,10 @@ describe("checkWriteAccess", () => {
     const { deps, hcp } = setup();
     hcp.failWith(401);
     expect(await checkWriteAccess(deps)).toEqual({ ok: false, status: 401, item: "PEX tee" });
+  });
+  it("rethrows a server error rather than calling the key read-only", async () => {
+    const { deps, hcp } = setup();
+    hcp.failWith(500);
+    await expect(checkWriteAccess(deps)).rejects.toMatchObject({ status: 500 });
   });
 });

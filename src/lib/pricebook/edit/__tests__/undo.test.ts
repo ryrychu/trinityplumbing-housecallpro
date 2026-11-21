@@ -27,6 +27,14 @@ describe("undoChange", () => {
     expect(mem.changes.filter((c) => c.kind === "material_update").every((c) => c.status === "undone")).toBe(true);
   });
 
+  it("writes the undo row with before and after swapped", async () => {
+    const { deps, mem } = setup();
+    const r = await applied(deps);
+    await undoChange(deps, { batchId: r.batchId }, DAVE);
+    const row = mem.changes.find((c) => c.kind === "undo" && c.itemUuid === "m1");
+    expect(row).toMatchObject({ before: { priceCents: 275 }, after: { priceCents: 250 }, status: "applied", itemUuid: "m1" });
+  });
+
   it("stops for an item changed since, without overwriting it", async () => {
     const { deps, hcp, mem } = setup();
     const r = await applied(deps);
@@ -51,5 +59,33 @@ describe("undoChange", () => {
     setNow(new Date(NOW.getTime() + 31 * 86_400_000));
     const u = await undoChange(deps, { batchId: r.batchId }, DAVE);
     expect(u.skipped.map((s) => s.code)).toEqual(["too_old", "too_old"]);
+  });
+
+  it("dismisses a pending service request and reports its batch", async () => {
+    const { deps, mem } = setup();
+    const [row] = await mem.store.insertChanges([{ batchId: "svc-1", kind: "service_request", itemUuid: "s1", itemName: "Drain cleaning", itemKind: "service", categoryUuid: null, before: null, after: { name: "Drain cleaning" }, status: "pending", requestedBy: DAVE, errorCode: null }]);
+    const u = await undoChange(deps, { changeId: row.id }, DAVE);
+    expect(u.dismissed).toEqual([{ id: row.id, name: "Drain cleaning" }]);
+    expect(u.serviceBatches).toEqual(["svc-1"]);
+    expect(mem.changes.find((c) => c.id === row.id)!.status).toBe("dismissed");
+  });
+
+  it("gives not_undoable for a failed material row", async () => {
+    const { deps, hcp, mem } = setup();
+    const p = await createPreview(deps, { items: [{ uuid: "m1", price: 2.75 }] }, DAVE);
+    hcp.failWith(500, "m1");
+    await applyPreview(deps, p.previewId!, DAVE);
+    const u = await undoChange(deps, { changeId: mem.changes[0].id }, DAVE);
+    expect(u.skipped[0].code).toBe("not_undoable");
+  });
+
+  it("stops the whole undo on a 403 and reports key_cannot_write for the rest", async () => {
+    const { deps, hcp } = setup();
+    const r = await applied(deps);
+    hcp.failWith(403);
+    const u = await undoChange(deps, { batchId: r.batchId }, DAVE);
+    expect(u.aborted).toBe("key_cannot_write");
+    expect(u.skipped.map((s) => s.code)).toEqual(["key_cannot_write", "key_cannot_write"]);
+    expect(u.undone).toEqual([]);
   });
 });
