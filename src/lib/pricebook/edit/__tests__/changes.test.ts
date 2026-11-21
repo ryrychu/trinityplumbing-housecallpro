@@ -114,3 +114,14 @@ describe("strict money guardrails", () => {
     expect(buildPreview({ items: [{ uuid: "m1", cost: 3 }] }, BOOK).blocks.map((b) => b.code)).toEqual(["below_cost"]);
   });
 });
+
+describe("parseMoney commas", () => {
+  it("accepts commas only as thousands separators", () => {
+    expect(parseMoney("1,450.50")).toBe(145050);
+    expect(parseMoney("12,345")).toBe(1234500);
+    expect(parseMoney("$ 1,234,567.89")).toBe(123456789);
+    expect(parseMoney("1,2,3")).toBeNull();
+    expect(parseMoney("1,45")).toBeNull();
+    expect(parseMoney("12,34.5")).toBeNull();
+  });
+});

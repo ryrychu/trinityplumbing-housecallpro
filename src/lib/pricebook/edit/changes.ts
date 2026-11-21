@@ -17,13 +17,16 @@ export const SHORT_DESCRIPTION = 20;
 
 const MAX_MONEY_CENTS = 10_000_000 * 100;
 const DECIMAL = /^\d+(\.\d+)?$/;
+// Commas only as thousands separators: "1,450.50" yes; "1,45" (a decimal comma) and "1,2,3" no.
+const GROUPED = /^\d{1,3}(,\d{3})+(\.\d+)?$/;
 
 // Strict: plain non-negative decimals only. Works on the decimal string, not
 // float math, so 1.005 gives 101 and 19.99 gives 1999.
 export function parseMoney(v: Money): number | null {
   if (typeof v === "number" && (!Number.isFinite(v) || v < 0)) return null;
-  const s = String(v).replace(/[$,\s]/g, "");
-  if (!DECIMAL.test(s)) return null;
+  const raw = String(v).replace(/[$\s]/g, "");
+  if (!DECIMAL.test(raw) && !GROUPED.test(raw)) return null;
+  const s = raw.replace(/,/g, "");
   const [whole, frac = ""] = s.split(".");
   let cents = Number(whole) * 100 + Number(frac.slice(0, 2).padEnd(2, "0"));
   if (frac.length > 2 && Number(frac[2]) >= 5) cents += 1;
