@@ -109,6 +109,7 @@ describe("/api/slack/interact price book taps", () => {
   });
 
   it("ignores pb_cb taps while the price book switch is off", async () => {
+    vi.stubEnv("MCP_PRICEBOOK_EDIT_ENABLED", "false");
     await POST(signedRequest(PB_TAP));
     expect(pbTapMock).not.toHaveBeenCalled();
   });

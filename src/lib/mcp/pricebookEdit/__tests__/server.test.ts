@@ -41,14 +41,27 @@ describe("Trinity Price Book Editor", () => {
   });
 
   it("refuses every tool for anyone else, before any work", async () => {
-    const { client, hcp } = await connect("someone");
-    const calls: Array<[string, Record<string, unknown>]> = [["find_items", { query: "pex" }], ["check_write_access", {}], ["undo_change", { changeId: 1 }]];
+    const { client, hcp, slack } = await connect("someone");
+    const calls: Array<[string, Record<string, unknown>]> = [
+      ["find_items", { query: "pex" }],
+      ["list_categories", {}],
+      ["recent_changes", {}],
+      ["check_write_access", {}],
+      ["preview_material_changes", { items: [{ uuid: "m1", price: 3 }] }],
+      ["apply_material_changes", { previewId: "p1" }],
+      ["add_material", { categoryUuid: "c-pex", name: "PEX cap", price: 1.25, cost: 0.4 }],
+      ["request_service_changes", { items: [{ uuid: "s1", price: 195 }] }],
+      ["undo_change", { changeId: 1 }],
+    ];
     for (const [name, args] of calls) {
       const r = await client.callTool({ name, arguments: args });
       expect(r.isError).toBe(true);
       expect(text(r)).toBe(NOT_EDITOR_TEXT);
     }
+    expect(calls).toHaveLength(9);
     expect(hcp.updates).toEqual([]);
+    expect(hcp.created).toEqual([]);
+    expect(slack.posts).toEqual([]);
   });
 
   it("previews then applies a price change", async () => {
