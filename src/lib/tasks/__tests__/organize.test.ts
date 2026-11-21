@@ -15,6 +15,16 @@ describe("fitText", () => {
     expect(fitText(long)).toHaveLength(75);
     expect(fitText(long).endsWith("…")).toBe(true);
   });
+
+  it("never splits an emoji, counting code points against the limit", () => {
+    const loneSurrogate = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+    expect(fitText(`${"a".repeat(74)}😀`)).toBe(`${"a".repeat(74)}😀`); // 75 code points: fits
+    for (let n = 70; n <= 80; n++) {
+      const out = fitText(`${"a".repeat(n)}😀😀bb`);
+      expect(loneSurrogate.test(out)).toBe(false);
+      expect(Array.from(out).length).toBeLessThanOrEqual(75);
+    }
+  });
 });
 
 describe("validateGrouping", () => {

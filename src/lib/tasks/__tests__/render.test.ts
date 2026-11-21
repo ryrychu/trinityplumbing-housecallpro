@@ -81,6 +81,20 @@ describe("optionLabel", () => {
     expect(label.startsWith("~")).toBe(true);
     expect(label.endsWith("~")).toBe(true);
   });
+
+  it("never splits an emoji when it shortens a label", () => {
+    const loneSurrogate = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+    for (const done of [false, true]) {
+      const brief = optionLabel(`${"a".repeat(74)}😀`, done);
+      expect(loneSurrogate.test(brief)).toBe(false);
+      expect(brief.length).toBeLessThanOrEqual(OPTION_TEXT_MAX);
+      for (let n = 68; n <= 76; n++) {
+        const label = optionLabel(`${"a".repeat(n)}😀😀😀`, done);
+        expect(loneSurrogate.test(label)).toBe(false);
+        expect(label.length).toBeLessThanOrEqual(OPTION_TEXT_MAX);
+      }
+    }
+  });
 });
 
 describe("action ids and layout", () => {

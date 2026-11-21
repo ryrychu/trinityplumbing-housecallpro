@@ -28,9 +28,11 @@ export type Grouping = {
 /** Proposes a grouping, or null when it couldn't (the caller falls back to rules). */
 export type Organizer = (open: FieldyTask[], recordings: ConversationSummary[]) => Promise<ProposedGroup[] | null>;
 
+/** Whitespace flattened, at most `max` code points (as Postgres char_length counts), never splitting an emoji. */
 export function fitText(value: string, max = ITEM_TEXT_MAX): string {
   const flat = value.replace(/\s+/g, " ").trim();
-  return flat.length > max ? `${flat.slice(0, max - 1).trimEnd()}…` : flat;
+  const points = Array.from(flat);
+  return points.length > max ? `${points.slice(0, max - 1).join("").trimEnd()}…` : flat;
 }
 
 export function validateGrouping(proposed: ProposedGroup[], open: FieldyTask[]): Grouping {

@@ -22,14 +22,18 @@ export function escapeMrkdwn(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
-/** A checkbox label: escaped, struck through when done, within OPTION_TEXT_MAX after both. */
+/**
+ * A checkbox label: escaped, struck through when done, within OPTION_TEXT_MAX
+ * after both. The limit is checked in UTF-16 units (the stricter measure); the
+ * text is shortened by code points so an emoji is never split.
+ */
 export function optionLabel(raw: string, done: boolean): string {
-  let t = raw;
+  let points = Array.from(raw);
   for (;;) {
-    const escaped = escapeMrkdwn(t);
+    const escaped = escapeMrkdwn(points.join(""));
     const label = done ? `~${escaped}~` : escaped;
-    if (label.length <= OPTION_TEXT_MAX || t.length <= 1) return label;
-    t = `${t.slice(0, Math.max(1, t.length - 2)).trimEnd()}…`;
+    if (label.length <= OPTION_TEXT_MAX || points.length <= 1) return label;
+    points = Array.from(`${points.slice(0, Math.max(1, points.length - 2)).join("").trimEnd()}…`);
   }
 }
 
