@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { createHmac } from "node:crypto";
 
 const { tapMock, waitUntilMock } = vi.hoisted(() => ({
-  tapMock: vi.fn(async (..._args: unknown[]) => {}),
+  tapMock: vi.fn<(...args: unknown[]) => Promise<void>>(async () => {}),
   waitUntilMock: vi.fn((p: Promise<unknown>) => p),
 }));
 vi.mock("@vercel/functions", () => ({ waitUntil: waitUntilMock }));
