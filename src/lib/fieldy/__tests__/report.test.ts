@@ -7,9 +7,6 @@ import {
   ageLabel,
   pendingTasks,
   completedTasks,
-  formatFieldyPost,
-  LIST_MAX,
-  FOOTNOTE,
 } from "../report";
 
 // Saturday 14 Nov 2026, 08:00 EST.
@@ -136,93 +133,5 @@ describe("completedTasks", () => {
       task({ id: "mon", status: "completed", completionDate: "2026-11-02T05:00:00Z" }),
     ];
     expect(completedTasks(tasks, MON).map((t) => t.id)).toEqual(["sun-start", "sun-end"]);
-  });
-});
-
-describe("formatFieldyPost", () => {
-  it("lists pending with ages and yesterday's completed, then the footnote", () => {
-    const tasks = [
-      task({ title: "Order PRV valve", date: "2026-11-11T15:00:00Z" }),
-      task({ title: "Call back about the boiler", status: "approved", date: "2026-11-02T15:00:00Z" }),
-      task({ title: "Quote for bathroom", date: "2026-11-20" }),
-      task({ title: "Look into van insurance" }),
-      task({ title: "Return Ferguson parts", status: "completed", completionDate: "2026-11-13T19:00:00Z" }),
-    ];
-    expect(formatFieldyPost(tasks, SAT_8AM)).toBe(
-      [
-        "*Dave's Fieldy tasks, Sat Nov 14*",
-        "*Pending: 4*, oldest first",
-        "• Call back about the boiler (12 days)",
-        "• Order PRV valve (3 days)",
-        "• Quote for bathroom (due Nov 20)",
-        "• Look into van insurance",
-        "*Completed yesterday (Fri Nov 13): 1*",
-        "• Return Ferguson parts",
-        FOOTNOTE,
-      ].join("\n")
-    );
-  });
-
-  it("says so in one line when there is nothing at all", () => {
-    expect(formatFieldyPost([task({ status: "cancelled" })], SAT_8AM)).toBe(
-      ["*Dave's Fieldy tasks, Sat Nov 14*", "No open tasks, and nothing marked done yesterday (Fri Nov 13).", FOOTNOTE].join(
-        "\n"
-      )
-    );
-  });
-
-  it("says none for an empty section when the other has tasks", () => {
-    const text = formatFieldyPost([task({ title: "Only open one" })], SAT_8AM);
-    expect(text).toContain("*Completed yesterday (Fri Nov 13):* none");
-    const done = formatFieldyPost([task({ status: "completed", completionDate: "2026-11-13T19:00:00Z" })], SAT_8AM);
-    expect(done).toContain("*Pending:* none");
-  });
-
-  it(`lists at most ${LIST_MAX} per section and sums up the rest`, () => {
-    const pending = Array.from({ length: 30 }, (_, i) =>
-      task({ title: `Open ${i}`, date: `2026-10-${String(i + 1).padStart(2, "0")}T15:00:00Z` })
-    );
-    const done = Array.from({ length: 27 }, (_, i) =>
-      task({ title: `Done ${i}`, status: "completed", completionDate: `2026-11-13T${String(6 + (i % 18)).padStart(2, "0")}:00:00Z` })
-    );
-    const lines = formatFieldyPost([...pending, ...done], SAT_8AM).split("\n");
-
-    expect(lines).toContain("*Pending: 30*, oldest first");
-    expect(lines).toContain("… and 5 more");
-    expect(lines).toContain("*Completed yesterday (Fri Nov 13): 27*");
-    expect(lines).toContain("… and 2 more");
-    expect(lines.filter((l) => l.startsWith("• Open"))).toHaveLength(LIST_MAX);
-    expect(lines.filter((l) => l.startsWith("• Done"))).toHaveLength(LIST_MAX);
-    expect(lines).toContain("• Open 0 (44 days)");
-  });
-
-  it("shows a task once if it moved from new to completed between the two reads", () => {
-    const text = formatFieldyPost(
-      [
-        task({ id: "same", title: "Fix the leak", status: "new" }),
-        task({ id: "same", title: "Fix the leak", status: "completed", completionDate: "2026-11-13T19:00:00Z" }),
-      ],
-      SAT_8AM
-    );
-    expect(text.match(/Fix the leak/g)).toHaveLength(1);
-    expect(text).toContain("*Pending:* none");
-  });
-
-  it("escapes Slack markup, flattens newlines and shortens very long titles", () => {
-    const text = formatFieldyPost(
-      [task({ title: "Ping <!channel> & <@U123>\nsecond line" }), task({ title: "x".repeat(400) })],
-      SAT_8AM
-    );
-    expect(text).toContain("• Ping &lt;!channel&gt; &amp; &lt;@U123&gt; second line");
-    expect(text).not.toContain("<!channel>");
-    const long = text.split("\n").find((l) => l.startsWith("• xxx"))!;
-    expect(long.length).toBeLessThanOrEqual(2 + 150);
-    expect(long.endsWith("…")).toBe(true);
-  });
-
-  it("heads a preview so it can't be mistaken for the real post", () => {
-    expect(formatFieldyPost([], SAT_8AM, { preview: true }).split("\n")[0]).toBe(
-      "*Preview: Dave's Fieldy tasks, Sat Nov 14*"
-    );
   });
 });

@@ -1,18 +1,12 @@
-// Dave's Fieldy tasks in Slack: the morning post and `/trinity fieldy preview`.
-//
-// Fieldy (Dave's recording pendant) turns conversations into tasks. Each
-// morning the bot posts the open ones and the ones he marked done yesterday
-// to the channel in SLACK_FIELDY_CHANNEL_ID. Read from Fieldy at post time;
-// nothing from Fieldy is stored. No LLM: the task status is already structured.
+// Dave's Fieldy tasks in Slack: the switch, /trinity fieldy preview, and the Fieldy error text. The checklist itself lives in src/lib/tasks/.
 //
 // Task titles can hold customer names and addresses, so they appear only in
-// the post or the preview, never in logs.
-import type { SupabaseClient } from "@supabase/supabase-js";
-import { claim } from "@/lib/notifications/dedupe";
-import { isFieldyDailyDue, localDateKey } from "@/lib/notifications/schedule";
-import { postMessage } from "@/lib/slack/web";
-import { FieldyApiError, fieldyApiKey, listTasks, type FieldyTask, type FieldyTaskStatus } from "./client";
-import { formatFieldyPost } from "./report";
+// the checklist or the preview, never in logs.
+import { localDateKey } from "@/lib/notifications/schedule";
+import { liveFieldyPort, liveOrganizer } from "@/lib/tasks/deps";
+import { planChecklist, type ChecklistPlan } from "@/lib/tasks/morning";
+import { renderChecklistPreview } from "@/lib/tasks/render";
+import { FieldyApiError, listTasks, type FieldyTask, type FieldyTaskStatus } from "./client";
 
 // Off unless exactly "true", like SLACK_ALERTS_ENABLED and SLACK_DECLINED_ENABLED.
 // Covers the morning post and the preview.
@@ -23,8 +17,8 @@ export function fieldyEnabled(): boolean {
 export const DISABLED_TEXT = "The Fieldy task post isn't switched on yet.";
 
 export const USAGE_TEXT = [
-  "*Dave's Fieldy tasks* post each morning between 7 and 11.",
-  "`/trinity fieldy preview` — today's post, shown only to you",
+  "*Dave's Fieldy checklist* posts each morning between 7 and 11.",
+  "`/trinity fieldy preview` — today's checklist as it would be built now, shown only to you",
 ].join("\n");
 
 export type FieldyCommand = { kind: "fieldyPreview" } | { kind: "fieldyUsage" };
@@ -75,68 +69,21 @@ export function describeFieldyError(err: FieldyApiError): string {
   return `Couldn't ${verb} Fieldy: ${err.code}. ${fix}`;
 }
 
-export async function renderFieldy(cmd: FieldyCommand, now: Date, source: TaskSource = fieldyTaskSource()): Promise<string> {
+export async function renderFieldy(
+  cmd: FieldyCommand,
+  now: Date,
+  plan: () => Promise<ChecklistPlan> = () => planChecklist({ fieldy: liveFieldyPort(), now: () => now }, liveOrganizer())
+): Promise<string> {
   if (!fieldyEnabled()) return DISABLED_TEXT;
   if (cmd.kind === "fieldyUsage") return USAGE_TEXT;
 
-  // Read-only: no claim, no post. The reply goes back through the slash
-  // command's response_url, ephemeral.
+  // Read-only: no claim, no post, nothing saved. The reply goes back through
+  // the slash command's response_url, ephemeral.
   try {
-    return formatFieldyPost(await source.tasks(), now, { preview: true });
+    const p = await plan();
+    return renderChecklistPreview(localDateKey(now), p.grouping, p.builtBy, p.finishedYesterday);
   } catch (err) {
     if (err instanceof FieldyApiError) return describeFieldyError(err);
     throw err;
   }
 }
-
-/** The first setting the morning post is missing, or null when it has them all. */
-function missingConfig(): string | null {
-  if (!fieldyApiKey()) return "FIELDY_API_KEY is not set";
-  const token = process.env.SLACK_BOT_TOKEN;
-  if (!token) return "SLACK_BOT_TOKEN is not set";
-  if (!token.startsWith("xoxb-")) return "SLACK_BOT_TOKEN is not a bot token (xoxb-…)";
-  if (!process.env.SLACK_FIELDY_CHANNEL_ID) return "SLACK_FIELDY_CHANNEL_ID is not set";
-  return null;
-}
-
-export type FieldyReportDeps = { source: TaskSource; post: (text: string) => Promise<void> };
-
-function defaultDeps(): FieldyReportDeps {
-  return {
-    source: fieldyTaskSource(),
-    post: async (text) => {
-      await postMessage(process.env.SLACK_BOT_TOKEN!, process.env.SLACK_FIELDY_CHANNEL_ID!, text);
-    },
-  };
-}
-
-/**
- * The morning post. Called from /api/cron/sync on every run (which already
- * checks SLACK_ALERTS_ENABLED); posts at most once per Eastern day (claim()
- * ledger, kind "fieldy_daily", keyed by the date).
- *
- * Same order as the declined-calls Monday post: read Fieldy and build the
- * text BEFORE claiming, so a Fieldy outage throws before the claim and the
- * next 15-minute run tries again. Once claimed, a failed post is not retried
- * (losing a message beats posting it twice).
- */
-export async function runFieldyDailyPass(
-  supabase: SupabaseClient,
-  now: Date,
-  deps: FieldyReportDeps = defaultDeps()
-): Promise<boolean> {
-  if (!fieldyEnabled()) return false;
-  if (!isFieldyDailyDue(now)) return false;
-  const missing = missingConfig();
-  if (missing) {
-    console.warn(`[fieldy] daily post skipped: ${missing}`);
-    return false;
-  }
-
-  const text = formatFieldyPost(await deps.source.tasks(), now);
-  if (!(await claim(supabase, "fieldy_daily", localDateKey(now)))) return false;
-
-  await deps.post(text);
-  return true;
-}
-

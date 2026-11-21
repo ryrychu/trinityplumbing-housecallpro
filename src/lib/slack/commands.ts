@@ -135,7 +135,7 @@ export const HELP_TEXT = [
   "`/trinity thursday` — the next Thursday (any weekday works)",
   "`/trinity money` — open estimates and unpaid invoices",
   "`/trinity declined` — log a call we turned down (too busy or too far)",
-  "`/trinity fieldy preview` — this morning's Fieldy task post, shown only to you",
+  "`/trinity fieldy preview` — today's Fieldy checklist, shown only to you",
 ].join("\n");
 
 export async function renderCommand(cmd: Command, now: Date): Promise<string> {
