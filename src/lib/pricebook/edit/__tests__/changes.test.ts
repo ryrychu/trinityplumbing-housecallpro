@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { applyPercent, buildPreview, describeChange, fieldsDiffer, parseMoney, toHcpFields, MAX_ITEMS } from "../changes";
+import { applyPercent, buildPreview, describeChange, fieldsDiffer, parseMoney, priceCheck, toHcpFields, MAX_ITEMS } from "../changes";
 import { item } from "./fakes";
 
 const TEE = item({ uuid: "m1" });                                       // $2.50 / cost $0.90
@@ -72,5 +72,45 @@ describe("helpers", () => {
   });
   it("describes a change in plain words", () => {
     expect(describeChange({ priceCents: 250 }, { priceCents: 275, description: "x" })).toBe("price $2.50 → $2.75; description changed");
+  });
+});
+
+describe("strict money guardrails", () => {
+  it("refuses empty, malformed and negative money", () => {
+    expect(parseMoney("")).toBeNull();
+    expect(parseMoney("   ")).toBeNull();
+    expect(parseMoney("0x10")).toBeNull();
+    expect(parseMoney("-5")).toBeNull();
+    expect(parseMoney("abc")).toBeNull();
+    expect(parseMoney("1e5")).toBeNull();
+    expect(parseMoney(-1)).toBeNull();
+    expect(parseMoney(Number.NaN)).toBeNull();
+  });
+  it("rounds to cents without float error", () => {
+    expect(parseMoney(1.005)).toBe(101);
+    expect(parseMoney("19.99")).toBe(1999);
+    expect(parseMoney("$1,234.5")).toBe(123450);
+  });
+  it("refuses amounts above $10,000,000", () => {
+    expect(parseMoney(20000000)).toBeNull();
+    expect(parseMoney(10000000)).toBe(1000000000);
+  });
+  it("blocks an empty cost as bad_money rather than a $0.00 cost", () => {
+    const p = buildPreview({ items: [{ uuid: "m1", cost: "" }] }, BOOK);
+    expect(p.blocks.map((b) => b.code)).toEqual(["bad_money"]);
+    expect(p.changes).toEqual([]);
+  });
+  it("blocks a negative cost", () => {
+    expect(buildPreview({ items: [{ uuid: "m1", cost: "-5" }] }, BOOK).blocks.map((b) => b.code)).toEqual(["bad_money"]);
+    expect(priceCheck("PEX tee", "m1", 250, -1, true)?.code).toBe("cost_negative");
+  });
+  it("lets a description-only edit through on an item already at $0", () => {
+    const zero = item({ uuid: "z", priceCents: 0 });
+    const p = buildPreview({ items: [{ uuid: "z", description: "a clear and complete description" }] }, [zero]);
+    expect(p.blocks).toEqual([]);
+    expect(p.changes.map((c) => c.uuid)).toEqual(["z"]);
+  });
+  it("blocks a cost raised above the unchanged price as below_cost", () => {
+    expect(buildPreview({ items: [{ uuid: "m1", cost: 3 }] }, BOOK).blocks.map((b) => b.code)).toEqual(["below_cost"]);
   });
 });

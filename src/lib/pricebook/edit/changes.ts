@@ -15,9 +15,19 @@ export const MAX_ITEMS = 50;
 export const BIG_CHANGE = 0.25;
 export const SHORT_DESCRIPTION = 20;
 
+const MAX_MONEY_CENTS = 10_000_000 * 100;
+const DECIMAL = /^\d+(\.\d+)?$/;
+
+// Strict: plain non-negative decimals only. Works on the decimal string, not
+// float math, so 1.005 gives 101 and 19.99 gives 1999.
 export function parseMoney(v: Money): number | null {
-  const n = typeof v === "number" ? v : Number(String(v).replace(/[$,\s]/g, ""));
-  return Number.isFinite(n) ? Math.round(n * 100) : null;
+  if (typeof v === "number" && (!Number.isFinite(v) || v < 0)) return null;
+  const s = String(v).replace(/[$,\s]/g, "");
+  if (!DECIMAL.test(s)) return null;
+  const [whole, frac = ""] = s.split(".");
+  let cents = Number(whole) * 100 + Number(frac.slice(0, 2).padEnd(2, "0"));
+  if (frac.length > 2 && Number(frac[2]) >= 5) cents += 1;
+  return cents > MAX_MONEY_CENTS ? null : cents;
 }
 
 export function applyPercent(cents: number, pct: number, round: "cent" | "dollar" | "99" = "cent"): number {
@@ -72,6 +82,7 @@ export function describeChange(before: FieldValues | null, after: FieldValues): 
 
 export function priceCheck(name: string, uuid: string, priceCents: number | null, costCents: number | null, allowBelowCost: boolean): Issue | null {
   if (priceCents !== null && priceCents <= 0) return { uuid, name, code: "price_not_positive", message: `${name}: the price must be more than $0.00.` };
+  if (costCents !== null && costCents < 0) return { uuid, name, code: "cost_negative", message: `${name}: the cost can't be negative.` };
   if (!allowBelowCost && priceCents !== null && costCents !== null && priceCents < costCents) {
     return { uuid, name, code: "below_cost", message: `${name}: ${formatMoney(priceCents)} is below its cost of ${formatMoney(costCents)}. Ask again with allowBelowCost if that's intended.` };
   }
@@ -133,7 +144,10 @@ export function buildPreview(req: PreviewRequest, items: PricebookItem[]): Previ
     }
     if (Object.keys(after).length === 0) { warnings.push({ uuid: it.uuid, name: it.name, code: "no_change", message: `${it.name} already has those values; skipped.` }); continue; }
 
-    const bad = priceCheck(it.name, it.uuid, after.priceCents ?? it.priceCents, after.costCents ?? it.costCents, Boolean(req.allowBelowCost));
+    const priceOrCostChanged = after.priceCents !== undefined || after.costCents !== undefined;
+    const bad = priceOrCostChanged
+      ? priceCheck(it.name, it.uuid, after.priceCents ?? it.priceCents, after.costCents ?? it.costCents, Boolean(req.allowBelowCost))
+      : null;
     if (bad) { blocks.push(bad); continue; }
 
     if (after.priceCents !== undefined && it.priceCents) {
