@@ -102,3 +102,17 @@ describe("runChecklistMorningPass", () => {
     expect(slack.posts).toHaveLength(0);
   });
 });
+
+describe("runChecklistMorningPass and ChatGPT at the same time", () => {
+  it("doesn't rebuild a checklist ChatGPT built while this run was grouping", async () => {
+    const { deps, slack, lists } = makeDeps({ tasks: TASKS, now: AT_8AM });
+    const organizer: Organizer = async (open) => {
+      await deps.store.create({ day: "2026-11-23", channelId: "C_FIELDY", builtBy: "chatgpt" });
+      return aiOrganizer(open, []);
+    };
+    expect(await runChecklistMorningPass(SUPABASE, deps, organizer)).toBe(false);
+    expect(claimMock).toHaveBeenCalledTimes(1);
+    expect(slack.posts).toHaveLength(0);
+    expect(Array.from(lists.values()).map((l) => l.builtBy)).toEqual(["chatgpt"]);
+  });
+});

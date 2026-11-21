@@ -43,6 +43,8 @@ export async function runChecklistMorningPass(supabase: SupabaseClient, deps: Ch
 
   const plan = await planChecklist(deps, organize);
   if (!(await claim(supabase, "fieldy_checklist", day))) return false;
+  // Grouping takes a while: ChatGPT may have built it meanwhile. Keep Dave's.
+  if (await deps.store.getByDay(day)) return false;
 
   await buildChecklist(deps, plan.grouping, plan.builtBy, plan.finishedYesterday);
   return true;
