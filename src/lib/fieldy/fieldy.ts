@@ -62,6 +62,8 @@ const FIXES: Record<string, string> = {
   network: "Couldn't reach Fieldy (network). Try again in a moment.",
   bad_response: "Fieldy sent back something unexpected. Its API may have changed; see src/lib/fieldy/client.ts.",
   too_many_pages: "Fieldy kept returning more pages than expected. See src/lib/fieldy/client.ts.",
+  http_404: "Fieldy doesn't have that task any more. It may have been deleted in the Fieldy app.",
+  update_failed: "Fieldy didn't accept the change. The task may have been deleted in the Fieldy app.",
 };
 
 /** One line for the person who asked: the error code and what to do. Never the key or task text. */
@@ -69,7 +71,8 @@ export function describeFieldyError(err: FieldyApiError): string {
   const fix =
     FIXES[err.code] ??
     (err.code.startsWith("http_5") ? "Fieldy had a server error. Try again in a moment." : "See https://api.fieldy.ai/docs.");
-  return `Couldn't read Fieldy: ${err.code}. ${fix}`;
+  const verb = err.op.startsWith("GET") ? "read" : "update";
+  return `Couldn't ${verb} Fieldy: ${err.code}. ${fix}`;
 }
 
 export async function renderFieldy(cmd: FieldyCommand, now: Date, source: TaskSource = fieldyTaskSource()): Promise<string> {

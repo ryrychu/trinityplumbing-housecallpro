@@ -265,4 +265,10 @@ describe("describeFieldyError", () => {
   ])("explains %s", (code, phrase) => {
     expect(describeFieldyError(new FieldyApiError(code))).toContain(phrase);
   });
+
+  it("says 'update' for a failed write and explains update_failed", () => {
+    const text = describeFieldyError(new FieldyApiError("update_failed", "PATCH /tasks/{id}"));
+    expect(text).toMatch(/^Couldn't update Fieldy: update_failed\./);
+    expect(text).toMatch(/deleted/);
+  });
 });
