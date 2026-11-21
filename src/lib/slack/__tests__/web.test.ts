@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { deleteMessage, fetchChannelHistory, postMessage, updateMessage, SlackApiError } from "../web";
+import { deleteMessage, fetchChannelHistory, postMessage, postThreadReply, updateMessage, SlackApiError } from "../web";
 
 const TOKEN = "xoxb-test-not-real";
 const fetchMock = vi.fn();
@@ -124,5 +124,13 @@ describe("deleteMessage", () => {
   it("throws on a Slack error", async () => {
     fetchMock.mockResolvedValueOnce(json({ ok: false, error: "message_not_found" }));
     await expect(deleteMessage(TOKEN, "C1", "1")).rejects.toThrow(/chat\.delete failed: message_not_found/);
+  });
+});
+
+describe("postThreadReply", () => {
+  it("posts into the thread", async () => {
+    fetchMock.mockResolvedValueOnce(json({ ok: true, ts: "2" }));
+    await postThreadReply(TOKEN, "C1", "900.1", "hello");
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toMatchObject({ channel: "C1", thread_ts: "900.1", text: "hello" });
   });
 });
