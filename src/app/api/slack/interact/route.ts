@@ -1,4 +1,5 @@
-// Slack interactivity: taps on Dave's Fieldy checklist checkboxes.
+// Slack interactivity: taps on checklist checkboxes. Handles fieldy_cb: (Dave's Fieldy
+// checklist) and pb_cb: (price book service changes) taps, each behind its own switch.
 // Slack app → Interactivity & Shortcuts → Request URL https://ops.trinity.plumbing/api/slack/interact
 //
 // Like /api/slack/command, this is NOT behind src/middleware.ts's session gate
@@ -13,14 +14,18 @@ import { verifySlackSignature } from "@/lib/slack/verify";
 import { checklistConfigMissing, liveChecklistDeps } from "@/lib/tasks/deps";
 import { allowedSlackUsers, handleChecklistTap, type BlockActionsPayload } from "@/lib/tasks/interact";
 import { parseActionId } from "@/lib/tasks/render";
+import { liveServiceDeps, pricebookEditEnabled, pricebookSlackUsers, serviceConfigMissing } from "@/lib/pricebook/edit/deps";
+import { handleServiceTap, parsePbActionId } from "@/lib/pricebook/edit/serviceChecklist";
 
 export const maxDuration = 60;
 
 const OK = () => new NextResponse(null, { status: 200 });
 
 export async function POST(req: Request) {
-  // Same order as the command route: switch, secret, then read and verify the body.
-  if (!fieldyEnabled()) return OK();
+  // Same order as the command route: switches, secret, then read and verify the body.
+  const fieldyOn = fieldyEnabled();
+  const pbOn = pricebookEditEnabled();
+  if (!fieldyOn && !pbOn) return OK();
 
   const signingSecret = process.env.SLACK_SIGNING_SECRET;
   if (!signingSecret) {
@@ -43,21 +48,24 @@ export async function POST(req: Request) {
   } catch {
     return new NextResponse(null, { status: 400 });
   }
-  const isChecklistTap =
-    payload?.type === "block_actions" && (payload.actions ?? []).some((a) => a.action_id && parseActionId(a.action_id));
-  if (!isChecklistTap) return OK();
+  if (payload?.type !== "block_actions" || !Array.isArray(payload.actions)) return OK();
+  const actions = payload.actions;
 
-  const missing = checklistConfigMissing();
-  if (missing) {
-    console.warn(`[fieldy] checklist tap ignored: ${missing}`);
-    return OK();
+  const jobs: Promise<unknown>[] = [];
+  const log = (what: string) => (err: unknown) =>
+    console.error(`[slack] ${what} tap failed:`, err instanceof Error ? err.message : String(err));
+
+  if (fieldyOn && actions.some((a) => a.action_id && parseActionId(a.action_id))) {
+    const missing = checklistConfigMissing();
+    if (missing) console.warn(`[fieldy] checklist tap ignored: ${missing}`);
+    else jobs.push(handleChecklistTap(payload, liveChecklistDeps(), { allowedUsers: allowedSlackUsers(), note: postEphemeralNote }).catch(log("checklist")));
   }
-
-  // Slack wants an answer within 3 seconds; Fieldy plus chat.update can take longer.
-  waitUntil(
-    handleChecklistTap(payload, liveChecklistDeps(), { allowedUsers: allowedSlackUsers(), note: postEphemeralNote }).catch((err) =>
-      console.error("[slack] checklist tap failed:", err instanceof Error ? err.message : String(err))
-    )
-  );
+  if (pbOn && actions.some((a) => a.action_id && parsePbActionId(a.action_id))) {
+    const missing = serviceConfigMissing();
+    if (missing) console.warn(`[pricebook] service tap ignored: ${missing}`);
+    else jobs.push(handleServiceTap(payload, liveServiceDeps(), { allowedUsers: pricebookSlackUsers(), note: postEphemeralNote }).catch(log("price book")));
+  }
+  // Slack wants an answer within 3 seconds; the work finishes after the reply.
+  if (jobs.length > 0) waitUntil(Promise.all(jobs));
   return OK();
 }
