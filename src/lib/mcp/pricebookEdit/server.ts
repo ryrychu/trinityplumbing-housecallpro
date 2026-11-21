@@ -9,7 +9,7 @@ import { EditError, addMaterial, applyPreview, checkWriteAccess, createPreview, 
 import { describeChange } from "@/lib/pricebook/edit/changes";
 import { NOT_EDITOR_TEXT } from "@/lib/pricebook/edit/deps";
 import { requestServiceChanges, rerenderBatch, type ServiceDeps } from "@/lib/pricebook/edit/serviceChecklist";
-import type { ChangeRow } from "@/lib/pricebook/edit/types";
+import type { ChangeRow, FieldValues } from "@/lib/pricebook/edit/types";
 import { undoChange } from "@/lib/pricebook/edit/undo";
 
 export interface PricebookEditToolDeps {
@@ -36,6 +36,19 @@ const refuse = (t: string): ToolResult => ({ isError: true, content: [{ type: "t
 const MONEY = z.union([z.number(), z.string().max(20)]);
 
 const KEY_CANNOT_WRITE_CODE = "key_cannot_write";
+/** The old values of the fields a change touched, e.g. 'price was $2.50; cost was $0.90'. */
+function oldValues(before: FieldValues, after: FieldValues): string {
+  const parts: string[] = [];
+  if (after.priceCents !== undefined) parts.push(`price was ${before.priceCents !== undefined ? formatMoney(before.priceCents) : "unset"}`);
+  if (after.costCents !== undefined) parts.push(`cost was ${before.costCents !== undefined ? formatMoney(before.costCents) : "unset"}`);
+  if (after.name !== undefined) parts.push(`name was "${before.name ?? ""}"`);
+  if (after.description !== undefined) parts.push(`description was "${before.description ?? ""}"`);
+  if (after.unit !== undefined) parts.push(`unit was ${before.unit ?? "unset"}`);
+  if (after.partNumber !== undefined) parts.push(`part number was ${before.partNumber ?? "unset"}`);
+  if (after.taxable !== undefined) parts.push(`was ${before.taxable ? "taxable" : "not taxable"}`);
+  return parts.join("; ");
+}
+
 const KEY_NEEDED = "Dave needs to make a Housecall Pro API key with write access.";
 
 export function createPricebookEditMcpServer(deps: PricebookEditToolDeps, callerUserId: string | null): McpServer {
@@ -151,12 +164,18 @@ export function createPricebookEditMcpServer(deps: PricebookEditToolDeps, caller
     } else {
       notes.push("Applied in HCP. The read-only Trinity Price Book connector may show old values for up to 2 minutes. Undo with undo_change and this batchId.");
     }
-    if (r.unlogged.length > 0) {
-      const lines = r.unlogged.map((u) => {
+    const appliedIds = new Set(r.applied.map((x) => x.uuid));
+    const changedUnlogged = r.unlogged.filter((u) => appliedIds.has(u.uuid));
+    const failedUnlogged = r.unlogged.filter((u) => !appliedIds.has(u.uuid));
+    if (changedUnlogged.length > 0) {
+      const lines = changedUnlogged.map((u) => {
         const p = planned.find((c) => c.uuid === u.uuid);
-        return p ? `${u.name} (was: ${describeChange(p.after, p.before)})` : u.name;
+        return p ? `${u.name}: ${oldValues(p.before, p.after)}` : u.name;
       });
-      notes.push(`These were changed in HCP but not recorded in the change log, so undo_change can't put them back: ${lines.join("; ")}. Their old values are shown so they can be restored by hand.`);
+      notes.push(`These were changed in HCP but not recorded in the change log, so undo_change can't put them back. Old values, to restore by hand: ${lines.join("; ")}.`);
+    }
+    if (failedUnlogged.length > 0) {
+      notes.push(`These were not changed in HCP, but the failure wasn't recorded in the change log: ${failedUnlogged.map((u) => u.name).join(", ")}.`);
     }
     return json({ ...r, note: notes.join(" ") });
   }));

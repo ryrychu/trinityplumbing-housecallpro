@@ -7,14 +7,17 @@ import { DAVE, ELLA, NOW, fakeSlack, fakeWriter, ids, item, memoryStore } from "
 
 const BOOK = [item({ uuid: "m1" }), item({ uuid: "m2", name: "PEX elbow" }), item({ uuid: "s1", kind: "service", name: "Drain cleaning", category: "Drains", categoryUuid: undefined, priceCents: 17500, costCents: 6000 })];
 
-async function connect(caller: string | null) {
+type Store = ReturnType<typeof memoryStore>["store"];
+
+async function connect(caller: string | null, wrap: (s: Store) => Store = (s) => s) {
   const hcp = fakeWriter(BOOK);
   const mem = memoryStore();
+  const store = wrap(mem.store);
   const slack = fakeSlack();
   const next = ids();
   const deps: PricebookEditToolDeps = {
-    edit: { store: mem.store, writer: hcp.writer, loadItems: async () => hcp.all(), now: () => NOW, newId: next },
-    service: { store: mem.store, slack: slack.port, channelId: "C_PB", loadItems: async () => hcp.all(), now: () => NOW, newId: next, nameOf: (u) => (u === DAVE ? "Dave" : "Ella") },
+    edit: { store, writer: hcp.writer, loadItems: async () => hcp.all(), now: () => NOW, newId: next },
+    service: { store, slack: slack.port, channelId: "C_PB", loadItems: async () => hcp.all(), now: () => NOW, newId: next, nameOf: (u) => (u === DAVE ? "Dave" : "Ella") },
     editors: new Map([[DAVE, "Dave"], [ELLA, "Ella"]]),
     listCategories: async () => [{ uuid: "c-pex", name: "PEX", parentUuid: null }],
     serviceConfigMissing: () => null,
@@ -97,5 +100,62 @@ describe("Trinity Price Book Editor", () => {
     await client.callTool({ name: "apply_material_changes", arguments: { previewId: p.previewId } });
     const r = JSON.parse(text(await client.callTool({ name: "recent_changes", arguments: {} })));
     expect(r.changes[0]).toMatchObject({ item: "PEX tee", by: "Dave", status: "applied", change: "price $2.50 → $3.00" });
+  });
+
+  async function previewApply(client: Client, items: unknown[]) {
+    const p = JSON.parse(text(await client.callTool({ name: "preview_material_changes", arguments: { items } })));
+    return p.previewId as string;
+  }
+  const apply = async (client: Client, previewId: string) => JSON.parse(text(await client.callTool({ name: "apply_material_changes", arguments: { previewId } })));
+  const undo = async (client: Client, batchId: string) => JSON.parse(text(await client.callTool({ name: "undo_change", arguments: { batchId } })));
+
+  it("says nothing was applied when every item failed", async () => {
+    const { client, hcp } = await connect(DAVE);
+    const id = await previewApply(client, [{ uuid: "m1", price: 3 }]);
+    hcp.failWith(500, "m1");
+    const a = await apply(client, id);
+    expect(a.applied).toHaveLength(0);
+    expect(a.note).toMatch(/^Nothing was applied/);
+    expect(a.note).not.toContain("Applied in HCP");
+  });
+
+  it("gives old values for an item changed in HCP but not logged", async () => {
+    const { client } = await connect(DAVE, (s) => ({ ...s, insertChanges: async () => { throw new Error("db down"); } }));
+    const a = await apply(client, await previewApply(client, [{ uuid: "m1", price: 3 }]));
+    expect(a.applied).toHaveLength(1);
+    expect(a.unlogged).toEqual([{ uuid: "m1", name: "PEX tee" }]);
+    expect(a.note).toContain("were changed in HCP but not recorded");
+    expect(a.note).toContain("PEX tee: price was $2.50");
+  });
+
+  it("does not claim a failed, unlogged item was changed in HCP", async () => {
+    const { client, hcp } = await connect(DAVE, (s) => ({ ...s, insertChanges: async () => { throw new Error("db down"); } }));
+    const id = await previewApply(client, [{ uuid: "m1", price: 3 }]);
+    hcp.failWith(500, "m1");
+    const a = await apply(client, id);
+    expect(a.unlogged).toHaveLength(1);
+    expect(a.note).toContain("not changed in HCP");
+    expect(a.note).not.toContain("were changed in HCP");
+    expect(a.note).not.toContain("price was");
+  });
+
+  it("explains an undo that stops because the key can't write", async () => {
+    const { client, hcp } = await connect(DAVE);
+    const a = await apply(client, await previewApply(client, [{ uuid: "m1", price: 3 }, { uuid: "m2", price: 4 }]));
+    hcp.failWith(403);
+    const u = await undo(client, a.batchId);
+    expect(u.aborted).toBe("key_cannot_write");
+    expect(u.note).toMatch(/stopped accepting writes/);
+    expect(u.note).toMatch(/write access/);
+  });
+
+  it("says when an undo reached HCP but the log wasn't updated", async () => {
+    let failStatus = false;
+    const { client } = await connect(DAVE, (s) => ({ ...s, setStatus: async (...args: Parameters<Store["setStatus"]>) => { if (failStatus) throw new Error("db down"); return s.setStatus(...args); } }));
+    const a = await apply(client, await previewApply(client, [{ uuid: "m1", price: 3 }]));
+    failStatus = true;
+    const u = await undo(client, a.batchId);
+    expect(u.undone).toHaveLength(1);
+    expect(u.note).toContain("put back in HCP but the change log wasn't updated: PEX tee");
   });
 });
