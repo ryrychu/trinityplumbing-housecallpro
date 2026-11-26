@@ -181,3 +181,12 @@ describe("formatMoney", () => {
     expect(formatMoney(null)).toBe("n/a");
   });
 });
+
+describe("createPricebookLoader includeCategoryUuid", () => {
+  it("adds categoryUuid to materials only when asked", async () => {
+    const plain = await createPricebookLoader(fakeClient())();
+    expect(plain.items.find((i) => i.kind === "material")).not.toHaveProperty("categoryUuid");
+    const withIds = await createPricebookLoader(fakeClient(), { includeCategoryUuid: true })();
+    expect(withIds.items.find((i) => i.uuid === "m-c1a")?.categoryUuid).toBe("c1a");
+  });
+});

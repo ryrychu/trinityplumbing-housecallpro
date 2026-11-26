@@ -2,8 +2,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { createHmac } from "node:crypto";
 
-const { tapMock, waitUntilMock } = vi.hoisted(() => ({
+const { tapMock, pbTapMock, waitUntilMock } = vi.hoisted(() => ({
   tapMock: vi.fn<(...args: unknown[]) => Promise<void>>(async () => {}),
+  pbTapMock: vi.fn<(...args: unknown[]) => Promise<void>>(async () => {}),
   waitUntilMock: vi.fn((p: Promise<unknown>) => p),
 }));
 vi.mock("@vercel/functions", () => ({ waitUntil: waitUntilMock }));
@@ -17,6 +18,15 @@ vi.mock("@/lib/tasks/deps", () => ({
   checklistConfigMissing: () => null,
   liveFieldyPort: () => ({}),
   liveOrganizer: () => async () => null,
+}));
+vi.mock("@/lib/pricebook/edit/serviceChecklist", async (orig) => ({
+  ...(await orig<typeof import("@/lib/pricebook/edit/serviceChecklist")>()),
+  handleServiceTap: pbTapMock,
+}));
+vi.mock("@/lib/pricebook/edit/deps", async (orig) => ({
+  ...(await orig<typeof import("@/lib/pricebook/edit/deps")>()),
+  liveServiceDeps: () => ({}),
+  serviceConfigMissing: () => null,
 }));
 
 import { POST } from "../route";
@@ -42,6 +52,7 @@ const TAP = {
 
 beforeEach(() => {
   tapMock.mockClear();
+  pbTapMock.mockClear();
   vi.stubEnv("SLACK_FIELDY_ENABLED", "true");
   vi.stubEnv("SLACK_SIGNING_SECRET", SECRET);
   vi.stubEnv("SLACK_FIELDY_ALLOWED_USERS", "U_DAVE, U_OTHER");
@@ -80,6 +91,33 @@ describe("/api/slack/interact", () => {
   it("ignores payloads that aren't checklist taps", async () => {
     const res = await POST(signedRequest({ type: "block_actions", actions: [{ action_id: "other" }] }));
     expect(res.status).toBe(200);
+    expect(tapMock).not.toHaveBeenCalled();
+  });
+});
+
+const PB_TAP = { type: "block_actions", user: { id: "U_DAVE" }, actions: [{ action_id: "pb_cb:b-1:0", selected_options: [{ value: "1" }] }] };
+
+describe("/api/slack/interact price book taps", () => {
+  it("routes pb_cb taps to the price book handler when its switch is on", async () => {
+    vi.stubEnv("MCP_PRICEBOOK_EDIT_ENABLED", "true");
+    vi.stubEnv("SLACK_PRICEBOOK_ALLOWED_USERS", "U_DAVE,U_ELLA");
+    const res = await POST(signedRequest(PB_TAP));
+    expect(res.status).toBe(200);
+    expect(pbTapMock).toHaveBeenCalledTimes(1);
+    expect(pbTapMock.mock.calls[0][2]).toMatchObject({ allowedUsers: ["U_DAVE", "U_ELLA"] });
+    expect(tapMock).not.toHaveBeenCalled();
+  });
+
+  it("ignores pb_cb taps while the price book switch is off", async () => {
+    vi.stubEnv("MCP_PRICEBOOK_EDIT_ENABLED", "false");
+    await POST(signedRequest(PB_TAP));
+    expect(pbTapMock).not.toHaveBeenCalled();
+  });
+
+  it("doesn't run Fieldy taps when only the price book switch is on", async () => {
+    vi.stubEnv("SLACK_FIELDY_ENABLED", "false");
+    vi.stubEnv("MCP_PRICEBOOK_EDIT_ENABLED", "true");
+    await POST(signedRequest(TAP));
     expect(tapMock).not.toHaveBeenCalled();
   });
 });

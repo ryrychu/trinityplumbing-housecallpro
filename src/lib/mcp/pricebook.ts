@@ -22,6 +22,7 @@ export interface PricebookItem {
   partNumber: string | null;
   updatedAt: string | null;
   taxable: boolean | null;
+  categoryUuid?: string;
 }
 
 export interface Pricebook {
@@ -85,7 +86,7 @@ async function mapLimited<T, R>(inputs: T[], limit: number, fn: (x: T) => Promis
 
 export function createPricebookLoader(
   client: PricebookSource,
-  opts: { ttlMs?: number; now?: () => number; maxCategories?: number; concurrency?: number } = {}
+  opts: { ttlMs?: number; now?: () => number; maxCategories?: number; concurrency?: number; includeCategoryUuid?: boolean } = {}
 ): PricebookLoader {
   const ttlMs = opts.ttlMs ?? 2 * 60 * 1000;
   const now = opts.now ?? Date.now;
@@ -121,7 +122,10 @@ export function createPricebookLoader(
     const materialLists = await mapLimited(categories, concurrency, async (c) => {
       const res = await client.listMaterials(c.uuid);
       truncated ||= res.truncated;
-      return res.items.map((m) => normalizeMaterial(m, c.name));
+      return res.items.map((m) => {
+        const item = normalizeMaterial(m, c.name);
+        return opts.includeCategoryUuid ? { ...item, categoryUuid: c.uuid } : item;
+      });
     });
 
     return {

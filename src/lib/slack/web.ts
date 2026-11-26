@@ -134,6 +134,11 @@ export async function postMessage(token: string, channel: string, text: string, 
   return data.ts ?? "";
 }
 
+/** A reply in a message's thread. Same chat:write scope. */
+export async function postThreadReply(token: string, channel: string, threadTs: string, text: string): Promise<void> {
+  await call("chat.postMessage", token, { json: { channel, thread_ts: threadTs, text, unfurl_links: false, unfurl_media: false } });
+}
+
 /** Replaces a message the bot posted. Same chat:write scope as postMessage. */
 export async function updateMessage(token: string, channel: string, ts: string, text: string, blocks: unknown[]): Promise<void> {
   await call("chat.update", token, { json: { channel, ts, text, blocks } });

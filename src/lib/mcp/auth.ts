@@ -37,6 +37,12 @@ export const TASKS_RESOURCE: McpResource = {
   name: "Trinity Plumbing tasks (Dave only)",
 };
 
+export const PRICEBOOK_EDIT_RESOURCE: McpResource = {
+  path: "/api/mcp/pricebook-edit",
+  metadataPath: "/.well-known/oauth-protected-resource/api/mcp/pricebook-edit",
+  name: "Trinity Plumbing price book editor (Dave and Ella)",
+};
+
 export interface McpCaller {
   userId: string;
   clientId: string;
