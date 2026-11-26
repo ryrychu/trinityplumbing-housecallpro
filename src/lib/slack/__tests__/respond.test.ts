@@ -23,6 +23,20 @@ describe("postToResponseUrl", () => {
     });
   });
 
+  it("sends Block Kit replies ephemerally too, with their fallback text", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response("ok", { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await postToResponseUrl(URL_, { text: "Website traffic", blocks: [{ type: "header" }] });
+
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
+      response_type: "ephemeral",
+      replace_original: true,
+      text: "Website traffic",
+      blocks: [{ type: "header" }],
+    });
+  });
+
   it("returns true on success", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("ok", { status: 200 })));
     expect(await postToResponseUrl(URL_, "hi")).toBe(true);

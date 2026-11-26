@@ -174,6 +174,40 @@ describe("POST /api/slack/command", () => {
     });
   });
 
+  // The traffic preview is Block Kit. It goes back the same private way as
+  // every other answer: response_url (always ephemeral), never a channel.
+  describe("traffic", () => {
+    const REPLY = { text: "Website traffic, Nov 16–22: 760 visitors", blocks: [{ type: "header" }] };
+
+    it("answers `traffic preview` privately with its blocks", async () => {
+      renderCommandMock.mockResolvedValue(REPLY);
+      const res = await POST(slackRequest("traffic preview"));
+      expect(await res.json()).toEqual({ response_type: "ephemeral", text: "Working on it…" });
+      expect(renderCommandMock).toHaveBeenCalledWith({ kind: "trafficPreview" }, expect.any(Date));
+      expect(postMock).toHaveBeenCalledWith(RESPONSE_URL, REPLY);
+    });
+
+    it("answers inline and ephemeral, blocks included, when there is no response_url", async () => {
+      renderCommandMock.mockResolvedValue(REPLY);
+      const body = new URLSearchParams({ command: "/trinity", text: "traffic preview", user_id: "U123" }).toString();
+      const ts = String(Math.floor(Date.now() / 1000));
+      const sig = "v0=" + createHmac("sha256", SECRET).update(`v0:${ts}:${body}`).digest("hex");
+      const res = await POST(
+        new Request("https://ops.trinity.plumbing/api/slack/command", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/x-www-form-urlencoded",
+            "x-slack-signature": sig,
+            "x-slack-request-timestamp": ts,
+          },
+          body,
+        })
+      );
+      expect(await res.json()).toEqual({ response_type: "ephemeral", ...REPLY });
+      expect(postMock).not.toHaveBeenCalled();
+    });
+  });
+
   describe("failures", () => {
     // A raw Supabase error can carry customer rows. It must never reach Slack.
     it("posts a plain apology and never the raw error", async () => {

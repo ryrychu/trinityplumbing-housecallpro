@@ -10,7 +10,7 @@ import { NextResponse } from "next/server";
 import { waitUntil } from "@vercel/functions";
 import { verifySlackSignature } from "@/lib/slack/verify";
 import { parseCommand, renderCommand } from "@/lib/slack/commands";
-import { postToResponseUrl } from "@/lib/slack/respond";
+import { postToResponseUrl, type SlackReply } from "@/lib/slack/respond";
 
 // A schedule read pages every job, customer and technician row. Comfortably
 // more than the 10s an interactive default allows on a cold start.
@@ -22,8 +22,9 @@ export const maxDuration = 60;
 // answers from drifting apart.
 const FAILURE_TEXT = "I couldn't reach the schedule just now — try again in a moment.";
 
-function ephemeral(text: string, status = 200) {
-  return NextResponse.json({ response_type: "ephemeral", text }, { status });
+function ephemeral(reply: string | SlackReply, status = 200) {
+  const content = typeof reply === "string" ? { text: reply } : { text: reply.text, blocks: reply.blocks };
+  return NextResponse.json({ response_type: "ephemeral", ...content }, { status });
 }
 
 export async function POST(req: Request) {
@@ -100,16 +101,16 @@ export async function POST(req: Request) {
   // the retry the guard above then has to swallow.
   waitUntil(
     (async () => {
-      let text: string;
+      let reply: string | SlackReply;
       try {
-        text = await renderCommand(cmd, new Date());
+        reply = await renderCommand(cmd, new Date());
       } catch (err) {
         // Log the message; post a plain sentence. A raw Supabase error can
         // carry customer rows, and this reply lands in a chat window.
         console.error("[slack] command failed:", err instanceof Error ? err.message : String(err));
-        text = FAILURE_TEXT;
+        reply = FAILURE_TEXT;
       }
-      await postToResponseUrl(responseUrl, text);
+      await postToResponseUrl(responseUrl, reply);
     })()
   );
 
