@@ -9,8 +9,9 @@ export const KNOWLEDGE_TTL_MS = 60 * 60_000;
 export const KNOWLEDGE_RETRY_MS = 5 * 60_000;
 const FETCH_TIMEOUT_MS = 5_000;
 // Trinity's file is about 25 KB. Anything near this is a mistake, not a price list.
-const MAX_CHARS = 256 * 1024;
+const MAX_BYTES = 256 * 1024;
 
+// The URL must come from the CHAT_SITES config, never from request data.
 export type KnowledgeSource = { key: string; knowledgeUrl: string };
 export type KnowledgeLoader = (site: KnowledgeSource) => Promise<ChatKnowledge | null>;
 
@@ -21,6 +22,39 @@ export function createKnowledgeLoader(opts: { fetch?: typeof fetch; now?: () => 
   const now = opts.now ?? Date.now;
   const cache = new Map<string, Entry>();
 
+  /** Reads the body up to MAX_BYTES, cancelling the stream once the limit is passed. */
+  async function readBody(res: Response): Promise<{ text: string } | { error: string }> {
+    const header = res.headers.get("content-length");
+    if (header !== null && Number.isFinite(Number(header)) && Number(header) > MAX_BYTES) {
+      return { error: "too_large" };
+    }
+    if (!res.body) return { error: "bad_response" };
+    const reader = res.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        total += value.byteLength;
+        if (total > MAX_BYTES) {
+          await reader.cancel();
+          return { error: "too_large" };
+        }
+        chunks.push(value);
+      }
+    } catch (err) {
+      return { error: err instanceof Error && err.name === "TimeoutError" ? "timeout" : "bad_response" };
+    }
+    const bytes = new Uint8Array(total);
+    let offset = 0;
+    for (const chunk of chunks) {
+      bytes.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    return { text: new TextDecoder().decode(bytes) };
+  }
+
   /** The checked file, or an error code. */
   async function fetchKnowledge(site: KnowledgeSource): Promise<ChatKnowledge | string> {
     let res: Response;
@@ -29,22 +63,19 @@ export function createKnowledgeLoader(opts: { fetch?: typeof fetch; now?: () => 
         headers: { Accept: "application/json" },
         // This module is the cache; Next's fetch cache must not add a second one.
         cache: "no-store",
+        // A redirect could send the request to another host. Treat it as a failure.
+        redirect: "error",
         signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
       });
     } catch (err) {
       return err instanceof Error && err.name === "TimeoutError" ? "timeout" : "network";
     }
     if (!res.ok) return `http_${res.status}`;
-    let body: string;
-    try {
-      body = await res.text();
-    } catch {
-      return "bad_response";
-    }
-    if (body.length > MAX_CHARS) return "too_large";
+    const body = await readBody(res);
+    if ("error" in body) return body.error;
     let parsed: unknown;
     try {
-      parsed = JSON.parse(body);
+      parsed = JSON.parse(body.text);
     } catch {
       return "bad_json";
     }
