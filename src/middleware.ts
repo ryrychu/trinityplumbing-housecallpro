@@ -109,6 +109,10 @@ export const config = {
   // there is no reason for a signed-out stranger to reach the form at all, and
   // the token stays the check that matters -- do NOT remove it on the strength
   // of this line.
+  //
+  // /api/chat stays OUT, like /api/slack and /api/mcp: the website chat bubble
+  // calls it from visitors' browsers on trinity.plumbing, with no ops session.
+  // It guards itself (src/lib/chat/handler.ts).
   matcher: [
     "/app/:path*",
     "/api/app/:path*",
