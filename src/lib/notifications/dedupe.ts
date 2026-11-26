@@ -17,7 +17,8 @@ export type NotificationKind =
   | "declined_weekly"
   | "declined_monthly"
   | "fieldy_daily"
-  | "fieldy_checklist";
+  | "fieldy_checklist"
+  | "analytics_weekly";
 
 // Batch, not per-row: the targeted paid-invoice poll can return up to 50
 // invoices in a single run (page_size=50); claiming them one at a time would
@@ -71,4 +72,20 @@ export async function claim(
 ): Promise<boolean> {
   const claimed = await claimMany(supabase, kind, [entityId]);
   return claimed.length === 1;
+}
+
+/**
+ * Whether a claim already exists. A read only, for a pass whose report is
+ * costly to build (it skips the build once posted); claim() is still what
+ * stops a double post. Throws on a database error.
+ */
+export async function isClaimed(supabase: SupabaseClient, kind: NotificationKind, entityId: string): Promise<boolean> {
+  const { data, error } = await supabase
+    .from("notifications_sent")
+    .select("entity_id")
+    .eq("kind", kind)
+    .eq("entity_id", entityId)
+    .limit(1);
+  if (error) throw new Error(`[dedupe] read failed for kind=${kind}: ${error.message}`);
+  return (data ?? []).length > 0;
 }

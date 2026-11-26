@@ -6,6 +6,7 @@ import {
   isWeeklyLookaheadDue,
   isMonthlyReportDue,
   isFieldyDailyDue,
+  isAnalyticsWeeklyDue,
 } from "../schedule";
 
 describe("localDateKey", () => {
@@ -130,5 +131,23 @@ describe("isFieldyDailyDue", () => {
 
   it("runs on weekends too", () => {
     expect(isFieldyDailyDue(new Date("2026-11-15T13:00:00Z"))).toBe(true); // Sunday 08:00 EST
+  });
+});
+
+// Monday 9 to noon Eastern: a few hours later than the other Monday posts, so
+// Google Analytics has had longer to process Sunday.
+describe("isAnalyticsWeeklyDue", () => {
+  it.each([
+    ["2026-11-23T14:00:00Z", true], // Mon 09:00 EST
+    ["2026-11-23T13:59:00Z", false], // Mon 08:59 EST
+    ["2026-11-23T16:59:00Z", true], // Mon 11:59 EST
+    ["2026-11-23T17:00:00Z", false], // Mon 12:00 EST
+    ["2026-07-27T13:00:00Z", true], // Mon 09:00 EDT
+    ["2026-07-27T12:59:00Z", false], // Mon 08:59 EDT
+    ["2026-07-27T16:00:00Z", false], // Mon 12:00 EDT
+    ["2026-11-24T14:00:00Z", false], // Tue 09:00 EST
+    ["2026-11-22T14:00:00Z", false], // Sun 09:00 EST
+  ])("at %s is %s", (iso, due) => {
+    expect(isAnalyticsWeeklyDue(new Date(iso))).toBe(due);
   });
 });

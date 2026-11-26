@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { claim, claimMany } from "../dedupe";
+import { claim, claimMany, isClaimed } from "../dedupe";
 
 // Minimal stub of the one chain dedupe uses:
 //   supabase.from(table).upsert(rows, opts).select("entity_id")
@@ -59,5 +59,34 @@ describe("claim", () => {
   it("is false when the row already existed", async () => {
     const { client } = stubSupabase([]);
     expect(await claim(client, "daily_digest", "2026-07-29")).toBe(false);
+  });
+});
+
+// A read, for passes whose report is costly to build: they look before they
+// build, and still claim() before posting, which is the actual guard.
+describe("isClaimed", () => {
+  function stubRead(rows: unknown[], error: unknown = null) {
+    const limit = vi.fn().mockResolvedValue({ data: rows, error });
+    const eq2 = vi.fn().mockReturnValue({ limit });
+    const eq1 = vi.fn().mockReturnValue({ eq: eq2 });
+    const select = vi.fn().mockReturnValue({ eq: eq1 });
+    const from = vi.fn().mockReturnValue({ select });
+    return { client: { from } as unknown as SupabaseClient, from, eq1, eq2 };
+  }
+
+  it("is true when the row exists", async () => {
+    const s = stubRead([{ entity_id: "2026-11-16" }]);
+    expect(await isClaimed(s.client, "analytics_weekly", "2026-11-16")).toBe(true);
+    expect(s.from).toHaveBeenCalledWith("notifications_sent");
+    expect(s.eq1).toHaveBeenCalledWith("kind", "analytics_weekly");
+    expect(s.eq2).toHaveBeenCalledWith("entity_id", "2026-11-16");
+  });
+
+  it("is false when it doesn't", async () => {
+    expect(await isClaimed(stubRead([]).client, "analytics_weekly", "2026-11-16")).toBe(false);
+  });
+
+  it("throws on a database error rather than guessing", async () => {
+    await expect(isClaimed(stubRead([], { message: "db down" }).client, "analytics_weekly", "x")).rejects.toThrow(/db down/);
   });
 });
