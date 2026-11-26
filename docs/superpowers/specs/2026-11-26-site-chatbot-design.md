@@ -91,7 +91,7 @@ Migration `0010_site_chat.sql`. `0009` is taken by the unmerged `feat/pricebook-
 - `chat_conversations(id uuid pk, site text, started_at, last_message_at, message_count int)`
 - `chat_messages(id bigserial pk, conversation_id fk, role text check in ('user','assistant'), text text, emergency bool, created_at)`
 - `chat_rate_limits(key text, window_start timestamptz, count int, primary key(key, window_start))`
-- RLS on, with no public grants, matching migration 0008's rules. Only the service role writes to these tables.
+- RLS on, with no public grants, matching the rules in migration 0011 (enable_rls). Only the service role writes to these tables.
 - Retention: a step in the existing cron sync deletes conversations older than 90 days, plus rate-limit rows older than 2 days.
 
 The IP address is never stored. It is hashed with a server secret (`CHAT_IP_SALT`) and only used as a rate-limit key.
