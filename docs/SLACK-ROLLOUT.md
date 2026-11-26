@@ -292,7 +292,7 @@ In the same Slack app: **Slash Commands → Create New Command**.
 - **Command:** `/trinity`
 - **Request URL:** `https://<your-vercel-domain>/api/slack/command`
 - **Short description:** `Schedule and money, on demand`
-- **Usage hint:** `today | tomorrow | week | next week | thursday | money | declined`
+- **Usage hint:** `today | tomorrow | week | next week | thursday | money | declined | traffic preview`
 
 Reinstall the app to the workspace if Slack asks.
 
@@ -590,3 +590,156 @@ Set `SLACK_FIELDY_ENABLED` and `MCP_TASKS_ENABLED` to anything but `true` and
 redeploy. Nothing in Fieldy is deleted by this feature, ever. Checklist
 messages already posted stay in the channel; taps on them do nothing while
 `SLACK_FIELDY_ENABLED` is off.
+
+---
+
+## Website traffic — Monday post, `/trinity traffic preview` and ChatGPT
+
+Every Monday morning the bot posts last week's website numbers (Mon–Sun,
+Eastern) to a channel of its own, from Google Analytics 4: visitors and visits
+on each site with the change from the week before, the top 3 places visitors
+came from, and the calls, booking clicks, form requests and email clicks each
+site brought in. Totals across all sites come first, then one short section
+per site, busiest first. A site Google can't read shows as one line saying why,
+and the rest still post. For example, built from the test fixtures:
+
+> **Website traffic: Nov 16–22**
+> **All sites: 760 visitors** (up 4%) · 961 visits
+> 📞 Calls from the site: **13** (same as the week before)
+> 📅 Booking clicks: **4** (up 33%)
+> 📝 Form requests: **2** (none the week before)
+> ✉️ Email clicks: **1** (none the week before)
+> ———
+> **Trinity Plumbing**
+> 620 visitors (up 8%) · 790 visits
+> From: Google search 410 · Typed in or bookmarked 220 · Maps 80
+> Calls from the site 9 · Booking clicks 3 · Form requests 2 · Email clicks 1
+>
+> **Albany Rooter**
+> 140 visitors (down 13%) · 171 visits
+> From: Google Ads 90 · Google search 60 · Typed in or bookmarked 21
+> Calls from the site 4 · Booking clicks 1 · Form requests 0 · Email clicks 0
+>
+> **Troy Water Heaters**
+> _Couldn't get this site's numbers from Google: no access. In GA4 Admin, add the service account as a Viewer on this property._
+>
+> Mon–Sun, Eastern time. Changes compare with Nov 9–15. A person who visits two sites counts once on each. 1 site couldn't be read. From Google Analytics.
+
+What the words mean, against GA's own names: **visitors** are GA4 *active
+users* (what GA's home page calls Users), **visits** are *sessions*, the
+**places visitors came from** are GA's *default channel group* (Organic Search
+shows as "Google search", Direct as "Typed in or bookmarked", Paid Search as
+"Google Ads", Organic Maps as "Maps", Referral as "Other websites"), and the four
+counts are the sites' `phone_click`, `booking_click`, `generate_lead` (form
+requests) and `email_click` events. The all-sites total adds the sites together,
+so someone who visited two sites counts on each.
+
+**When it posts:** the first `/api/cron/sync` run on Monday between 9am and noon
+Eastern, once (`analytics_weekly` in `notifications_sent`, keyed by the reported
+week's Monday, e.g. `2026-11-16`). That's three hours later than the other
+Monday posts to give Google longer to finish processing Sunday. No new Vercel
+cron and no migration: `notifications_sent` takes any `kind`. Each run in the
+window first checks the ledger and skips Google once the week is posted. If
+Google can't be reached at all (no token, or every site fails) nothing is
+claimed or posted and the next 15-minute run tries again; if some sites fail,
+the post goes out with those sites marked. Nothing from Google is stored.
+
+**Preview any time:** `/trinity traffic preview` shows the post for the last full
+week to the person who typed it only. It works as soon as the two GA variables
+are set, before the weekly post is switched on. No post, no claim, no writes.
+
+**ChatGPT:** the **Trinity Jobs** connector gains a read-only `get_site_traffic`
+tool ("how did the websites do last week?", "Albany Rooter traffic 3 weeks
+ago"). It takes `weeks_ago` (0 is the last full week, up to 12) and an optional
+`site` (any part of the name) and returns the same numbers as the post. Until
+the GA variables are set it answers that analytics isn't set up yet. It's
+behind `MCP_JOBS_ENABLED` like the connector's other tools, and needs nothing
+else switched on.
+
+### Go-live (Ryan)
+
+Nothing here costs money: the Google Analytics Data API is free at this volume
+(three small reports per site per week, plus whatever ChatGPT asks).
+
+1. **Create a Google Cloud project.** console.cloud.google.com → project picker
+   → **New project**, e.g. `trinity-analytics`. Use the Google account that
+   manages Trinity's GA4 properties.
+2. **Enable the Google Analytics Data API.** In that project: **APIs & Services
+   → Library**, search "Google Analytics Data API", **Enable**. (Not the
+   "Google Analytics API" or the Admin API.)
+3. **Create a service account and a JSON key.** **IAM & Admin → Service
+   Accounts → Create service account**, e.g. `ga-reader`. Skip the optional
+   project roles; it needs none. Open it → **Keys → Add key → Create new key →
+   JSON**. A `.json` file downloads. Treat it as a password: don't email it or
+   put it in Slack, and delete the file once it's in Vercel. Copy the
+   service account's email (`ga-reader@<project>.iam.gserviceaccount.com`).
+4. **In GA4, add the service account as a Viewer on each property.**
+   analytics.google.com → **Admin** (gear) → pick the property → **Property
+   access management** → **+** → **Add users** → paste the service account
+   email → role **Viewer** → untick "Notify new users" → **Add**. Repeat for
+   every site's property. (Adding it once at the account level covers every
+   property under that account.)
+5. **Find each property ID.** **Admin → Property details** (or Property
+   settings): the **Property ID** is a number like `123456789`. It is *not* the
+   `G-XXXXXXX` Measurement ID the sites' tags use. While you're there, check
+   the **Reporting time zone** is Eastern; the weeks are counted in it.
+6. **Set the Vercel variables** (Production):
+   ```bash
+   vercel env add GA_SERVICE_ACCOUNT_JSON     # paste the whole key file (or base64 of it)
+   vercel env add GA_PROPERTIES               # Trinity Plumbing=123456789,Albany Rooter=987654321,...
+   vercel env add SLACK_ANALYTICS_CHANNEL_ID  # the C… id of the traffic channel
+   ```
+   For the channel: create it (e.g. #website-traffic), add Dave, type
+   `/invite @<app name>` in it, then copy the ID from the channel name → About
+   (it starts with `C`). It uses the existing `SLACK_BOT_TOKEN`; no new scopes,
+   `chat:write` covers it. If pasting multi-line JSON is awkward, base64 the file
+   (`base64 -w0 key.json` on Linux, `[Convert]::ToBase64String([IO.File]::ReadAllBytes("key.json"))`
+   in PowerShell) and paste that. Site names can't contain commas; they're how
+   the sites appear in Slack and ChatGPT.
+7. **Redeploy** so the variables take effect.
+8. **Check:** `/trinity traffic preview`. Each site should show numbers that
+   match GA4 → Reports → Acquisition → Traffic acquisition for the same dates
+   (Users there is "visitors" here). A site that says "no access" needs step 4;
+   "property not found" needs its ID checked in step 5. "Website traffic isn't
+   set up yet" names the variable that's missing or malformed.
+9. **Switch on the Monday post** and redeploy:
+   ```bash
+   vercel env add ANALYTICS_WEEKLY_ENABLED    # value: true (exactly this string)
+   ```
+   It also needs `SLACK_ALERTS_ENABLED=true`, like the other scheduled posts
+   (already on). The first post goes out the next Monday between 9am and noon
+   Eastern.
+10. **ChatGPT (workspace admin):** Plugins → **Trinity Jobs** → **Refresh**.
+    ChatGPT doesn't pick up the new `get_site_traffic` tool until someone does.
+    Then ask "how did the websites do last week?" and compare with the preview.
+
+A site added later: give the service account Viewer on its property (step 4),
+add `Name=propertyId` to `GA_PROPERTIES`, redeploy.
+
+### Kill switches
+
+- `ANALYTICS_WEEKLY_ENABLED` covers the Monday post only. Off, the cron makes
+  no Google call and posts nothing.
+- `/trinity traffic preview` and `get_site_traffic` need only
+  `GA_SERVICE_ACCOUNT_JSON` and `GA_PROPERTIES` (plus `SLACK_COMMANDS_ENABLED`
+  and `MCP_JOBS_ENABLED`, which already gate those surfaces). Remove either GA
+  variable and both say analytics isn't set up, without calling Google.
+
+### If something's off
+
+| What you see | Cause |
+|---|---|
+| "Website traffic isn't set up yet: …" | The named variable is missing or malformed, or not redeployed |
+| "Couldn't sign in to Google Analytics: invalid_grant" | The key was deleted in Google Cloud, or the JSON is from another account. Make a new key (step 3) |
+| A site says "no access" | The service account isn't a Viewer on that property (step 4) |
+| A site says "property not found" | Wrong number in `GA_PROPERTIES`, or a `G-` Measurement ID (step 5) |
+| No Monday post | `ANALYTICS_WEEKLY_ENABLED` not exactly `true`, `SLACK_ALERTS_ENABLED` off, `SLACK_ANALYTICS_CHANNEL_ID` unset, bot not in the channel, or Google unreachable all morning. Logs show `[analytics] weekly post skipped: <reason>` or `[cron] website traffic pass failed` |
+| Numbers a little lower than GA shows later | GA can take a day or two to finish processing; Monday's post reads Sunday early |
+| ChatGPT doesn't know about traffic | Click Refresh on the Trinity Jobs plugin (step 10) |
+
+### Rollback
+
+Set `ANALYTICS_WEEKLY_ENABLED` to anything but `true` and redeploy to stop the
+post. Remove `GA_SERVICE_ACCOUNT_JSON` to stop every Google call, and disable or
+delete the key in Google Cloud to revoke access entirely. Posts already in the
+channel stay.
