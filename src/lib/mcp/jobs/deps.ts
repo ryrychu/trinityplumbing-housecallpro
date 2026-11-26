@@ -6,6 +6,7 @@ import { listOpenEstimates, listUnpaidInvoices } from "@/lib/mobile/money";
 import { mirrorSyncedAt } from "@/lib/mobile/mirrorFreshness";
 import { getDashboardSnapshot, getScheduleDays } from "@/lib/dashboard/queries";
 import { findCustomerCandidates, findJobCandidates } from "./searchQueries";
+import { lookupTraffic } from "@/lib/analytics/weekly";
 import type { JobsDeps } from "./server";
 
 export function liveJobsDeps(): JobsDeps {
@@ -19,6 +20,7 @@ export function liveJobsDeps(): JobsDeps {
     listUnpaidInvoices: () => listUnpaidInvoices(),
     getRevenue: () => getDashboardSnapshot(),
     mirrorSyncedAt,
+    getSiteTraffic: (opts) => lookupTraffic(new Date(), opts),
     now: () => new Date(),
   };
 }

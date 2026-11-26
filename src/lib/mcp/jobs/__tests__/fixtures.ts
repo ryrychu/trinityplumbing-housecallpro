@@ -150,6 +150,7 @@ export function stubDeps(over: Partial<JobsDeps> = {}) {
       freshnessCalls.push(resources);
       return SYNCED_AT;
     },
+    getSiteTraffic: async () => ({ status: "not_configured", missing: "GA_PROPERTIES is not set" }),
     now: () => NOW,
     ...over,
   };
