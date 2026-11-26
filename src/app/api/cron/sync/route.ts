@@ -10,6 +10,7 @@ import { notifyPaidInvoices, notifyApprovedEstimates } from "@/lib/notifications
 import { claim } from "@/lib/notifications/dedupe";
 import { runDeclinedMonthlyReportPass, runDeclinedReportPass } from "@/lib/declined/declined";
 import { runFieldyChecklistPasses } from "@/lib/tasks/cron";
+import { deleteExpiredChats } from "@/lib/chat/store";
 import {
   isDailyDigestDue,
   isWeeklyLookaheadDue,
@@ -351,6 +352,17 @@ export async function GET(req: Request) {
   }));
   if (cursorUpserts.length > 0) {
     await supabase.from("sync_cursors").upsert(cursorUpserts);
+  }
+
+  // Website chat retention (migration 0010): conversations 90 days after they
+  // start, with their messages, and rate-limit rows after 2 days. Runs on
+  // every run, whatever CHAT_ENABLED or the Slack switch say, so switching the
+  // chat off never leaves old chats behind. Its own try/catch, like every
+  // other pass: a chat-table problem must never fail the sync.
+  try {
+    await deleteExpiredChats(supabase, new Date());
+  } catch (err) {
+    console.error("[cron] chat retention pass failed:", err instanceof Error ? err.message : String(err));
   }
 
   // A manual digest trigger, for the hours the morning window below

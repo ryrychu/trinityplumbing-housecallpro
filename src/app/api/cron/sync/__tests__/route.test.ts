@@ -97,6 +97,13 @@ vi.mock("@/lib/tasks/cron", () => ({
   runFieldyChecklistPasses: runFieldyChecklistPassesMock,
 }));
 
+const { deleteExpiredChatsMock } = vi.hoisted(() => ({
+  deleteExpiredChatsMock: vi.fn().mockResolvedValue(undefined),
+}));
+vi.mock("@/lib/chat/store", () => ({
+  deleteExpiredChats: deleteExpiredChatsMock,
+}));
+
 import { GET } from "../route";
 
 function authorizedRequest(): Request {
@@ -690,6 +697,35 @@ describe("GET /api/cron/sync", () => {
       const res = await GET(authorizedRequest());
 
       expect(await res.json()).not.toHaveProperty("forcedDigest");
+    });
+  });
+
+  // Website chat retention (migration 0010). Not a Slack feature, so it runs
+  // whether or not alerts are on, and its own try/catch keeps a missing chat
+  // table from failing the sync the dashboard depends on.
+  describe("website chat retention", () => {
+    it("deletes expired chats on every run, even with Slack alerts off", async () => {
+      slackAlertsEnabledMock.mockReturnValue(false);
+      vi.setSystemTime(new Date("2026-11-26T15:00:00Z"));
+
+      const res = await GET(authorizedRequest());
+
+      expect(res.status).toBe(200);
+      expect(deleteExpiredChatsMock).toHaveBeenCalledWith(expect.anything(), new Date("2026-11-26T15:00:00Z"));
+    });
+
+    it("still syncs when the retention pass throws", async () => {
+      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      deleteExpiredChatsMock.mockRejectedValueOnce(new Error("[chat] retention failed for chat_conversations: relation does not exist"));
+
+      const res = await GET(authorizedRequest());
+
+      expect(res.status).toBe(200);
+      expect(errorSpy).toHaveBeenCalledWith(
+        "[cron] chat retention pass failed:",
+        "[chat] retention failed for chat_conversations: relation does not exist"
+      );
+      errorSpy.mockRestore();
     });
   });
 });
