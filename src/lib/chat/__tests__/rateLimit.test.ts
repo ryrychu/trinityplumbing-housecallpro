@@ -13,6 +13,13 @@ function fakeDb(counts: number[], error: { message: string } | null = null) {
 const NOW = new Date("2026-11-26T15:04:00.000Z");
 const INPUT = { site: "trinity", ipHash: "abc123", limits: DEFAULT_LIMITS, now: NOW };
 
+describe("checkRateLimit with a malformed RPC result", () => {
+  it.each([["null", null], ["undefined", undefined]])("rejects when the count is %s", async (_l, data) => {
+    const db = { rpc: vi.fn(async () => ({ data, error: null })) } as unknown as SupabaseClient;
+    await expect(checkRateLimit(db, INPUT)).rejects.toThrow("no count returned");
+  });
+});
+
 describe("checkRateLimit", () => {
   it("lets a message through under both limits and counts it in both windows", async () => {
     const { db, rpc } = fakeDb([1, 1]);

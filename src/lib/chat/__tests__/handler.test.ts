@@ -188,6 +188,20 @@ describe("handleChat: input", () => {
     expect(deps.rateLimit).not.toHaveBeenCalled();
   });
 
+  it("refuses an over-64 KB body by its content-length header, before any rate-limit call", async () => {
+    const { deps } = makeDeps();
+    const req = new Request("https://ops.trinity.plumbing/api/chat", {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: ORIGIN, "content-length": String(64 * 1024 + 1) },
+      body: JSON.stringify(ASK),
+    });
+    const res = await handleChat(req, deps);
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: "bad_request" });
+    expect(res.headers.get("access-control-allow-origin")).toBe(ORIGIN);
+    expect(deps.rateLimit).not.toHaveBeenCalled();
+  });
+
   it("accepts 10 messages of 1,000 characters", async () => {
     const { deps } = makeDeps();
     const messages = Array.from({ length: 10 }, (_, i) => ({ role: i % 2 === 1 ? "user" : "assistant", text: "x".repeat(1000) }));
@@ -281,5 +295,6 @@ describe("handlePreflight", () => {
   it("refuses everything when CHAT_SITES is broken", () => {
     const { deps } = makeDeps({ env: { ...ENV, CHAT_SITES: "nope" } });
     expect(handlePreflight(preflight(ORIGIN), deps).status).toBe(403);
+    expect(console.warn).toHaveBeenCalledWith(expect.stringContaining("[chat] off: "));
   });
 });

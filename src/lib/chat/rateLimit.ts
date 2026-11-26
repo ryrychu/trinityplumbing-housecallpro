@@ -28,7 +28,9 @@ export function windowStart(now: Date, windowMs: number): string {
 async function hit(db: SupabaseClient, key: string, start: string): Promise<number> {
   const { data, error } = await db.rpc("chat_rate_limit_hit", { p_key: key, p_window_start: start });
   if (error) throw new Error(`[chat] rate limit check failed: ${error.message}`);
-  return Number(data);
+  const count = data === null || data === undefined ? Number.NaN : Number(data);
+  if (!Number.isInteger(count) || count < 1) throw new Error("[chat] rate limit check failed: no count returned");
+  return count;
 }
 
 /** Counts this message and says whether it may go to the model. Throws on a database error. */

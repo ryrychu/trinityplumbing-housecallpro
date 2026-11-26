@@ -102,8 +102,8 @@ unset `NEXT_PUBLIC_CHAT_ENDPOINT` on the site and redeploy it.
 | What you see | Cause |
 |---|---|
 | No bubble on the site | `NEXT_PUBLIC_CHAT_ENDPOINT` or `NEXT_PUBLIC_CHAT_SITE` unset, or set without a redeploy; or that browser tab already saw "off" this session |
-| "The chat is off right now…" | `CHAT_ENABLED` isn't exactly `true`; or `CHAT_SITES`/`CHAT_IP_SALT` missing or invalid (logs: `[chat] off: <setting>`) |
-| "Sorry, I can't answer right now. Call us at (518) 348-3032…" on every message, CORS error in the browser console | The page's origin isn't in `CHAT_SITES` exactly (bare vs `www`, `http`, a trailing slash) |
+| "The chat is off right now…" | `CHAT_ENABLED` isn't exactly `true` |
+| "Sorry, I can't answer right now. Call us at (518) 348-3032…" on every message, CORS error in the browser console | The page's origin isn't in `CHAT_SITES` exactly (bare vs `www`, `http`, a trailing slash); or `CHAT_SITES`/`CHAT_IP_SALT` is missing or invalid, so the preflight gets 403 (logs: `[chat] off: <setting>`) |
 | "Sorry, I can't answer right now. Call us at (518) 348-3032…" from the server | OpenAI failed: logs show `[chat] answer skipped: <code>` |
 | "Sorry, I can't answer right now. Call us or send a request…" (no number) | The knowledge file never loaded (`[chat] knowledge for trinity not loaded: <code>`), or the counters failed (`[chat] rate limit check failed:`, usually migration 0010 not run) |
 | `[chat] answer skipped: incomplete_max_output_tokens` | Replies hit the output cap; set `CHAT_MAX_OUTPUT_TOKENS=500` |

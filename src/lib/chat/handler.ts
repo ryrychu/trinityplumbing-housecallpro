@@ -119,6 +119,7 @@ export async function handleChat(req: Request, deps: ChatDeps): Promise<Response
   if (!allowed) return json({ error: "forbidden" }, 403, null);
 
   // 3. Input, then the origin must belong to the site the body names.
+  if (Number(req.headers.get("content-length")) > MAX_BODY_CHARS) return json({ error: "bad_request" }, 400, allowed);
   const input = parseChatInput(await req.text().catch(() => ""));
   if (!input) return json({ error: "bad_request" }, 400, allowed);
   const site = siteFor(config.sites, input.site, allowed);
@@ -173,5 +174,6 @@ export async function handleChat(req: Request, deps: ChatDeps): Promise<Response
 /** OPTIONS: answered for listed origins even while CHAT_ENABLED is off, so the bubble can read the 503. */
 export function handlePreflight(req: Request, deps: Pick<ChatDeps, "env">): Response {
   const config = chatConfig(deps.env);
+  if (!config.ok) console.warn(`[chat] off: ${config.missing}`);
   return preflightResponse(config.ok ? config.sites : [], req.headers.get("origin"));
 }
