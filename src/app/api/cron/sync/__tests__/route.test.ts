@@ -97,6 +97,13 @@ vi.mock("@/lib/tasks/cron", () => ({
   runFieldyChecklistPasses: runFieldyChecklistPassesMock,
 }));
 
+const { runAnalyticsWeeklyPassMock } = vi.hoisted(() => ({
+  runAnalyticsWeeklyPassMock: vi.fn().mockResolvedValue(false),
+}));
+vi.mock("@/lib/analytics/weekly", () => ({
+  runAnalyticsWeeklyPass: runAnalyticsWeeklyPassMock,
+}));
+
 import { GET } from "../route";
 
 function authorizedRequest(): Request {
@@ -591,6 +598,28 @@ describe("GET /api/cron/sync", () => {
       expect(res.status).toBe(200);
       expect(runFieldyChecklistPassesMock).toHaveBeenCalledWith(expect.anything(), new Date("2026-07-29T10:00:00Z"));
       expect(postSlackMock.mock.calls.some(([, text]) => String(text).includes("Today —"))).toBe(true);
+    });
+
+    // Same contract: the pass gates itself (ANALYTICS_WEEKLY_ENABLED, Monday
+    // 9-noon Eastern, GA and Slack settings, claim); the route calls it and survives it.
+    it("runs the website traffic pass and still posts the digest when it throws", async () => {
+      vi.setSystemTime(new Date("2026-11-23T14:00:00Z")); // Mon 09:00 EST
+      runAnalyticsWeeklyPassMock.mockRejectedValueOnce(new Error("[analytics] no site could be read"));
+
+      const res = await GET(authorizedRequest());
+
+      expect(res.status).toBe(200);
+      expect(runAnalyticsWeeklyPassMock).toHaveBeenCalledWith(expect.anything(), new Date("2026-11-23T14:00:00Z"));
+      expect(postSlackMock.mock.calls.some(([, text]) => String(text).includes("Today —"))).toBe(true);
+    });
+
+    it("does not run the website traffic pass when Slack alerts are disabled", async () => {
+      slackAlertsEnabledMock.mockReturnValue(false);
+      vi.setSystemTime(new Date("2026-11-23T14:00:00Z"));
+
+      await GET(authorizedRequest());
+
+      expect(runAnalyticsWeeklyPassMock).not.toHaveBeenCalled();
     });
 
     it("does not run the Fieldy checklist passes when Slack alerts are disabled", async () => {

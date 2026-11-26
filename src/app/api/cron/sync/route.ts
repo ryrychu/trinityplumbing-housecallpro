@@ -10,6 +10,7 @@ import { notifyPaidInvoices, notifyApprovedEstimates } from "@/lib/notifications
 import { claim } from "@/lib/notifications/dedupe";
 import { runDeclinedMonthlyReportPass, runDeclinedReportPass } from "@/lib/declined/declined";
 import { runFieldyChecklistPasses } from "@/lib/tasks/cron";
+import { runAnalyticsWeeklyPass } from "@/lib/analytics/weekly";
 import {
   isDailyDigestDue,
   isWeeklyLookaheadDue,
@@ -423,6 +424,14 @@ export async function GET(req: Request) {
       await runFieldyChecklistPasses(supabase, now);
     } catch (err) {
       console.error("[cron] fieldy checklist passes failed:", err instanceof Error ? err.message : String(err));
+    }
+
+    // Last week's website traffic, Monday 9am to noon. Its own switch
+    // (ANALYTICS_WEEKLY_ENABLED), settings check and claim, checked inside.
+    try {
+      await runAnalyticsWeeklyPass(supabase, now);
+    } catch (err) {
+      console.error("[cron] website traffic pass failed:", err instanceof Error ? err.message : String(err));
     }
 
     // Split from the daily digest below into its own try/catch: sharing one
