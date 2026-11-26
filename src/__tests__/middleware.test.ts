@@ -159,6 +159,15 @@ describe("middleware", () => {
       expect(gatesConnector).toBe(false);
       expect(config.matcher).toContain("/app/:path*");
     });
+
+    // The website chat (src/app/api/chat) is called from visitors' browsers on
+    // trinity.plumbing, who never have an ops session, so a gated route would
+    // 401 every message. It guards itself with an exact origin check, input
+    // limits and rate limits (src/lib/chat/handler.ts).
+    it("leaves the website chat route outside the gate", () => {
+      const gatesChat = config.matcher.some((p) => p.startsWith("/api/chat") || p === "/api/:path*");
+      expect(gatesChat).toBe(false);
+    });
   });
 
   describe("dashboard and admin, signed out", () => {
