@@ -14,12 +14,15 @@ import { listOpenEstimates, listUnpaidInvoices } from "@/lib/mobile/money";
 import { parseDeclined, type DeclinedCommand } from "@/lib/declined/parse";
 import { renderDeclined } from "@/lib/declined/declined";
 import { parseFieldy, renderFieldy, type FieldyCommand } from "@/lib/fieldy/fieldy";
+import { parseTraffic, renderTraffic, type TrafficCommand } from "@/lib/analytics/weekly";
+import type { SlackReply } from "./respond";
 
 export type Command =
   | { kind: "today" | "tomorrow" | "week" | "nextWeek" | "money" | "help" }
   | { kind: "weekday"; dow: number }
   | DeclinedCommand
-  | FieldyCommand;
+  | FieldyCommand
+  | TrafficCommand;
 
 // 0 = Sunday, matching localParts().dow in src/lib/dashboard/week.ts.
 const WEEKDAYS: Record<string, number> = {
@@ -41,6 +44,9 @@ export function parseCommand(text: string, userId: string | null = null): Comman
 
   const fieldy = t.match(/^fieldy(?: (.*))?$/);
   if (fieldy) return parseFieldy(fieldy[1] ?? "");
+
+  const traffic = t.match(/^traffic(?: (.*))?$/);
+  if (traffic) return parseTraffic(traffic[1] ?? "");
 
   if (t === "" || t === "help") return { kind: "help" };
   if (t === "today") return { kind: "today" };
@@ -87,6 +93,8 @@ export function resolveWindow(
     case "declinedUsage":
     case "fieldyPreview":
     case "fieldyUsage":
+    case "trafficPreview":
+    case "trafficUsage":
       return null;
 
     case "help":
@@ -136,9 +144,11 @@ export const HELP_TEXT = [
   "`/trinity money` — open estimates and unpaid invoices",
   "`/trinity declined` — log a call we turned down (too busy or too far)",
   "`/trinity fieldy preview` — today's Fieldy checklist, shown only to you",
+  "`/trinity traffic preview` — last week's website traffic post, shown only to you",
 ].join("\n");
 
-export async function renderCommand(cmd: Command, now: Date): Promise<string> {
+// Most answers are mrkdwn text; the traffic preview is Block Kit.
+export async function renderCommand(cmd: Command, now: Date): Promise<string | SlackReply> {
   if (cmd.kind === "help") return HELP_TEXT;
 
   if (cmd.kind === "money") {
@@ -161,6 +171,8 @@ export async function renderCommand(cmd: Command, now: Date): Promise<string> {
   }
 
   if (cmd.kind === "fieldyPreview" || cmd.kind === "fieldyUsage") return renderFieldy(cmd, now);
+
+  if (cmd.kind === "trafficPreview" || cmd.kind === "trafficUsage") return renderTraffic(cmd, now);
 
   // today and week go through renderDigest so a command and the 6am post are
   // the same string by construction, not by two implementations agreeing today

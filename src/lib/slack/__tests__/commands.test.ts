@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseCommand, resolveWindow } from "../commands";
+import { HELP_TEXT, parseCommand, resolveWindow } from "../commands";
 import { localParts } from "@/lib/dashboard/week";
 
 describe("parseCommand", () => {
@@ -137,5 +137,26 @@ describe("parseCommand: fieldy", () => {
   it("has no date window", () => {
     expect(resolveWindow({ kind: "fieldyPreview" }, new Date())).toBeNull();
     expect(resolveWindow({ kind: "fieldyUsage" }, new Date())).toBeNull();
+  });
+});
+
+describe("parseCommand: traffic", () => {
+  it.each([
+    ["traffic preview", { kind: "trafficPreview" }],
+    ["  Traffic   PREVIEW ", { kind: "trafficPreview" }],
+    ["traffic", { kind: "trafficUsage" }],
+    ["traffic last week", { kind: "trafficUsage" }],
+    ["trafficpreview", { kind: "help" }],
+  ])("parses %j", (text, cmd) => {
+    expect(parseCommand(text)).toEqual(cmd);
+  });
+
+  it("has no date window", () => {
+    expect(resolveWindow({ kind: "trafficPreview" }, new Date())).toBeNull();
+    expect(resolveWindow({ kind: "trafficUsage" }, new Date())).toBeNull();
+  });
+
+  it("is listed in the help", () => {
+    expect(HELP_TEXT).toContain("`/trinity traffic preview` — last week's website traffic post, shown only to you");
   });
 });

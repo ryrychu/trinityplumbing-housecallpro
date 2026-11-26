@@ -278,7 +278,7 @@ describe("get_money_summary", () => {
     expect(text(res)).not.toMatch(/Pat Example/);
   });
 
-  it("registers exactly the six tools", async () => {
+  it("registers exactly the seven tools", async () => {
     const client = await connect(stubDeps().deps);
     const { tools } = await client.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual([
@@ -287,6 +287,7 @@ describe("get_money_summary", () => {
       "get_job",
       "get_money_summary",
       "get_schedule",
+      "get_site_traffic",
       "search_jobs",
     ]);
   });
@@ -539,5 +540,9 @@ describe("server instructions", () => {
     expect(client.getInstructions()).toBe(SERVER_INSTRUCTIONS);
     expect(SERVER_INSTRUCTIONS).toContain("unmatchedTerms");
     expect(SERVER_INSTRUCTIONS).toContain("search_jobs");
+  });
+
+  it("points website traffic questions at get_site_traffic", () => {
+    expect(SERVER_INSTRUCTIONS).toContain("get_site_traffic");
   });
 });

@@ -52,7 +52,7 @@ describe("/api/mcp/jobs with a valid token", () => {
       createServer: () => createJobsMcpServer(stubDeps().deps),
     });
 
-  it("initializes as trinity-jobs with instructions and lists the six tools", async () => {
+  it("initializes as trinity-jobs with instructions and lists the seven tools", async () => {
     const init = await serve({
       jsonrpc: "2.0",
       id: 1,
@@ -71,6 +71,7 @@ describe("/api/mcp/jobs with a valid token", () => {
       "get_job",
       "get_money_summary",
       "get_schedule",
+      "get_site_traffic",
       "search_jobs",
     ]);
   });

@@ -31,6 +31,7 @@ import {
   type Match,
 } from "./search";
 import type { Candidates } from "./searchQueries";
+import type { TrafficLookup } from "@/lib/analytics/weekly";
 
 export interface ScheduleDay {
   dateKey: string;
@@ -50,6 +51,7 @@ export interface JobsDeps {
   listUnpaidInvoices(): Promise<InvoiceHit[]>;
   getRevenue(): Promise<Revenue>;
   mirrorSyncedAt(resources: MirrorResource[]): Promise<string | null>;
+  getSiteTraffic(opts: { weeksAgo: number; site?: string }): Promise<TrafficLookup>;
   now(): Date;
 }
 
@@ -64,7 +66,10 @@ const SOURCE_NOTE =
 // anything; this, the tool descriptions and each result's note are how the
 // connector gets it to check partial matches before answering.
 export const SERVER_INSTRUCTIONS =
-  "Trinity Jobs searches Trinity Plumbing's copy of HouseCall Pro. People ask in plain language by business name or street (\"the jobs at Planet Fitness on Aviation Rd\"), and customers are often filed under an owner or company name instead. Use search_jobs for questions about work at a place, and find_customer for questions about a customer. When a result has unmatchedTerms, tell the user which words didn't match, show what did match, and ask them to confirm before answering. When nothing matches, ask for a street, town, customer name or rough date. Never invent jobs or customers that aren't in a result.";
+  "Trinity Jobs searches Trinity Plumbing's copy of HouseCall Pro. People ask in plain language by business name or street (\"the jobs at Planet Fitness on Aviation Rd\"), and customers are often filed under an owner or company name instead. Use search_jobs for questions about work at a place, and find_customer for questions about a customer. When a result has unmatchedTerms, tell the user which words didn't match, show what did match, and ask them to confirm before answering. When nothing matches, ask for a street, town, customer name or rough date. Never invent jobs or customers that aren't in a result. For website visitors, where they came from, and calls or bookings from Trinity's marketing sites, use get_site_traffic.";
+
+const TRAFFIC_NOTE =
+  "Weeks run Mon–Sun, Eastern time. visitors are Google Analytics active users and visits are sessions, per site. changePct compares with previousWeek and is null when previousWeek was zero. topSources are GA's default channel groups (label is the plain-English name). phoneClicks, bookingClicks, formRequests and emailClicks count the sites' phone_click, booking_click, generate_lead and email_click events. totals add the sites that loaded, so someone who visited two sites counts on each. A site with status unavailable couldn't be read from Google; say so instead of guessing its numbers.";
 
 type ToolResult = { isError?: boolean; content: { type: "text"; text: string }[] };
 
@@ -458,6 +463,60 @@ export function createJobsMcpServer(deps: JobsDeps): McpServer {
         });
       } catch (err) {
         return fail("search_jobs", "Couldn't search jobs just now. Try again in a minute.", err);
+      }
+    }
+  );
+
+  server.registerTool(
+    "get_site_traffic",
+    {
+      title: "Website traffic",
+      description:
+        "Weekly traffic for Trinity's marketing websites, from Google Analytics: visitors and visits on each site with the change from the week before, the top 3 places visitors came from, and phone, booking, form and email clicks, with totals across all sites. Sites are listed busiest first. Weeks run Mon–Sun, Eastern. Read-only; not from HouseCall Pro.",
+      inputSchema: {
+        weeks_ago: z
+          .number()
+          .int()
+          .min(0)
+          .max(12)
+          .optional()
+          .describe("0 (the default) is the last full Mon–Sun week, 1 the week before that, up to 12."),
+        site: z
+          .string()
+          .trim()
+          .min(1)
+          .max(100)
+          .optional()
+          .describe("Only sites whose name contains this text, e.g. 'Albany Rooter' or 'rooter'. Leave out for every site."),
+      },
+      annotations: READ_ONLY,
+    },
+    async ({ weeks_ago, site }) => {
+      try {
+        const result = await deps.getSiteTraffic({ weeksAgo: weeks_ago ?? 0, site });
+        let body: Record<string, unknown>;
+        if (result.status === "not_configured") {
+          body = {
+            configured: false,
+            message: `Website analytics isn't set up yet, so there are no traffic numbers to show. Tell the user it's waiting on Google Analytics access being added to the ops app (${result.missing}).`,
+          };
+        } else if (result.status === "no_match") {
+          body = {
+            configured: true,
+            site: result.site,
+            sites: result.sites,
+            note: `No site name contains "${result.site}". Ask the user which of these sites they mean.`,
+          };
+        } else {
+          body = { configured: true, weeksAgo: weeks_ago ?? 0, ...result.report, note: TRAFFIC_NOTE };
+        }
+        return { content: [{ type: "text" as const, text: JSON.stringify(body, null, 2) }] };
+      } catch (err) {
+        return fail(
+          "get_site_traffic",
+          "Couldn't get the website numbers from Google Analytics just now. Try again in a few minutes.",
+          err
+        );
       }
     }
   );

@@ -67,3 +67,13 @@ export function isFieldyDailyDue(now: Date): boolean {
   const { hour } = localParts(now);
   return hour >= FIELDY_HOUR && hour < FIELDY_CUTOFF_HOUR;
 }
+
+// Website traffic, Monday 9 to noon Eastern: three hours after the other
+// Monday posts, so Google Analytics has had longer to process Sunday. Once a
+// week through claim("analytics_weekly", <reported Monday>).
+const ANALYTICS_HOUR = 9;
+
+export function isAnalyticsWeeklyDue(now: Date): boolean {
+  const { dow, hour } = localParts(now);
+  return dow === MONDAY && hour >= ANALYTICS_HOUR && hour < DIGEST_CUTOFF_HOUR;
+}

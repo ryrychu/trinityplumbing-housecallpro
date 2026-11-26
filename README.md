@@ -246,6 +246,24 @@ own.
 
 Spec for the search: `docs/superpowers/specs/2026-11-18-chatgpt-jobs-search-design.md`.
 
+**Website traffic.** `get_site_traffic` reads Google Analytics 4 for Trinity's
+marketing sites: visitors, visits, top sources and phone/booking/form/email
+clicks per site for a Mon–Sun week (`weeks_ago` 0–12, optional `site`). It
+needs `GA_SERVICE_ACCOUNT_JSON` and `GA_PROPERTIES`; until they're set it
+answers that analytics isn't set up yet. After deploying it, click **Refresh**
+on the plugin as above.
+
+## Website traffic report (`src/lib/analytics`)
+
+A Monday-morning Slack post of last week's website numbers from Google
+Analytics 4, a private `/trinity traffic preview`, and the ChatGPT tool above,
+all built from one report. Google is called with a service account (a JWT
+signed with `node:crypto`, no Google SDK); one site that fails shows as
+unavailable without stopping the rest. Env vars: `GA_SERVICE_ACCOUNT_JSON`,
+`GA_PROPERTIES`, `ANALYTICS_WEEKLY_ENABLED`, `SLACK_ANALYTICS_CHANNEL_ID` (see
+`.env.example`). Setup, from the Google Cloud project to switching it on, is in
+[`docs/SLACK-ROLLOUT.md`](docs/SLACK-ROLLOUT.md) under "Website traffic".
+
 ## Deploy
 
 ```bash

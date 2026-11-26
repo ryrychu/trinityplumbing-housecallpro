@@ -6,7 +6,11 @@
 // answer land where the person typed and needs no bot token or OAuth scopes.
 const TIMEOUT_MS = 10_000;
 
-async function send(responseUrl: string, text: string, replaceOriginal: boolean): Promise<boolean> {
+/** A Block Kit answer; `text` is the fallback Slack shows in notifications. */
+export type SlackReply = { text: string; blocks: unknown[] };
+
+async function send(responseUrl: string, reply: string | SlackReply, replaceOriginal: boolean): Promise<boolean> {
+  const content = typeof reply === "string" ? { text: reply } : { text: reply.text, blocks: reply.blocks };
   try {
     const res = await fetch(responseUrl, {
       method: "POST",
@@ -17,7 +21,7 @@ async function send(responseUrl: string, text: string, replaceOriginal: boolean)
         // to "in_channel" is a deliberate decision, not a default.
         response_type: "ephemeral",
         replace_original: replaceOriginal,
-        text,
+        ...content,
       }),
       signal: AbortSignal.timeout(TIMEOUT_MS),
     });
@@ -40,8 +44,8 @@ async function send(responseUrl: string, text: string, replaceOriginal: boolean)
  * A slash-command answer. replace_original replaces the "Working on it…"
  * acknowledgement rather than stacking a second message under it.
  */
-export async function postToResponseUrl(responseUrl: string, text: string): Promise<boolean> {
-  return send(responseUrl, text, true);
+export async function postToResponseUrl(responseUrl: string, reply: string | SlackReply): Promise<boolean> {
+  return send(responseUrl, reply, true);
 }
 
 /**
