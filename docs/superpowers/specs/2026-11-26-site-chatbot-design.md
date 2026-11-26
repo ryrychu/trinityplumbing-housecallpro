@@ -38,7 +38,7 @@ site (trinity-plumbing-service)                 ops app (trinityplumbing-houseca
 
 ### Ops app units (`src/lib/chat/`)
 
-- `config.ts`: parses `CHAT_ENABLED`, `CHAT_SITES` and the limits. `CHAT_SITES` is a comma-separated list of `key=origin` pairs, e.g. `trinity=https://www.trinity.plumbing`. The knowledge URL is `<origin>/chat-knowledge.json`. Extra origins for a site (e.g. the bare domain, a Vercel preview) are given as `key=origin1|origin2`; the first one is where the knowledge is fetched from.
+- `config.ts`: parses `CHAT_ENABLED`, `CHAT_SITES` and the limits. `CHAT_SITES` is a comma-separated list of `key=origin` pairs, e.g. `trinity=https://trinity.plumbing|https://www.trinity.plumbing`. The knowledge URL is `<origin>/chat-knowledge.json`. Extra origins for a site (e.g. the bare domain, a Vercel preview) are given as `key=origin1|origin2`; the first one is where the knowledge is fetched from.
 - `origin.ts`: matches the request's `Origin` header exactly against the site's origins. No wildcards. Answers CORS preflight only for listed origins.
 - `knowledge.ts`: fetches and validates the site's knowledge file against a schema, and caches it in memory for 1 hour per instance. If the fetch fails, it uses the last good copy. With no good copy at all, the route answers with the fallback message (below).
 - `prompt.ts`: builds the instructions from the knowledge file and the answer rules. Pure function.
