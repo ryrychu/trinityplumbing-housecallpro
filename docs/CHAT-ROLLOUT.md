@@ -36,6 +36,13 @@ Send a request buttons (and the bubble then hides for the rest of their visit).
    - `CHAT_IP_SALT` = a new random value, marked Sensitive:
      `node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"`
    - confirm `OPENAI_API_KEY` is set (the Fieldy checklist already uses it)
+   - **or, to use Groq's free tier instead** (no card on file, so it can't
+     bill; when the free limit runs out the bubble says "call us" until it
+     resets): make an account at console.groq.com, create an API key, and set
+     `CHAT_AI_URL=https://api.groq.com/openai/v1/chat/completions`,
+     `CHAT_AI_KEY=<the key>` (Sensitive) and `CHAT_AI_MODEL=openai/gpt-oss-120b`.
+     Read Groq's current terms first to confirm the free tier may be used on a
+     business website.
    - leave `CHAT_ENABLED` unset
 
    Redeploy. Check (Git Bash):
@@ -66,8 +73,8 @@ Send a request buttons (and the bubble then hides for the rest of their visit).
    Read every answer against its "expect" line. Stop and fix the rules in
    `src/lib/chat/prompt.ts` if any answer quotes an unlisted price, does
    arithmetic, offers a discount, promises a time, or has the wrong emergency
-   flag. "(none …)" with `incomplete_max_output_tokens` above it: set
-   `CHAT_MAX_OUTPUT_TOKENS=500` and run it again.
+   flag. "(none …)" with `finish_length` above it: raise
+   `CHAT_MAX_OUTPUT_TOKENS` (500, or 1200 for gpt-oss) and run it again.
 5. **Switch on.** Vercel (ops) → `CHAT_ENABLED=true` → redeploy. On the live
    site, on a phone and a desktop:
    - "How much is a drain cleaning service call?" → "from $75"
@@ -106,7 +113,9 @@ unset `NEXT_PUBLIC_CHAT_ENDPOINT` on the site and redeploy it.
 | "Sorry, I can't answer right now. Call us at (518) 348-3032…" on every message, CORS error in the browser console | The page's origin isn't in `CHAT_SITES` exactly (bare vs `www`, `http`, a trailing slash); or `CHAT_SITES`/`CHAT_IP_SALT` is missing or invalid, so the preflight gets 403 (logs: `[chat] off: <setting>`) |
 | "Sorry, I can't answer right now. Call us at (518) 348-3032…" from the server | OpenAI failed: logs show `[chat] answer skipped: <code>` |
 | "Sorry, I can't answer right now. Call us or send a request…" (no number) | The knowledge file never loaded (`[chat] knowledge for trinity not loaded: <code>`), or the counters failed (`[chat] rate limit check failed:`, usually migration 0010 not run) |
-| `[chat] answer skipped: incomplete_max_output_tokens` | Replies hit the output cap; set `CHAT_MAX_OUTPUT_TOKENS=500` |
+| `[chat] answer skipped: finish_length` | Replies hit the output cap; raise `CHAT_MAX_OUTPUT_TOKENS` (500, or 1200 for gpt-oss) |
+| `[chat] answer skipped: http_429` | The AI provider's rate limit; on Groq's free tier, the minute or day limit ran out. The bubble shows "call us" until it resets |
+| `[chat] answer skipped: http_401` | `CHAT_AI_KEY` (or `OPENAI_API_KEY`) is wrong for `CHAT_AI_URL` |
 | "You've sent a lot of messages in a short time…" | Per-visitor cap (`CHAT_IP_LIMIT`, default 20 per 10 minutes) |
 | "The chat is busy right now…" | The site's daily cap (`CHAT_SITE_DAILY_LIMIT`, default 500 per UTC day) |
 | `[cron] chat retention pass failed` every 15 minutes | Migration 0010 not run |
