@@ -8,7 +8,7 @@
 // Settings, all optional:
 //   CHAT_AI_URL    the full Chat Completions URL. Default OpenAI's.
 //                  Groq: https://api.groq.com/openai/v1/chat/completions
-//   CHAT_AI_KEY    default OPENAI_API_KEY.
+//   CHAT_AI_KEY    default OPENAI_API_KEY, but only when the URL is OpenAI's.
 //   CHAT_AI_MODEL  default OPENAI_CHAT_MODEL, then gpt-6-luna (the checklist's
 //                  model). Groq: openai/gpt-oss-120b. OPENAI_MODEL (the
 //                  checklist's own setting) never affects the chat.
@@ -46,8 +46,11 @@ export function chatAiUrl(env: Env = process.env): string {
   return env.CHAT_AI_URL?.trim() || OPENAI_CHAT_URL;
 }
 
+/** OPENAI_API_KEY is a fallback for OpenAI's URL only, so it is never sent to another provider. */
 export function chatAiKey(env: Env = process.env): string | null {
-  return env.CHAT_AI_KEY?.trim() || env.OPENAI_API_KEY || null;
+  const own = env.CHAT_AI_KEY?.trim();
+  if (own) return own;
+  return isOpenAI(chatAiUrl(env)) ? env.OPENAI_API_KEY || null : null;
 }
 
 export function chatModel(env: Env = process.env): string {

@@ -24,18 +24,20 @@ if (existsSync(".env.local")) {
   }
 }
 
-const configuredKey = process.env.CHAT_AI_KEY?.trim() || process.env.OPENAI_API_KEY;
+const { parseKnowledge } = await import("@/lib/chat/schema");
+const { buildInstructions } = await import("@/lib/chat/prompt");
+const { askChatAI, buildChatRequest, chatAiKey, chatAiUrl, chatModel } = await import("@/lib/chat/openai");
+
+const configuredKey = chatAiKey();
 if (!configuredKey || configuredKey === "[SENSITIVE]") {
   console.error(
     "No usable chat key. Put the real CHAT_AI_KEY (Groq) or OPENAI_API_KEY in .env.local\n" +
-      "(a value pulled from Vercel reads [SENSITIVE] and can't be used)."
+      "(with a Groq CHAT_AI_URL, CHAT_AI_KEY is required; OPENAI_API_KEY is never used for it).\n" +
+      "A value pulled from Vercel reads [SENSITIVE] and can't be used."
   );
   process.exit(1);
 }
 
-const { parseKnowledge } = await import("@/lib/chat/schema");
-const { buildInstructions } = await import("@/lib/chat/prompt");
-const { askChatAI, buildChatRequest, chatAiUrl, chatModel } = await import("@/lib/chat/openai");
 const { EVAL_QUESTIONS } = await import("@/lib/chat/evalQuestions");
 
 const args = process.argv.slice(2);

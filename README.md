@@ -259,6 +259,7 @@ go-live order is in [`docs/CHAT-ROLLOUT.md`](docs/CHAT-ROLLOUT.md).
 `npm run chat:eval` sends the tricky questions to the real model for a person
 to read (needs a real key; not part of `npm test`).
 Spec: `docs/superpowers/specs/2026-11-26-site-chatbot-design.md`.
+
 The bubble answers prices, towns, hours and booking itself; only other
 questions reach this route (site repo spec
 `docs/superpowers/specs/2026-11-27-chat-lookup-first-design.md`).

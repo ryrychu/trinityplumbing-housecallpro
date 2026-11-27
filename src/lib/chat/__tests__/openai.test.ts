@@ -117,6 +117,13 @@ describe("settings", () => {
     expect(chatAiKey({ CHAT_AI_KEY: "", OPENAI_API_KEY: "sk-openai" })).toBe("sk-openai");
     expect(chatAiKey({})).toBeNull();
   });
+
+  it("never fall back to OPENAI_API_KEY when CHAT_AI_URL isn't OpenAI's", () => {
+    expect(chatAiKey({ CHAT_AI_URL: GROQ_CHAT_URL, OPENAI_API_KEY: "sk-openai" })).toBeNull();
+    expect(chatAiKey({ CHAT_AI_URL: GROQ_CHAT_URL, CHAT_AI_KEY: "  ", OPENAI_API_KEY: "sk-openai" })).toBeNull();
+    expect(chatAiKey({ CHAT_AI_URL: GROQ_CHAT_URL, CHAT_AI_KEY: "gsk-own", OPENAI_API_KEY: "sk-openai" })).toBe("gsk-own");
+    expect(chatAiKey({ CHAT_AI_URL: OPENAI_CHAT_URL, OPENAI_API_KEY: "sk-openai" })).toBe("sk-openai");
+  });
 });
 
 describe("askChatAI", () => {
@@ -136,11 +143,13 @@ describe("askChatAI", () => {
   });
 
   it("reads a Groq gpt-oss reply, whose reasoning comes in its own field", async () => {
+    const groqRequest = buildChatRequest("RULES", HISTORY, { model: "openai/gpt-oss-120b", url: GROQ_CHAT_URL });
     fetchMock.mockResolvedValueOnce(
       reply(completion(JSON.stringify({ reply: "Call us now.", emergency: true }), "stop", { reasoning: "The visitor smells gas." }))
     );
-    expect(await askChatAI(REQUEST, { apiKey: "gsk-test", url: GROQ_CHAT_URL })).toEqual({ reply: "Call us now.", emergency: true });
+    expect(await askChatAI(groqRequest, { apiKey: "gsk-test", url: GROQ_CHAT_URL })).toEqual({ reply: "Call us now.", emergency: true });
     expect(fetchMock.mock.calls[0][0]).toBe(GROQ_CHAT_URL);
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).not.toHaveProperty("store");
   });
 
   it("uses CHAT_AI_URL and CHAT_AI_KEY from the environment", async () => {
@@ -151,6 +160,17 @@ describe("askChatAI", () => {
     await askChatAI(REQUEST);
     expect(fetchMock.mock.calls[0][0]).toBe(GROQ_CHAT_URL);
     expect(fetchMock.mock.calls[0][1].headers.Authorization).toBe("Bearer gsk-env");
+  });
+
+  it("sends nothing, and logs key_not_set, for a Groq URL with no CHAT_AI_KEY even if OPENAI_API_KEY is set", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.stubEnv("CHAT_AI_URL", GROQ_CHAT_URL);
+    vi.stubEnv("CHAT_AI_KEY", "");
+    vi.stubEnv("OPENAI_API_KEY", "sk-env");
+    expect(await askChatAI(REQUEST)).toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith("[chat] answer skipped: key_not_set");
+    warn.mockRestore();
   });
 
   it("falls back to OpenAI and OPENAI_API_KEY", async () => {

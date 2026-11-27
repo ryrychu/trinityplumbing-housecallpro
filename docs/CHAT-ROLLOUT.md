@@ -42,7 +42,8 @@ Send a request buttons (and the bubble then hides for the rest of their visit).
      `CHAT_AI_URL=https://api.groq.com/openai/v1/chat/completions`,
      `CHAT_AI_KEY=<the key>` (Sensitive) and `CHAT_AI_MODEL=openai/gpt-oss-120b`.
      Read Groq's current terms first to confirm the free tier may be used on a
-     business website.
+     business website. `OPENAI_API_KEY` stays for the Fieldy checklist; the chat
+     ignores it once `CHAT_AI_URL` is Groq's.
    - leave `CHAT_ENABLED` unset
 
    Redeploy. Check (Git Bash):
@@ -61,10 +62,10 @@ Send a request buttons (and the bubble then hides for the rest of their visit).
    Redeploy (both are baked in at build time). Open
    `https://trinity.plumbing/chat-knowledge.json`: it lists the prices from
    the pricing page.
-4. **OpenAI usage cap, then read the answers.** In the OpenAI dashboard for
+4. **Usage cap (OpenAI only), then read the answers.** In the OpenAI dashboard for
    Dave's org, set a monthly budget with an email alert (Settings → Limits at
    the time of writing; search the dashboard for "limits" if it moved). Then,
-   with the real key in `.env.local`:
+   with the real key in `.env.local` (`CHAT_AI_URL`, `CHAT_AI_KEY` and `CHAT_AI_MODEL` for Groq, or `OPENAI_API_KEY`):
 
    ```bash
    npm run chat:eval
@@ -111,11 +112,12 @@ unset `NEXT_PUBLIC_CHAT_ENDPOINT` on the site and redeploy it.
 | No bubble on the site | `NEXT_PUBLIC_CHAT_ENDPOINT` or `NEXT_PUBLIC_CHAT_SITE` unset, or set without a redeploy; or that browser tab already saw "off" this session |
 | "The chat is off right now…" | `CHAT_ENABLED` isn't exactly `true` |
 | "Sorry, I can't answer right now. Call us at (518) 348-3032…" on every message, CORS error in the browser console | The page's origin isn't in `CHAT_SITES` exactly (bare vs `www`, `http`, a trailing slash); or `CHAT_SITES`/`CHAT_IP_SALT` is missing or invalid, so the preflight gets 403 (logs: `[chat] off: <setting>`) |
-| "Sorry, I can't answer right now. Call us at (518) 348-3032…" from the server | OpenAI failed: logs show `[chat] answer skipped: <code>` |
+| "Sorry, I can't answer right now. Call us at (518) 348-3032…" from the server | The AI provider failed: logs show `[chat] answer skipped: <code>` |
 | "Sorry, I can't answer right now. Call us or send a request…" (no number) | The knowledge file never loaded (`[chat] knowledge for trinity not loaded: <code>`), or the counters failed (`[chat] rate limit check failed:`, usually migration 0010 not run) |
 | `[chat] answer skipped: finish_length` | Replies hit the output cap; raise `CHAT_MAX_OUTPUT_TOKENS` (500, or 1200 for gpt-oss) |
 | `[chat] answer skipped: http_429` | The AI provider's rate limit; on Groq's free tier, the minute or day limit ran out. The bubble shows "call us" until it resets |
-| `[chat] answer skipped: http_401` | `CHAT_AI_KEY` (or `OPENAI_API_KEY`) is wrong for `CHAT_AI_URL` |
+| `[chat] answer skipped: http_400` | `CHAT_AI_MODEL` doesn't support strict JSON replies on this provider; use `openai/gpt-oss-120b` on Groq |
+| `[chat] answer skipped: http_401` | `CHAT_AI_KEY` must be the key for the `CHAT_AI_URL` provider (with Groq, `OPENAI_API_KEY` is never used) |
 | "You've sent a lot of messages in a short time…" | Per-visitor cap (`CHAT_IP_LIMIT`, default 20 per 10 minutes) |
 | "The chat is busy right now…" | The site's daily cap (`CHAT_SITE_DAILY_LIMIT`, default 500 per UTC day) |
 | `[cron] chat retention pass failed` every 15 minutes | Migration 0010 not run |
