@@ -4,7 +4,7 @@
 // Not covered by src/middleware.ts on purpose: ChatGPT has no cookie session.
 // Every request must carry a Supabase-issued OAuth access token instead.
 import { PRICEBOOK_EDIT_RESOURCE, supabaseClaimsVerifier, type ClaimsVerifier } from "@/lib/mcp/auth";
-import { methodNotAllowed, serveMcp } from "@/lib/mcp/handler";
+import { consoleMcpLogger, methodNotAllowed, serveMcp } from "@/lib/mcp/handler";
 import { createPricebookEditMcpServer, type PricebookEditToolDeps } from "@/lib/mcp/pricebookEdit/server";
 import { listAllCategories, liveEditDeps, liveServiceDeps, parseEditors, pricebookEditEnabled, serviceConfigMissing } from "@/lib/pricebook/edit/deps";
 
@@ -22,6 +22,7 @@ function liveToolDeps(): PricebookEditToolDeps {
 
 export async function POST(req: Request): Promise<Response> {
   if (!pricebookEditEnabled()) {
+    consoleMcpLogger({ resource: PRICEBOOK_EDIT_RESOURCE.path, status: 503, reason: "MCP_PRICEBOOK_EDIT_ENABLED is not true" });
     return Response.json({ error: "disabled", message: "The Trinity Price Book Editor is turned off." }, { status: 503 });
   }
   verify ??= supabaseClaimsVerifier();
@@ -29,6 +30,8 @@ export async function POST(req: Request): Promise<Response> {
     verify,
     resource: PRICEBOOK_EDIT_RESOURCE,
     createServer: (caller) => createPricebookEditMcpServer(liveToolDeps(), caller.userId),
+    // "editor: false" means this user's Supabase id isn't in MCP_PRICEBOOK_EDITORS.
+    describe: (caller) => ({ editor: parseEditors(process.env.MCP_PRICEBOOK_EDITORS).has(caller.userId) }),
   });
 }
 

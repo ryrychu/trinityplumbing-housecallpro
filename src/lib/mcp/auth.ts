@@ -61,31 +61,55 @@ export function supabaseClaimsVerifier(): ClaimsVerifier {
   const supabase = createClient(url, anonKey, { auth: { persistSession: false, autoRefreshToken: false } });
   return async (jwt) => {
     const { data, error } = await supabase.auth.getClaims(jwt);
-    if (error || !data) return null;
+    // Thrown, not returned as null, so the log can say why ("JWT expired").
+    if (error) throw new Error(error.message);
+    if (!data) return null;
     return data.claims as unknown as Record<string, unknown>;
   };
 }
 
-export async function verifyMcpToken(header: string | null, verify: ClaimsVerifier): Promise<McpCaller | null> {
-  const match = header?.match(/^Bearer\s+(\S+)\s*$/i);
-  if (!match) return null;
+/** Why a request's token was turned away; logged, never sent to the caller. */
+export type TokenRejection =
+  | "no_header"
+  | "not_bearer"
+  | "verify_error"
+  | "no_claims"
+  | "not_authenticated"
+  | "anonymous"
+  | "no_client_id"
+  | "no_sub";
+
+export type TokenCheck =
+  | { ok: true; caller: McpCaller }
+  | { ok: false; reason: TokenRejection; detail?: string };
+
+export async function checkMcpToken(header: string | null, verify: ClaimsVerifier): Promise<TokenCheck> {
+  if (!header) return { ok: false, reason: "no_header" };
+  const match = header.match(/^Bearer\s+(\S+)\s*$/i);
+  if (!match) return { ok: false, reason: "not_bearer" };
   const token = match[1];
 
   let claims: Record<string, unknown> | null;
   try {
     claims = await verify(token);
-  } catch {
-    return null;
+  } catch (err) {
+    const detail = err instanceof Error ? err.message.slice(0, 200) : undefined;
+    return { ok: false, reason: "verify_error", ...(detail ? { detail } : {}) };
   }
-  if (!claims) return null;
-  if (claims.role !== "authenticated") return null;
-  if (claims.is_anonymous === true) return null;
+  if (!claims) return { ok: false, reason: "no_claims" };
+  if (claims.role !== "authenticated") return { ok: false, reason: "not_authenticated" };
+  if (claims.is_anonymous === true) return { ok: false, reason: "anonymous" };
   // Only tokens Supabase issued to an OAuth client carry client_id. Requiring
   // it keeps a copied browser-session token from working here.
-  if (typeof claims.client_id !== "string" || claims.client_id === "") return null;
-  if (typeof claims.sub !== "string" || claims.sub === "") return null;
+  if (typeof claims.client_id !== "string" || claims.client_id === "") return { ok: false, reason: "no_client_id" };
+  if (typeof claims.sub !== "string" || claims.sub === "") return { ok: false, reason: "no_sub" };
 
-  return { userId: claims.sub, clientId: claims.client_id, token };
+  return { ok: true, caller: { userId: claims.sub, clientId: claims.client_id, token } };
+}
+
+export async function verifyMcpToken(header: string | null, verify: ClaimsVerifier): Promise<McpCaller | null> {
+  const check = await checkMcpToken(header, verify);
+  return check.ok ? check.caller : null;
 }
 
 // Public origin of this deployment as the caller saw it. Vercel sets the
