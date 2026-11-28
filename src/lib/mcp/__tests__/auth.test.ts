@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { describe, it, expect, vi, afterEach } from "vitest";
 import {
+  checkMcpToken,
   verifyMcpToken,
   protectedResourceMetadata,
   requestOrigin,
@@ -48,6 +49,30 @@ describe("verifyMcpToken", () => {
       userId: "user-1",
       clientId: "chatgpt-client",
       token: "tok-123",
+    });
+  });
+});
+
+describe("checkMcpToken", () => {
+  it("names the reason a token was turned away", async () => {
+    expect(await checkMcpToken(null, verifier(VALID))).toEqual({ ok: false, reason: "no_header" });
+    expect(await checkMcpToken("Basic abc", verifier(VALID))).toEqual({ ok: false, reason: "not_bearer" });
+    expect(await checkMcpToken("Bearer t", verifier(null))).toEqual({ ok: false, reason: "no_claims" });
+    expect(
+      await checkMcpToken("Bearer t", async () => {
+        throw new Error("JWT expired");
+      })
+    ).toEqual({ ok: false, reason: "verify_error", detail: "JWT expired" });
+    expect(await checkMcpToken("Bearer t", verifier({ ...VALID, role: "anon" }))).toEqual({ ok: false, reason: "not_authenticated" });
+    expect(await checkMcpToken("Bearer t", verifier({ ...VALID, is_anonymous: true }))).toEqual({ ok: false, reason: "anonymous" });
+    expect(await checkMcpToken("Bearer t", verifier({ ...VALID, client_id: "" }))).toEqual({ ok: false, reason: "no_client_id" });
+    expect(await checkMcpToken("Bearer t", verifier({ ...VALID, sub: "" }))).toEqual({ ok: false, reason: "no_sub" });
+  });
+
+  it("returns the caller for a valid token", async () => {
+    expect(await checkMcpToken("Bearer tok", verifier(VALID))).toEqual({
+      ok: true,
+      caller: { userId: "user-1", clientId: "chatgpt-client", token: "tok" },
     });
   });
 });
