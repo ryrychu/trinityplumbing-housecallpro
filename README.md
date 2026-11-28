@@ -250,14 +250,19 @@ Spec for the search: `docs/superpowers/specs/2026-11-18-chatgpt-jobs-search-desi
 
 The chat bubble on trinity.plumbing calls `POST /api/chat`, which answers from
 the site's own `/chat-knowledge.json` (published prices only, never the HCP
-price book) through the OpenAI API, and saves chats for 90 days with phone
-numbers and emails masked. Public on purpose (outside `src/middleware.ts`),
-guarded by an exact origin list, input limits and rate limits. Off unless
-`CHAT_ENABLED=true`. Settings are in `.env.example`; the go-live order is in
-[`docs/CHAT-ROLLOUT.md`](docs/CHAT-ROLLOUT.md). `npm run chat:eval` sends the
-tricky questions to the real model for a person to read (needs a real key; not
-part of `npm test`).
+price book) through a Chat Completions API (OpenAI by default, or Groq's free
+tier via `CHAT_AI_URL`, `CHAT_AI_KEY` and `CHAT_AI_MODEL`), and saves chats for
+90 days with phone numbers and emails masked. Public on purpose (outside
+`src/middleware.ts`), guarded by an exact origin list, input limits and rate
+limits. Off unless `CHAT_ENABLED=true`. Settings are in `.env.example`; the
+go-live order is in [`docs/CHAT-ROLLOUT.md`](docs/CHAT-ROLLOUT.md).
+`npm run chat:eval` sends the tricky questions to the real model for a person
+to read (needs a real key; not part of `npm test`).
 Spec: `docs/superpowers/specs/2026-11-26-site-chatbot-design.md`.
+
+The bubble answers prices, towns, hours and booking itself; only other
+questions reach this route (site repo spec
+`docs/superpowers/specs/2026-11-27-chat-lookup-first-design.md`).
 
 ## Deploy
 

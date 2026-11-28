@@ -2,15 +2,17 @@
 // with a site's real knowledge file, and prints each answer under what a good
 // answer looks like, for a person to read before go-live.
 //
-// Opt-in. It needs a real OPENAI_API_KEY and costs a few cents a run. It is not
-// a test file, so `npm test` never picks it up, and no CI workflow runs it.
+// Opt-in. It needs a real key for the configured provider: CHAT_AI_KEY (Groq's
+// free tier costs nothing) or OPENAI_API_KEY (a few cents a run). It is not a
+// test file, so `npm test` never picks it up, and no CI workflow runs it.
 //
 // Usage (from the repo root):
 //   npm run chat:eval                                    # https://trinity.plumbing/chat-knowledge.json
 //   npm run chat:eval -- --url https://<preview>/chat-knowledge.json
 //   npm run chat:eval -- --file ./chat-knowledge.json    # a copy saved from the browser
 //
-// Reads OPENAI_API_KEY (and OPENAI_CHAT_MODEL, CHAT_MAX_OUTPUT_TOKENS if set)
+// Reads CHAT_AI_URL, CHAT_AI_KEY, CHAT_AI_MODEL (or OPENAI_API_KEY and
+// OPENAI_CHAT_MODEL) and CHAT_MAX_OUTPUT_TOKENS
 // from .env.local or the environment.
 import { existsSync, readFileSync } from "node:fs";
 
@@ -22,17 +24,20 @@ if (existsSync(".env.local")) {
   }
 }
 
-if (!process.env.OPENAI_API_KEY || process.env.OPENAI_API_KEY === "[SENSITIVE]") {
+const { parseKnowledge } = await import("@/lib/chat/schema");
+const { buildInstructions } = await import("@/lib/chat/prompt");
+const { askChatAI, buildChatRequest, chatAiKey, chatAiUrl, chatModel } = await import("@/lib/chat/openai");
+
+const configuredKey = chatAiKey();
+if (!configuredKey || configuredKey === "[SENSITIVE]") {
   console.error(
-    "OPENAI_API_KEY is not usable. Put the real key in .env.local (a value pulled\n" +
-      "from Vercel reads [SENSITIVE] and can't be used)."
+    "No usable chat key. Put the real CHAT_AI_KEY (Groq) or OPENAI_API_KEY in .env.local\n" +
+      "(with a Groq CHAT_AI_URL, CHAT_AI_KEY is required; OPENAI_API_KEY is never used for it).\n" +
+      "A value pulled from Vercel reads [SENSITIVE] and can't be used."
   );
   process.exit(1);
 }
 
-const { parseKnowledge } = await import("@/lib/chat/schema");
-const { buildInstructions } = await import("@/lib/chat/prompt");
-const { askOpenAI, buildChatRequest, chatModel } = await import("@/lib/chat/openai");
 const { EVAL_QUESTIONS } = await import("@/lib/chat/evalQuestions");
 
 const args = process.argv.slice(2);
@@ -56,11 +61,11 @@ if (!knowledge) {
   process.exit(1);
 }
 
-console.log(`Model ${chatModel()}, knowledge from ${source}, ${knowledge.prices.length} prices.`);
+console.log(`Model ${chatModel()} at ${new URL(chatAiUrl()).host}, knowledge from ${source}, ${knowledge.prices.length} prices.`);
 const instructions = buildInstructions(knowledge);
 let problems = 0;
 for (const q of EVAL_QUESTIONS) {
-  const answer = await askOpenAI(buildChatRequest(instructions, [{ role: "user", text: q.text }]));
+  const answer = await askChatAI(buildChatRequest(instructions, [{ role: "user", text: q.text }]));
   console.log(`\n[${q.id}] ${q.text}`);
   console.log(`  expect:    ${q.expect}${q.emergency ? " (emergency)" : ""}`);
   if (!answer) {

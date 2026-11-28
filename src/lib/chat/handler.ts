@@ -4,12 +4,13 @@
 // check, the input limits and the rate limits below.
 // Spec: docs/superpowers/specs/2026-11-26-site-chatbot-design.md
 //
-// Order: switch → origin → input → rate limit → knowledge → OpenAI → save → reply.
+// Order: switch → origin → input → rate limit → knowledge → AI (OpenAI or Groq) → save → reply.
 import { chatConfig, chatEnabled } from "./config";
 import { RATE_LIMITED_IP_REPLY, RATE_LIMITED_SITE_REPLY, fallbackReply } from "./copy";
 import type { KnowledgeSource } from "./knowledge";
 import {
   buildChatRequest,
+  chatAiUrl,
   chatModel,
   maxOutputTokens,
   type ChatAnswer,
@@ -147,6 +148,7 @@ export async function handleChat(req: Request, deps: ChatDeps): Promise<Response
         buildChatRequest(buildInstructions(knowledge), input.messages, {
           model: chatModel(deps.env),
           maxOutputTokens: maxOutputTokens(deps.env),
+          url: chatAiUrl(deps.env),
         })
       )
     : null;

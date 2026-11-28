@@ -73,8 +73,9 @@ describe("handleChat: answering", () => {
       handoff: { phone: "(518) 348-3032", contactUrl: "https://trinity.plumbing/contact" },
       emergency: false,
     });
-    expect(asked[0].instructions.startsWith(ANSWER_RULES)).toBe(true);
-    expect(asked[0].input).toEqual([{ role: "user", content: ASK.messages[0].text }]);
+    expect(asked[0].messages[0].role).toBe("system");
+    expect(asked[0].messages[0].content.startsWith(ANSWER_RULES)).toBe(true);
+    expect(asked[0].messages.slice(1)).toEqual([{ role: "user", content: ASK.messages[0].text }]);
     expect(saved).toEqual([
       { conversationId: NEW_ID, site: "trinity", userText: ASK.messages[0].text, reply: REPLY.reply, emergency: false },
     ]);
@@ -107,7 +108,7 @@ describe("handleChat: answering", () => {
       { role: "user", text: "How much is a tune-up?" },
     ];
     await handleChat(post({ site: "trinity", messages }), deps);
-    expect(asked[0].input).toHaveLength(3);
+    expect(asked[0].messages.slice(1)).toHaveLength(3);
     expect(saved[0].userText).toBe("How much is a tune-up?");
   });
 
@@ -123,6 +124,23 @@ describe("handleChat: answering", () => {
     const { deps, asked } = makeDeps({ env: { ...ENV, OPENAI_CHAT_MODEL: "chat-model" } });
     await handleChat(post(ASK), deps);
     expect(asked[0].model).toBe("chat-model");
+  });
+
+  it("uses CHAT_AI_MODEL over OPENAI_CHAT_MODEL", async () => {
+    const { deps, asked } = makeDeps({ env: { ...ENV, OPENAI_CHAT_MODEL: "chat-model", CHAT_AI_MODEL: "openai/gpt-oss-120b" } });
+    await handleChat(post(ASK), deps);
+    expect(asked[0].model).toBe("openai/gpt-oss-120b");
+    expect(asked[0].reasoning_effort).toBe("low");
+  });
+
+  it("sends store:false only when CHAT_AI_URL is OpenAI's", async () => {
+    const openai = makeDeps();
+    await handleChat(post(ASK), openai.deps);
+    expect(openai.asked[0].store).toBe(false);
+
+    const groq = makeDeps({ env: { ...ENV, CHAT_AI_URL: "https://api.groq.com/openai/v1/chat/completions" } });
+    await handleChat(post(ASK), groq.deps);
+    expect(groq.asked[0]).not.toHaveProperty("store");
   });
 });
 
